@@ -359,7 +359,7 @@ duration: Column[timedelta] = datetime_column(type="interval")
 #### 其他核心类型
 
 ```python
-from sqlobjects.fields import bool_column, json_column, uuid_column, binary_column, pickle_column
+from sqlobjects.fields import bool_column, json_column, uuid_column, binary_column
 from uuid import uuid4
 
 # 布尔类型
@@ -382,10 +382,7 @@ file_data: Column[bytes] = binary_column(length=1024, nullable=True)
 image_data: Column[bytes] = binary_column(type="varbinary", length=2048)
 avatar: Column[bytes] = binary_column(init=False, repr=False)  # 内部存储
 
-# Pickle 类型（Python 对象序列化）
-settings: Column[dict] = pickle_column(default=dict)
-cached_data: Column[Any] = pickle_column(init=False)  # 缓存数据
-temp_data: Column[Any] = pickle_column(compare=False, hash=False)  # 不参与比较
+
 
 # 链式调用功能
 # User.is_active.is_true()             # 布尔语义化方法

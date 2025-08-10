@@ -150,7 +150,7 @@ SQLObjects features a unified type system with automatic parameter extraction an
 - `column(type="uuid")` for UUID fields
 - `column(type="array", item_type="string", dimensions=1)` for arrays (with automatic type conversion)
 - `column(type="enum", enum_class=MyEnum)` for enums (positional parameter)
-- `column(type="pickle")` for Python object serialization
+
 - `column(type="varbinary", length=255)` for variable-length binary data
 - `column(type="unicode", length=100)` for Unicode strings (legacy)
 - `column(type="unicodetext")` for Unicode text (legacy)
@@ -167,7 +167,7 @@ SQLObjects features a unified type system with automatic parameter extraction an
 - `enum_column(MyEnum)` for enum fields
 - `uuid_column()` for UUID fields
 - `binary_column("varbinary")` for binary data with type variants
-- `pickle_column()` for Python object serialization
+
 
 #### Advanced Type System Features
 
@@ -270,8 +270,7 @@ external_id: Column[str] = uuid_column(unique=True)
 # Binary and Pickle types
 file_data: Column[bytes] = binary_column(length=1024)
 image_data: Column[bytes] = binary_column(type="varbinary", length=2048)
-settings: Column[dict] = pickle_column(default=dict)
-cached_data: Column[Any] = pickle_column()
+
 
 # Unicode types (for legacy databases)
 name_unicode: Column[str] = column(type="unicode", length=100)

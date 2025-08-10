@@ -344,7 +344,7 @@ from sqlobjects.fields import Column, column, relationship
 # Type shortcut functions (recommended)
 from sqlobjects.fields import (
     str_column, int_column, bool_column, numeric_column, datetime_column,
-    json_column, array_column, enum_column, uuid_column, binary_column, pickle_column
+    json_column, array_column, enum_column, uuid_column, binary_column
 )
 
 # Type system and registration
@@ -443,7 +443,7 @@ from sqlobjects.fields import (
     enum_column,   # Enum columns
     uuid_column,   # UUID columns
     binary_column, # Binary columns with type variants
-    pickle_column, # Pickle columns for Python objects
+
     
     # SQLAlchemy advanced features
     composite,     # Composite types
