@@ -956,7 +956,7 @@ class ObjectsManager(Generic[T]):
         """Apply HAVING clause for aggregated queries.
 
         Args:
-            *conditions: F expressions or SQLAlchemy expressions for having clause
+            *conditions: SQLAlchemy expressions for having clause
 
         Returns:
             QuerySet with having conditions applied

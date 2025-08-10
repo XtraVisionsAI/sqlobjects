@@ -11,7 +11,7 @@ SQLObjects Fields 模块提供统一的字段定义系统，支持链式函数�
 通过增强的 Comparator 类，字段支持 SQLAlchemy func 方法的链式调用：
 
 ```python
-from sqlobjects import ObjectModel
+from sqlobjects.base import ObjectModel
 from sqlobjects.fields import Column, str_column, int_column, datetime_column
 
 class User(ObjectModel):

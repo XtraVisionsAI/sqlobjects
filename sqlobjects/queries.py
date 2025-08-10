@@ -143,7 +143,7 @@ class Q:
         if self.expressions:
             for expr in self.expressions:
                 if hasattr(expr, "resolve"):
-                    # Resolve SQLObjects expressions (F, etc.)
+                    # Resolve SQLObjects expressions
                     conditions.append(expr.resolve(model_class))
                 else:
                     # Direct SQLAlchemy expressions
@@ -192,7 +192,7 @@ class QuerySet(Generic[T]):
         """Filter the QuerySet to include only objects matching the given conditions.
 
         Args:
-            *conditions: Q objects, F expressions, or SQLAlchemy expressions
+            *conditions: Q objects or SQLAlchemy expressions
             session: Database session to use (optional)
 
         Returns:
@@ -205,7 +205,7 @@ class QuerySet(Generic[T]):
             if isinstance(condition, Q):
                 condition_list.append(condition._to_sqlalchemy(self._model))  # noqa
             elif hasattr(condition, "resolve"):
-                # Handle F expressions, SubqueryExpression, and other SQLObjects expressions
+                # Handle SubqueryExpression and other SQLObjects expressions
                 condition_list.append(condition.resolve(self._model))
             else:
                 # Direct SQLAlchemy expressions
@@ -220,7 +220,7 @@ class QuerySet(Generic[T]):
         """Exclude objects matching the given conditions from the QuerySet.
 
         Args:
-            *conditions: Q objects, F expressions, or SQLAlchemy expressions
+            *conditions: Q objects or SQLAlchemy expressions
             session: Database session to use (optional)
 
         Returns:
@@ -246,7 +246,7 @@ class QuerySet(Generic[T]):
         """Order the QuerySet results by the specified fields.
 
         Args:
-            *fields: Field names (strings), F expressions, or SQLAlchemy expressions
+            *fields: Field names (strings) or SQLAlchemy expressions
                     Use '-' prefix for descending order with string fields
 
         Returns:
@@ -261,7 +261,7 @@ class QuerySet(Generic[T]):
                 else:
                     order_clauses.append(asc(getattr(self._model, field)))
             elif hasattr(field, "resolve"):
-                # F expressions and other SQLObjects expressions
+                # SQLObjects expressions
                 order_clauses.append(field.resolve(self._model))
             else:
                 # SQLAlchemy expressions
@@ -391,7 +391,7 @@ class QuerySet(Generic[T]):
         annotations = []
         for alias, expr in kwargs.items():
             if hasattr(expr, "resolve"):
-                # F expression, SubqueryExpression, or aggregate function
+                # SubqueryExpression, or aggregate function
                 annotations.append(expr.resolve(self._model).label(alias))
             else:
                 annotations.append(expr.label(alias))
@@ -403,7 +403,7 @@ class QuerySet(Generic[T]):
         """Add GROUP BY clause.
 
         Args:
-            *fields: Field names, F expressions, or SQLAlchemy expressions to group by
+            *fields: Field names or SQLAlchemy expressions to group by
 
         Returns:
             QuerySet with group by applied
@@ -424,7 +424,7 @@ class QuerySet(Generic[T]):
         """Add HAVING clause for aggregated queries.
 
         Args:
-            *conditions: F expressions or SQLAlchemy expressions for having clause
+            *conditions: SQLAlchemy expressions for having clause
 
         Returns:
             QuerySet with having conditions applied
@@ -541,7 +541,7 @@ class QuerySet(Generic[T]):
         """Get a single object matching the given conditions.
 
         Args:
-            *conditions: Q objects, F expressions, or SQLAlchemy expressions
+            *conditions: Q objects or SQLAlchemy expressions
             session: Database session to use for this query
 
         Returns:
@@ -713,7 +713,7 @@ class QuerySet(Generic[T]):
 
         for alias, expr in kwargs.items():
             if hasattr(expr, "resolve"):
-                # F expression or aggregate function
+                # SQLObjects function
                 aggregations.append(expr.resolve(self._model).label(alias))
             else:
                 aggregations.append(expr.label(alias))

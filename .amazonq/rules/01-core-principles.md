@@ -108,6 +108,8 @@ to_camel_case("user_profile")   # → "UserProfile"
 pluralize("user_profile")       # → "user_profiles"
 
 # Model to table name conversion
+from sqlobjects.base import ObjectModel
+
 class UserProfile(ObjectModel):  # → table: "user_profiles"
 class XMLParser(ObjectModel):    # → table: "xml_parsers"
 class HTTPRequest(ObjectModel):  # → table: "http_requests"
@@ -175,7 +177,7 @@ All models inherit from `ObjectModel` which provides:
 - Objects manager (`objects` attribute)
 
 ```python
-from sqlobjects import ObjectModel
+from sqlobjects.base import ObjectModel
 from sqlobjects.fields import Column, str_column, int_column
 
 class User(ObjectModel):

@@ -204,7 +204,7 @@ active_users = User.objects.filter(is_active=True).subquery()            # 推�
 
 # 显式类型指定
 scalar_subq = User.objects.aggregate(count=func.count()).subquery(query_type="scalar")
-exists_subq = Post.objects.filter(author_id=F("id")).subquery(query_type="exists")
+exists_subq = Post.objects.filter(Post.author_id.in_([1, 2, 3])).subquery(query_type="exists")
 
 # 类型转换
 table_subq = scalar_subq.as_table()

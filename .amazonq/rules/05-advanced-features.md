@@ -463,6 +463,7 @@ if auto_default and self._default_db == db_name:
 ### 1. Database-Specific Configuration
 
 ```python
+from sqlobjects.base import ObjectModel
 from sqlobjects.config import mysql_config, postgresql_config
 
 class User(ObjectModel):
@@ -479,7 +480,8 @@ class User(ObjectModel):
 ### 2. Index and Constraint Creation
 
 ```python
-from sqlobjects.config import create_index, create_check_constraint
+from sqlobjects.base import ObjectModel
+from sqlobjects.config import index, constraint
 
 class Product(ObjectModel):
     # ... fields ...

@@ -12,7 +12,7 @@ ObjectModel 基类和 ModelConfig 配置系统，为开发者提供完整的 ORM
 提供熟悉的模型定义方式，支持字段定义、配置和自动表名生成：
 
 ```python
-from sqlobjects import ObjectModel
+from sqlobjects.base import ObjectModel
 from sqlobjects.fields import str_column, int_column, datetime_column
 from datetime import datetime
 
@@ -515,7 +515,7 @@ class ModelMixin(SignalMixin):
 ### 模型定义
 
 ```python
-from sqlobjects import ObjectModel
+from sqlobjects.base import ObjectModel
 from sqlobjects.fields import str_column, int_column
 from sqlobjects.config import index, constraint, mysql_config
 
@@ -682,7 +682,7 @@ metadata = User.get_metadata()
 ### 基础用法
 
 ```python
-from sqlobjects import ObjectModel
+from sqlobjects.base import ObjectModel
 from sqlobjects.fields import str_column, int_column, datetime_column
 from sqlobjects.validators import EmailValidator
 from datetime import datetime

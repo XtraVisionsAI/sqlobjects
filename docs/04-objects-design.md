@@ -12,7 +12,7 @@ SQLObjects Objects 模块提供 Django 风格的对象管理器，实现模型�
 提供类似 Django ORM 的 objects 风格接口，支持链式查询和方法调用：
 
 ```python
-from sqlobjects import ObjectModel
+from sqlobjects.base import ObjectModel
 from sqlobjects.fields import str_column, int_column
 
 class User(ObjectModel):

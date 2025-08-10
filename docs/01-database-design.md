@@ -70,6 +70,8 @@ Database 类直接提供表操作方法，支持在实例级别进行表管理�
 
 ```python
 # 直接在 Database 实例上操作
+from sqlobjects.base import ObjectModel
+
 await db.create_tables(ObjectModel.metadata)
 await db.drop_tables(ObjectModel.metadata)
 
@@ -239,6 +241,8 @@ def on_connect(conn, record):
     print("数据库已连接")
 
 # 表操作
+from sqlobjects.base import ObjectModel
+
 await db.create_tables(ObjectModel.metadata)
 ```
 

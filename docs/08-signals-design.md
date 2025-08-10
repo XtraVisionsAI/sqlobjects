@@ -14,6 +14,10 @@ SQLObjects Signals 模块提供基于 SQLAlchemy 事件系统的模型生命周�
 信号系统与模型生命周期深度集成，自动触发相应的信号处理器：
 
 ```python
+from sqlobjects.base import ObjectModel
+from sqlobjects.fields import Column, str_column
+from datetime import datetime
+
 class User(ObjectModel):
     name: Column[str] = str_column(length=50)
     
@@ -31,6 +35,8 @@ class User(ObjectModel):
 原生支持异步信号处理器，避免阻塞数据库操作：
 
 ```python
+from sqlobjects.base import ObjectModel
+
 class User(ObjectModel):
     def before_save(self, context: SignalContext) -> None:
         # 同步处理器
@@ -46,6 +52,8 @@ class User(ObjectModel):
 支持批量操作的类级信号处理：
 
 ```python
+from sqlobjects.base import ObjectModel
+
 class User(ObjectModel):
     @classmethod
     async def before_update(cls, context: SignalContext) -> None:
@@ -117,6 +125,8 @@ class User(ObjectModel):
 所有 ObjectModel 自动具备信号处理能力：
 
 ```python
+from sqlobjects.base import ObjectModel
+
 class User(ObjectModel):
     # 自动继承 SignalMixin，具备信号处理能力
     pass
@@ -127,6 +137,8 @@ class User(ObjectModel):
 信号处理器可以使用完整的 QuerySet API：
 
 ```python
+from sqlobjects.base import ObjectModel
+
 class User(ObjectModel):
     async def after_save(self, context: SignalContext) -> None:
         # 使用 QuerySet 进行相关操作
@@ -190,6 +202,10 @@ def before_insert_handler(mapper, connection, target):
 ### 基础用法
 
 ```python
+from sqlobjects.base import ObjectModel
+from sqlobjects.fields import Column, str_column
+from datetime import datetime
+
 class User(ObjectModel):
     name: Column[str] = str_column(length=50)
     email: Column[str] = str_column(length=100)
@@ -208,6 +224,8 @@ class User(ObjectModel):
 #### 条件信号处理
 
 ```python
+from sqlobjects.base import ObjectModel
+
 class User(ObjectModel):
     async def before_save(self, context: SignalContext) -> None:
         # 根据操作类型和上下文进行条件处理
@@ -220,6 +238,8 @@ class User(ObjectModel):
 #### 批量操作信号
 
 ```python
+from sqlobjects.base import ObjectModel
+
 class User(ObjectModel):
     @classmethod
     async def before_update(cls, context: SignalContext) -> None:
@@ -235,11 +255,13 @@ class User(ObjectModel):
 #### 信号处理器中的查询操作
 
 ```python
+from sqlobjects.base import ObjectModel
+from sqlobjects.queries import Q
+from datetime import datetime
+
 class User(ObjectModel):
     async def after_save(self, context: SignalContext) -> None:
         # 使用 Q 对象构建复杂查询
-        from sqlobjects.queries import Q
-        
         related_users = await User.objects.filter(
             Q(department_id=self.department_id) & Q(is_active=True),
             session=context.session
@@ -255,6 +277,10 @@ class User(ObjectModel):
 #### 错误处理
 
 ```python
+from sqlobjects.base import ObjectModel
+from sqlobjects.exceptions import ValidationError
+import logging
+
 class User(ObjectModel):
     async def before_save(self, context: SignalContext) -> None:
         try:

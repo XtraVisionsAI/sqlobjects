@@ -7,6 +7,9 @@
 ```python
 from sqlobjects.exceptions import ValidationError
 
+from sqlobjects.base import ObjectModel
+from sqlobjects.fields import Column, str_column, int_column
+
 class User(ObjectModel):
     # Add field validators using shortcut functions or column() function
     username: Column[str] = str_column(length=50, validators=[validate_username])
@@ -39,6 +42,9 @@ class User(ObjectModel):
 ### 2. Model-Level Validation
 
 ```python
+from sqlobjects.base import ObjectModel
+from sqlobjects.exceptions import ValidationError
+
 class User(ObjectModel):
     # ... fields ...
     
@@ -90,6 +96,8 @@ user = User.from_dict(user_data, validate=True)
 ### 4. Built-in Validators
 
 ```python
+from sqlobjects.base import ObjectModel
+from sqlobjects.fields import Column, str_column, int_column, column
 from sqlobjects.validators import (
     validate_email, validate_url, validate_length, validate_range,
     validate_regex, validate_choices, validate_date, validate_time,
@@ -182,6 +190,8 @@ user = User.from_dict(user_data, validate=True)
 ### 2. Model Configuration Access
 
 ```python
+from sqlobjects.base import ObjectModel
+
 class User(ObjectModel):
     # ... fields ...
     
@@ -209,6 +219,9 @@ metadata = User.get_metadata()  # All metadata as dict
 # - delete() operations (before_delete, after_delete)
 # - bulk update() operations (before_update, after_update)
 # - bulk delete() operations (before_delete, after_delete)
+
+from sqlobjects.base import ObjectModel
+from datetime import datetime
 
 # Custom signal handling in models
 class User(ObjectModel):
