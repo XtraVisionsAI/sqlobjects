@@ -194,12 +194,17 @@ class User(ObjectModel):
 Use type-safe field definitions with `Column[T]` annotations:
 
 ```python
-# Recommended: Use shortcut functions
-name: Column[str] = str_column(length=50)
-age: Column[int] = int_column()
-is_active: Column[bool] = bool_column(default=True)
+# Recommended: Use shortcut functions with database constraints
+name: Column[str] = str_column(length=50, nullable=False)
+age: Column[int] = int_column(nullable=False)
+is_active: Column[bool] = bool_column(default=True, nullable=False)
+
+# Advanced parameters for dataclass behavior
+internal_id: Column[str] = str_column(init=False, repr=False)  # Internal field
+api_key: Column[str] = str_column(default_factory=generate_key, repr=False)
 
 # Alternative: Use column() function
-name: Column[str] = column(type="string", length=50)
-age: Column[int] = column(type="integer")
+name: Column[str] = column(type="string", length=50, nullable=False)
+age: Column[int] = column(type="integer", nullable=False)
+id: Column[int] = column(type="integer", primary_key=True, autoincrement=True)
 ```

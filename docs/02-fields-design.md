@@ -236,13 +236,31 @@ User.nickname.coalesce(User.username)       # FunctionMixin 提供
 
 ```python
 from sqlobjects.fields import column
+from datetime import datetime
 
 # 基础用法
-id: Column[int] = column(type="integer", primary_key=True)
-username: Column[str] = column(type="string", length=50, unique=True)
+id: Column[int] = column(type="integer", primary_key=True, autoincrement=True)
+username: Column[str] = column(type="string", length=50, unique=True, nullable=False)
 price: Column[Decimal] = column(type="numeric", precision=10, scale=2)
 metadata: Column[dict] = column(type="json", default=dict)
 external_id: Column[str] = column(type="uuid")
+
+# 数据库约束参数
+required_field: Column[str] = column(type="string", nullable=False)  # NOT NULL 约束
+auto_id: Column[int] = column(type="integer", primary_key=True, autoincrement=True)  # 自增主键
+
+# 动态默认值
+created_at: Column[datetime] = column(type="datetime", default_factory=datetime.now)
+timestamp: Column[str] = column(type="string", default_factory=lambda: str(datetime.now()))
+
+# 数据类行为控制
+internal_field: Column[str] = column(type="string", init=False, repr=False)  # 不在初始化和显示中包含
+compare_field: Column[int] = column(type="integer", compare=True, hash=True)  # 参与比较和哈希
+keyword_only: Column[str] = column(type="string", kw_only=True)  # 只能作为关键字参数
+
+# 高级参数
+ordered_field: Column[str] = column(type="string", sort_order=1)  # 字段排序
+existing_col: Column[str] = column(type="string", use_existing_column=True)  # 使用已存在列
 
 # 特殊类型参数处理
 tags: Column[list[str]] = column(type="array", item_type="string", dimensions=1)
@@ -251,7 +269,8 @@ status: Column[MyEnum] = column(type="enum", enum_class=MyEnum)
 # 验证器支持
 username: Column[str] = column(
     type="string", 
-    length=50, 
+    length=50,
+    nullable=False,
     validators=[validate_length(3, 50), validate_regex(r"^[a-zA-Z0-9_]+$")]
 )
 ```
@@ -269,6 +288,18 @@ description: Column[str] = str_column(type="text")
 code: Column[str] = str_column(type="char", length=10)  # 固定长度
 content: Column[str] = str_column(type="varchar", length=500)
 
+# 数据库约束参数
+username: Column[str] = str_column(length=50, nullable=False, unique=True)  # 必填唯一
+required_name: Column[str] = str_column(length=100, nullable=False)  # 必填字段
+
+# 动态默认值
+default_name: Column[str] = str_column(default_factory=lambda: "user_" + str(uuid4())[:8])
+generated_code: Column[str] = str_column(length=20, default_factory=generate_code)
+
+# 数据类行为控制
+internal_id: Column[str] = str_column(init=False, repr=False)  # 内部字段
+display_name: Column[str] = str_column(compare=True, hash=True)  # 参与比较和哈希
+
 # 链式调用功能
 # User.name.upper().trim()           # 字符串操作链式调用
 # User.name.matches(r"^admin")        # 正则匹配
@@ -279,17 +310,27 @@ content: Column[str] = str_column(type="varchar", length=500)
 
 ```python
 from sqlobjects.fields import int_column, numeric_column
+import random
 
 # 整数类型
-id: Column[int] = int_column(primary_key=True)
+id: Column[int] = int_column(primary_key=True, autoincrement=True)  # 自增主键
+age: Column[int] = int_column(nullable=False)  # 必填整数
 big_number: Column[int] = int_column(type="bigint")
 small_number: Column[int] = int_column(type="smallint")
 
 # 数值类型
-price: Column[Decimal] = numeric_column(precision=10, scale=2)
+price: Column[Decimal] = numeric_column(precision=10, scale=2, nullable=False)  # 必填价格
 rate: Column[float] = numeric_column(type="float")
 double_val: Column[float] = numeric_column(type="double")
 percentage: Column[Decimal] = numeric_column(type="decimal", precision=5, scale=4)
+
+# 动态默认值
+random_seed: Column[int] = int_column(default_factory=lambda: random.randint(1, 1000))
+sequence_num: Column[int] = int_column(default_factory=generate_sequence)
+
+# 数据类行为控制
+internal_counter: Column[int] = int_column(init=False, repr=False)  # 内部计数器
+sort_order: Column[int] = int_column(compare=True, sort_order=1)  # 排序字段
 
 # 链式调用功能
 # User.age.abs().round(2)             # 数值操作链式调用
@@ -319,24 +360,32 @@ duration: Column[timedelta] = datetime_column(type="interval")
 
 ```python
 from sqlobjects.fields import bool_column, json_column, uuid_column, binary_column, pickle_column
+from uuid import uuid4
 
 # 布尔类型
-is_active: Column[bool] = bool_column(default=True)
+is_active: Column[bool] = bool_column(default=True, nullable=False)  # 必填布尔值
+is_verified: Column[bool] = bool_column(default=False)
+is_admin: Column[bool] = bool_column(init=False, repr=False)  # 内部标记
 
 # JSON 类型
-metadata: Column[dict] = json_column(default=dict)
-preferences: Column[dict] = json_column(default=dict)
+metadata: Column[dict] = json_column(default=dict, nullable=False)  # 必填 JSON
+preferences: Column[dict] = json_column(default_factory=lambda: {"theme": "light"})
+config: Column[dict] = json_column(init=False)  # 不在初始化中包含
 
 # UUID 类型
-external_id: Column[str] = uuid_column(unique=True)
+external_id: Column[str] = uuid_column(unique=True, nullable=False)  # 必填唯一 UUID
+api_key: Column[str] = uuid_column(default_factory=lambda: str(uuid4()))
+tracking_id: Column[str] = uuid_column(repr=False)  # 不在显示中包含
 
 # 二进制类型
-file_data: Column[bytes] = binary_column(length=1024)
+file_data: Column[bytes] = binary_column(length=1024, nullable=True)
 image_data: Column[bytes] = binary_column(type="varbinary", length=2048)
+avatar: Column[bytes] = binary_column(init=False, repr=False)  # 内部存储
 
 # Pickle 类型（Python 对象序列化）
 settings: Column[dict] = pickle_column(default=dict)
-cached_data: Column[Any] = pickle_column()
+cached_data: Column[Any] = pickle_column(init=False)  # 缓存数据
+temp_data: Column[Any] = pickle_column(compare=False, hash=False)  # 不参与比较
 
 # 链式调用功能
 # User.is_active.is_true()             # 布尔语义化方法
@@ -408,6 +457,107 @@ name: synonym = synonym("username")
 ```
 
 ## 使用指南
+
+### 字段参数优先级指南
+
+#### 高优先级参数（数据库约束）
+
+```python
+# 数据库约束场景
+username: Column[str] = str_column(length=50, nullable=False, unique=True)  # 必填唯一
+id: Column[int] = int_column(primary_key=True, autoincrement=True)  # 自增主键
+email: Column[str] = str_column(length=100, nullable=False, unique=True)  # 必填唯一邮箱
+price: Column[Decimal] = numeric_column(precision=10, scale=2, nullable=False)  # 必填价格
+```
+
+#### 中优先级参数（动态默认值和数据类行为）
+
+```python
+from datetime import datetime
+from uuid import uuid4
+
+# 动态默认值场景
+created_at: Column[datetime] = datetime_column(default_factory=datetime.now)
+api_key: Column[str] = str_column(default_factory=lambda: str(uuid4()))
+random_code: Column[str] = str_column(default_factory=generate_random_code)
+
+# 数据类控制场景
+internal_id: Column[str] = str_column(init=False, repr=False)  # 内部字段，不在初始化和显示中包含
+password_hash: Column[str] = str_column(repr=False)  # 不在 __repr__ 中显示
+sort_key: Column[int] = int_column(compare=True, hash=True)  # 参与对象比较和哈希
+```
+
+#### 低优先级参数（高级用法）
+
+```python
+# 高级参数场景
+ordered_field: Column[str] = str_column(sort_order=1)  # 字段排序控制
+keyword_only: Column[str] = str_column(kw_only=True)  # 只能作为关键字参数
+existing_col: Column[str] = str_column(use_existing_column=True)  # 复用列定义
+```
+
+### 常见使用场景示例
+
+#### 用户模型定义
+
+```python
+from sqlobjects.base import ObjectModel
+from sqlobjects.fields import Column, str_column, int_column, bool_column, datetime_column
+from datetime import datetime
+from uuid import uuid4
+
+class User(ObjectModel):
+    # 主键和基础信息
+    id: Column[int] = int_column(primary_key=True, autoincrement=True)
+    username: Column[str] = str_column(length=50, nullable=False, unique=True)
+    email: Column[str] = str_column(length=100, nullable=False, unique=True)
+    
+    # 密码相关（不在 repr 中显示）
+    password_hash: Column[str] = str_column(length=255, nullable=False, repr=False)
+    
+    # 状态字段
+    is_active: Column[bool] = bool_column(default=True, nullable=False)
+    is_verified: Column[bool] = bool_column(default=False)
+    
+    # 时间戳（动态默认值）
+    created_at: Column[datetime] = datetime_column(default_factory=datetime.now, nullable=False)
+    updated_at: Column[datetime] = datetime_column(default_factory=datetime.now)
+    
+    # API 相关
+    api_key: Column[str] = str_column(default_factory=lambda: str(uuid4()), unique=True, repr=False)
+    
+    # 内部字段（不参与初始化）
+    login_count: Column[int] = int_column(default=0, init=False)
+    last_login_ip: Column[str] = str_column(length=45, init=False, repr=False)
+```
+
+#### 产品模型定义
+
+```python
+class Product(ObjectModel):
+    # 主键和基础信息
+    id: Column[int] = int_column(primary_key=True, autoincrement=True)
+    name: Column[str] = str_column(length=200, nullable=False)
+    sku: Column[str] = str_column(length=50, nullable=False, unique=True)
+    
+    # 价格信息（必填）
+    price: Column[Decimal] = numeric_column(precision=10, scale=2, nullable=False)
+    cost: Column[Decimal] = numeric_column(precision=10, scale=2, repr=False)  # 成本不显示
+    
+    # 库存信息
+    stock_quantity: Column[int] = int_column(default=0, nullable=False)
+    
+    # 状态和排序
+    is_active: Column[bool] = bool_column(default=True, nullable=False)
+    sort_order: Column[int] = int_column(default=0, compare=True, sort_order=1)
+    
+    # 元数据（动态默认值）
+    metadata: Column[dict] = json_column(default_factory=dict)
+    
+    # 时间戳
+    created_at: Column[datetime] = datetime_column(default_factory=datetime.now, nullable=False)
+    updated_at: Column[datetime] = datetime_column(default_factory=datetime.now)
+```
 
 ### 字符串函数
 

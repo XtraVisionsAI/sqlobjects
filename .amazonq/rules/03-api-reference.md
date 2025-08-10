@@ -65,6 +65,46 @@ count = await User.objects.filter(is_active=True).count()
 users = await User.objects.filter(is_active=True).all(session=analytics_session)
 ```
 
+## Field Parameter Guidelines
+
+### Parameter Priority Guide
+
+#### High Priority Parameters (Database Constraints)
+
+```python
+# Database constraint scenarios
+username: Column[str] = str_column(length=50, nullable=False, unique=True)  # Required unique
+id: Column[int] = int_column(primary_key=True, autoincrement=True)  # Auto-increment PK
+email: Column[str] = str_column(length=100, nullable=False, unique=True)  # Required unique email
+price: Column[Decimal] = numeric_column(precision=10, scale=2, nullable=False)  # Required price
+```
+
+#### Medium Priority Parameters (Dynamic Defaults and Dataclass Behavior)
+
+```python
+from datetime import datetime
+from uuid import uuid4
+
+# Dynamic default value scenarios
+created_at: Column[datetime] = datetime_column(default_factory=datetime.now)
+api_key: Column[str] = str_column(default_factory=lambda: str(uuid4()))
+random_code: Column[str] = str_column(default_factory=generate_random_code)
+
+# Dataclass control scenarios
+internal_id: Column[str] = str_column(init=False, repr=False)  # Internal field
+password_hash: Column[str] = str_column(repr=False)  # Hidden in __repr__
+sort_key: Column[int] = int_column(compare=True, hash=True)  # Participates in comparison
+```
+
+#### Low Priority Parameters (Advanced Usage)
+
+```python
+# Advanced parameter scenarios
+ordered_field: Column[str] = str_column(sort_order=1)  # Field ordering control
+keyword_only: Column[str] = str_column(kw_only=True)  # Keyword-only parameter
+existing_col: Column[str] = str_column(use_existing_column=True)  # Reuse column definition
+```
+
 ## Model Definition Standards
 
 ### 1. Basic Model Structure
@@ -76,11 +116,16 @@ from sqlalchemy import func
 from datetime import datetime
 
 class User(ObjectModel):
-    id: Column[int] = column(type="integer", primary_key=True)
-    username: Column[str] = str_column(length=50, unique=True)
-    email: Column[str] = str_column(length=100, unique=True)
-    is_active: Column[bool] = bool_column(default=True)
-    created_at: Column[datetime] = datetime_column(server_default=func.now())
+    id: Column[int] = column(type="integer", primary_key=True, autoincrement=True)
+    username: Column[str] = str_column(length=50, unique=True, nullable=False)
+    email: Column[str] = str_column(length=100, unique=True, nullable=False)
+    is_active: Column[bool] = bool_column(default=True, nullable=False)
+    created_at: Column[datetime] = datetime_column(default_factory=datetime.now, nullable=False)
+    
+    # Advanced parameter examples
+    internal_id: Column[str] = str_column(init=False, repr=False)  # Internal field
+    api_key: Column[str] = str_column(default_factory=generate_api_key, repr=False)
+    sort_order: Column[int] = column(type="integer", sort_order=1, compare=True)
 ```
 
 ### 2. Field Type System
@@ -175,30 +220,39 @@ SQLObjects features a unified type system with automatic parameter extraction an
 
 ```python
 # String types - using shortcut functions (recommended)
-username: Column[str] = str_column(length=50)
+username: Column[str] = str_column(length=50, nullable=False, unique=True)  # Required unique field
 code: Column[str] = str_column(type="char", length=10)  # Fixed length
 description: Column[str] = str_column(type="varchar", length=500)
 long_text: Column[str] = str_column(type="text")  # No length limit
 
+# String types with advanced parameters
+api_key: Column[str] = str_column(default_factory=generate_api_key, repr=False)  # Hidden in repr
+internal_field: Column[str] = str_column(init=False, repr=False)  # Internal use only
+
 # String types - using column() function
-username: Column[str] = column(type="string", length=50)
+username: Column[str] = column(type="string", length=50, nullable=False)
 code: Column[str] = column(type="char", length=10)
 
 # Numeric types - using shortcut functions (recommended)
-price: Column[Decimal] = numeric_column(precision=10, scale=2)
+price: Column[Decimal] = numeric_column(precision=10, scale=2, nullable=False)  # Required price
 percentage: Column[Decimal] = numeric_column(type="decimal", precision=5, scale=4)
 weight: Column[float] = numeric_column(type="float")
 
 # Integer types with size variants
-id: Column[int] = int_column(primary_key=True)  # Default: integer
+id: Column[int] = int_column(primary_key=True, autoincrement=True)  # Auto-increment PK
 big_number: Column[int] = int_column(type="bigint")
 small_number: Column[int] = int_column(type="smallint")
 
+# Integer with advanced parameters
+counter: Column[int] = int_column(default=0, init=False)  # Internal counter
+sort_order: Column[int] = int_column(compare=True, sort_order=1)  # Sortable field
+
 # Boolean types
-is_active: Column[bool] = bool_column(default=True)
+is_active: Column[bool] = bool_column(default=True, nullable=False)  # Required boolean
+is_verified: Column[bool] = bool_column(default=False)
 
 # DateTime types with variants
-created_at: Column[datetime] = datetime_column()  # Default: datetime
+created_at: Column[datetime] = datetime_column(default_factory=datetime.now, nullable=False)
 birth_date: Column[date] = datetime_column(type="date")
 start_time: Column[time] = datetime_column(type="time")
 
