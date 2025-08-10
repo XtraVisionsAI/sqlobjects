@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
@@ -31,7 +31,7 @@ class DatabaseObserver(Protocol):
     def on_default_changed(self, old_default: str | None, new_default: str | None) -> None: ...
 
 
-@dataclass
+@dataclass(init=False)
 class DatabaseConfig:
     """数据库配置类
 
@@ -48,17 +48,49 @@ class DatabaseConfig:
 
     Examples:
         >>> config = DatabaseConfig(
-        ...     url="postgresql+asyncpg://user:pass@localhost/mydb", pool_size=10, echo=True
+        ...     url="postgresql+asyncpg://user:pass@localhost/mydb",
+        ...     pool_size=10,
+        ...     echo=True,
+        ...     isolation_level="READ_COMMITTED",
         ... )
     """
 
     url: str
-    echo: bool = False
-    pool_size: int = 5
-    max_overflow: int = 10
-    pool_timeout: int = 30
-    pool_recycle: int = 3600
-    engine_kwargs: dict[str, Any] = field(default_factory=dict)
+    echo: bool
+    pool_size: int
+    max_overflow: int
+    pool_timeout: int
+    pool_recycle: int
+    engine_kwargs: dict[str, Any]
+
+    def __init__(
+        self,
+        url: str,
+        echo: bool = False,
+        pool_size: int = 5,
+        max_overflow: int = 10,
+        pool_timeout: int = 30,
+        pool_recycle: int = 3600,
+        **kwargs: Any,
+    ) -> None:
+        """初始化数据库配置
+
+        Args:
+            url: 数据库连接 URL
+            echo: 是否打印 SQL 语句
+            pool_size: 连接池大小
+            max_overflow: 连接池最大溢出数量
+            pool_timeout: 获取连接超时时间（秒）
+            pool_recycle: 连接回收时间（秒）
+            **kwargs: 其他 SQLAlchemy 引擎参数
+        """
+        self.url = url
+        self.echo = echo
+        self.pool_size = pool_size
+        self.max_overflow = max_overflow
+        self.pool_timeout = pool_timeout
+        self.pool_recycle = pool_recycle
+        self.engine_kwargs = kwargs
 
 
 class Database:

@@ -5,12 +5,22 @@
 ### 1. Database Initialization
 
 ```python
-from sqlobjects.database import init_db, init_dbs, create_tables
+from sqlobjects.database import init_db, init_dbs, create_tables, DatabaseConfig
 from sqlobjects.base import ObjectModel
 
 # Single database - returns Database instance (default database)
 db = await init_db("sqlite+aiosqlite:///test.db")
 await create_tables(ObjectModel)
+
+# Using DatabaseConfig with **kwargs support
+config = DatabaseConfig(
+    "postgresql://user:pass@localhost/db",
+    pool_size=10,
+    echo=True,
+    isolation_level="READ_COMMITTED",  # Extra engine parameter
+    connect_args={"sslmode": "require"}
+)
+db = await init_db(config.url, **config.engine_kwargs)
 
 # Single database with a name (default database)
 db = await init_db("sqlite+aiosqlite:///test.db", name="main")

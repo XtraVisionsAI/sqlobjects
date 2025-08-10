@@ -9,21 +9,33 @@ SQLObjects Database 模块提供多数据库连接管理能力，支持异步数
 
 ### 1. 配置管理
 
-DatabaseConfig 使用 @dataclass 自动生成配置类方法，提供类型安全的数据库配置：
+DatabaseConfig 使用 @dataclass(init=False) 和自定义 __init__ 方法，支持 **kwargs 传递额外引擎参数：
 
 ```python
-@dataclass
+@dataclass(init=False)
 class DatabaseConfig:
     url: str
-    echo: bool = False
-    pool_size: int = 5
-    max_overflow: int = 10
-    pool_timeout: int = 30
-    pool_recycle: int = 3600
-    engine_kwargs: dict[str, Any] = field(default_factory=dict)
+    echo: bool
+    pool_size: int
+    max_overflow: int
+    pool_timeout: int
+    pool_recycle: int
+    engine_kwargs: dict[str, Any]
+    
+    def __init__(self, url: str, echo: bool = False, pool_size: int = 5, 
+                 max_overflow: int = 10, pool_timeout: int = 30, 
+                 pool_recycle: int = 3600, **kwargs: Any) -> None:
+        # 所有额外参数收集到 engine_kwargs
+        self.engine_kwargs = kwargs
 
-# 配置创建
-config = DatabaseConfig("postgresql://...", pool_size=10, echo=True)
+# 配置创建 - 支持额外参数
+config = DatabaseConfig(
+    "postgresql://...", 
+    pool_size=10, 
+    echo=True,
+    isolation_level="READ_COMMITTED",  # 额外引擎参数
+    connect_args={"sslmode": "require"}
+)
 ```
 
 ### 2. 事件系统
@@ -160,15 +172,20 @@ class SessionContextManager(DatabaseObserver):
 ### DatabaseConfig
 
 ```python
-@dataclass
+@dataclass(init=False)
 class DatabaseConfig:
-    url: str                                                     # 数据库连接 URL
-    echo: bool = False                                           # 是否打印 SQL 语句
-    pool_size: int = 5                                           # 连接池大小
-    max_overflow: int = 10                                       # 连接池最大溢出数量
-    pool_timeout: int = 30                                       # 获取连接超时时间
-    pool_recycle: int = 3600                                     # 连接回收时间
-    engine_kwargs: dict[str, Any] = field(default_factory=dict)  # 其他引擎参数
+    url: str                    # 数据库连接 URL
+    echo: bool                  # 是否打印 SQL 语句
+    pool_size: int              # 连接池大小
+    max_overflow: int           # 连接池最大溢出数量
+    pool_timeout: int           # 获取连接超时时间
+    pool_recycle: int           # 连接回收时间
+    engine_kwargs: dict[str, Any]  # 其他引擎参数
+    
+    def __init__(self, url: str, echo: bool = False, pool_size: int = 5,
+                 max_overflow: int = 10, pool_timeout: int = 30,
+                 pool_recycle: int = 3600, **kwargs: Any) -> None:
+        # 支持 **kwargs 传递额外引擎参数
 ```
 
 ### Database 类
@@ -229,8 +246,14 @@ set_default_db(db_name: str)
 ### 基础用法
 
 ```python
-# 配置创建
-config = DatabaseConfig("postgresql://...", pool_size=10, echo=True)
+# 配置创建 - 支持额外参数
+config = DatabaseConfig(
+    "postgresql://...", 
+    pool_size=10, 
+    echo=True,
+    isolation_level="READ_COMMITTED",  # 额外引擎参数
+    pool_pre_ping=True
+)
 
 # 初始化数据库
 db = await init_db("sqlite+aiosqlite:///test.db")
