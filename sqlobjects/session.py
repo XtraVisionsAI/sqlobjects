@@ -157,6 +157,13 @@ class SessionContextManager:
             raise RuntimeError(f"Database '{db_name}' is not initialized")
         cls._default_db = db_name
 
+    @classmethod
+    async def remove_scoped_session(cls, db_name: str | None = None) -> None:
+        """Remove scoped session for explicit cleanup purposes."""
+        name = db_name or cls._default_db or "default"
+        if name in cls._scoped_sessions:
+            await cls._scoped_sessions[name].remove()
+
     # DatabaseObserver 协议实现
     @classmethod
     def on_database_added(cls, name: str, database: "Database", is_default: bool) -> None:
