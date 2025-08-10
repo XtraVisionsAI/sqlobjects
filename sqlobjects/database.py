@@ -388,7 +388,7 @@ async def init_db(
         max_overflow=max_overflow,
         pool_timeout=pool_timeout,
         pool_recycle=pool_recycle,
-        engine_kwargs=engine_kwargs,
+        **engine_kwargs,
     )
     db_name = name if name is not None else "default"
     return await _manager.add_database(db_name, config, is_default=is_default)
