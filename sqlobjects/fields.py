@@ -152,12 +152,7 @@ class TypeRegistry:
 
     def __init__(self):
         self._types: dict[str, TypeDefinition] = {}
-        self._aliases: dict[str, str] = {
-            "str": "string",
-            "int": "integer",
-            "bool": "boolean",
-            "decimal": "numeric",
-        }
+        self._aliases: dict[str, str] = {}
         self._initialized = False
 
     @lru_cache(maxsize=128)  # noqa: B019
