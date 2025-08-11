@@ -326,7 +326,17 @@ class QuerySet(Generic[T]):
 
         options = []
         for relation in relations:
-            if relation:
+            if "." in relation:
+                # Use string paths and let SQLAlchemy parse them automatically
+                parts = relation.split(".")
+                option = selectinload(getattr(self._model, parts[0]))
+
+                # Use string paths directly
+                for part in parts[1:]:
+                    option = option.selectinload(part)
+
+                options.append(option)
+            else:
                 options.append(selectinload(getattr(self._model, relation)))
 
         new_query = self._query.options(*options)
