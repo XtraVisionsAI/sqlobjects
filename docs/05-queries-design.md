@@ -138,7 +138,7 @@ class QuerySet(Generic[T]):
     async def get_item(self, key, session=None) -> T | list[T]
     async def dates(self, field: str, kind: str, order="ASC", session=None) -> list[Any]
     async def datetimes(self, field: str, kind: str, order="ASC", session=None) -> list[Any]
-    async def explain(self, output=None, analyze=False, session=None, **options) -> dict[str, Any]
+    async def explain(self, output=None, analyze=False, session=None, **options) -> dict[str, Any]  # 查询执行计划分析
     async def raw(self, sql: str, params=None, session=None) -> list[T]
     
     # 集合操作方法（Set Operations）
@@ -284,8 +284,16 @@ users = await User.objects.get_item(slice(0, 10))  # 获取前10个对象
 dates = await User.objects.dates('created_at', 'month')  # 按月分组的日期
 datetimes = await User.objects.datetimes('created_at', 'day')  # 按天分组的时间
 
-# 查询分析
-plan = await User.objects.explain(analyze=True)  # 获取查询执行计划
+# 查询执行计划分析
+plan = await User.objects.explain()  # 基本执行计划
+plan = await User.objects.explain(analyze=True)  # 实际执行并分析
+plan = await User.objects.explain(output="json")  # JSON 格式输出
+# PostgreSQL 高级选项
+plan = await User.objects.explain(analyze=True, verbose=True, buffers=True)
+# MySQL JSON 格式
+plan = await User.objects.explain(output="json")
+# SQLite 查询计划
+plan = await User.objects.explain()  # 自动适配 SQLite 语法
 
 # 原生SQL查询
 users = await User.objects.raw("SELECT * FROM users WHERE age > :age", {"age": 18})
@@ -295,12 +303,25 @@ async for user in User.objects.iterator():
     # 逐个处理用户对象
     process_user(user)
 
-# 集合操作
+# 集合操作（在内存中处理，适用于中小型数据集）
 active_users = User.objects.filter(is_active=True)
 staff_users = User.objects.filter(is_staff=True)
-union_result = await active_users.union(staff_users)      # 并集
-intersection_result = await active_users.intersection(staff_users)  # 交集
-difference_result = await active_users.difference(staff_users)      # 差集
+
+# 并集：合并两个查询结果，去除重复
+union_result = await active_users.union(staff_users)  # UNION 去重
+union_all_result = await active_users.union(staff_users, all_=True)  # UNION ALL 保留重复
+
+# 交集：获取同时存在于两个查询结果中的记录
+intersection_result = await active_users.intersection(staff_users)
+
+# 差集：获取在第一个查询中但不在第二个查询中的记录
+difference_result = await active_users.difference(staff_users)
+
+# 多个 QuerySet 的集合操作
+admin_users = User.objects.filter(role="admin")
+manager_users = User.objects.filter(role="manager")
+all_privileged = await active_users.union(admin_users, manager_users)  # 多个并集
+common_users = await active_users.intersection(staff_users, admin_users)  # 多个交集
 
 # 批量操作
 updated_count = await User.objects.filter(is_active=False).update(values={"status": "inactive"})

@@ -73,19 +73,79 @@ class StringFunctionMixin(FunctionMixin):
 
 ### 子查询系统
 
-智能子查询表达式，支持自动类型推断：
+智能子查询表达式，支持自动类型推断和多种子查询类型。SubqueryExpression 类提供统一的子查询接口，自动分析查询结构并选择最适合的子查询类型：
 
 ```python
 class SubqueryExpression:
-    """智能子查询表达式"""
+    """智能子查询表达式，支持多种 SQLAlchemy 子查询类型"""
+    
+    def __init__(self, query: Select, name: str | None = None, query_type: str = "auto"):
+        self.query = query
+        self.name = name
+        self.query_type = self._infer_type() if query_type == "auto" else query_type
     
     def _infer_type(self) -> str:
-        """自动推断子查询类型"""
-        # 规则 1: 单列 + 聚合 + LIMIT 1 → scalar
-        # 规则 2: 单列聚合查询 → scalar
-        # 规则 3: 多列查询 → table
-        # 规则 4: 单列非聚合 → table (用于 IN 条件)
+        """智能类型推断，基于查询结构分析"""
+        structure = self._analyze_query_structure()
+        
+        # 规则 1: 明确的标量查询特征
+        if (structure["has_single_column"] and structure["has_aggregates"] 
+            and (structure["has_limit_one"] or structure["is_count_query"])):
+            return "scalar"
+        
+        # 规则 2: 单列聚合查询（常用于比较）
+        if structure["has_single_column"] and structure["has_aggregates"]:
+            return "scalar"
+        
+        # 规则 3: 多列查询默认为表子查询
+        if structure["column_count"] > 1:
+            return "table"
+        
+        # 规则 4: 单列非聚合查询（如 ID 列表）
+        return "table"
     
+    def _analyze_query_structure(self) -> dict:
+        """分析查询结构以提供推断依据"""
+        analysis = {
+            "select_columns": [],
+            "has_aggregates": False,
+            "has_single_column": False,
+            "has_limit_one": False,
+            "column_count": 0,
+            "is_count_query": False,
+        }
+        
+        # 分析 SELECT 列
+        if hasattr(self.query, "selected_columns"):
+            analysis["select_columns"] = list(self.query.selected_columns)
+            analysis["column_count"] = len(analysis["select_columns"])
+            analysis["has_single_column"] = analysis["column_count"] == 1
+        
+        # 检测聚合函数
+        query_str = str(self.query).lower()
+        aggregate_keywords = ["count(", "sum(", "avg(", "max(", "min("]
+        analysis["has_aggregates"] = any(keyword in query_str for keyword in aggregate_keywords)
+        
+        # 检测 LIMIT 子句
+        analysis["has_limit_one"] = (
+            hasattr(self.query, "_limit") and self.query._limit == 1
+        )
+        
+        # 检测计数查询
+        analysis["is_count_query"] = "count(" in query_str
+        
+        return analysis
+    
+    def resolve(self, model_class=None) -> Any:
+        """解析为适当的 SQLAlchemy 对象"""
+        if self.query_type == "scalar":
+            return self._get_scalar_subquery()
+        elif self.query_type == "exists":
+            return self._get_exists_subquery()
+        else:  # 'table'
+            return self._get_table_subquery()
+    
+    # 类型转换方法
     def as_scalar(self) -> "SubqueryExpression":
         return SubqueryExpression(self.query, self.name, "scalar")
     
@@ -94,6 +154,12 @@ class SubqueryExpression:
     
     def as_table(self) -> "SubqueryExpression":
         return SubqueryExpression(self.query, self.name, "table")
+    
+    # 操作符重载，支持自动类型适配
+    def __eq__(self, other):
+        if self.query_type == "table":
+            return self.as_scalar().resolve() == other
+        return self.resolve() == other
 ```
 
 ### 与其他模块的集成
@@ -198,21 +264,51 @@ User.salary.round(2)                               # 数值格式化
 ### 子查询操作
 
 ```python
-# 自动类型推断
-avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).subquery()  # 推断为 scalar
-active_users = User.objects.filter(is_active=True).subquery()            # 推断为 table
+# 自动类型推断（推荐使用）
+avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).subquery()  # 自动推断为 scalar
+active_users = User.objects.filter(is_active=True).subquery()            # 自动推断为 table
+user_count = User.objects.aggregate(count=func.count()).subquery()       # 自动推断为 scalar
 
-# 显式类型指定
+# 显式类型指定（高级用法）
 scalar_subq = User.objects.aggregate(count=func.count()).subquery(query_type="scalar")
-exists_subq = Post.objects.filter(Post.author_id.in_([1, 2, 3])).subquery(query_type="exists")
+table_subq = User.objects.filter(is_active=True).subquery(query_type="table")
+exists_subq = Post.objects.filter(author_id=User.id).subquery(query_type="exists")
 
-# 类型转换
-table_subq = scalar_subq.as_table()
-exists_subq = table_subq.as_exists()
+# 类型转换（灵活切换）
+scalar_as_table = scalar_subq.as_table()    # 标量子查询转为表子查询
+table_as_scalar = table_subq.as_scalar()    # 表子查询转为标量子查询
+exists_check = table_subq.as_exists()       # 表子查询转为存在性检查
 
-# 在查询中使用
+# 在查询中使用子查询
+# 标量子查询用于比较
 high_earners = User.objects.filter(User.salary > avg_salary_subq)
+
+# 表子查询用于 JOIN
+posts_with_active_authors = Post.objects.join(
+    active_users, Post.author_id == active_users.c.id
+)
+
+# 存在性子查询用于布尔条件
 users_with_posts = User.objects.filter(has_posts_subq)
+
+# 复杂子查询组合
+dept_avg_salary = Employee.objects.filter(
+    department_id=User.department_id
+).aggregate(
+    avg_salary=func.avg(Employee.salary)
+).subquery()  # 自动推断为 scalar
+
+high_performers = User.objects.filter(
+    User.salary > dept_avg_salary * 1.2
+).annotate(
+    performance_ratio=User.salary / dept_avg_salary
+)
+
+# 子查询别名
+named_subq = active_users.alias("active_users_subq")
+
+# 访问表子查询的列
+user_ids = active_users.c.id  # 访问 active_users 子查询的 id 列
 ```
 
 ## 使用指南

@@ -244,9 +244,6 @@ class ModelConfig:
     verbose_name_plural: str | None = None
     description: str | None = None
     
-    # 权限系统
-    permissions: list[tuple[str, str]] = field(default_factory=list)
-    
     # 数据库特定配置
     db_options: dict[str, dict[str, Any]] = field(default_factory=dict)
     
@@ -544,11 +541,6 @@ class User(ObjectModel):
         
         db_options = mysql_config(engine="InnoDB", charset="utf8mb4")
         
-        permissions = [
-            ("view_user", "Can view user"),
-            ("change_user", "Can change user")
-        ]
-        
         custom = {
             "cache_timeout": 300,
             "enable_audit": True
@@ -795,14 +787,6 @@ class Product(ObjectModel):
                 "comment": "产品信息表，包含价格、分类等核心信息"
             }
         )
-        
-        # 权限配置
-        permissions = [
-            ("view_product", "Can view product"),
-            ("add_product", "Can add product"),
-            ("change_product", "Can change product"),
-            ("delete_product", "Can delete product")
-        ]
         
         # 自定义配置
         custom = {

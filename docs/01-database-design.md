@@ -9,7 +9,8 @@ SQLObjects Database 模块提供多数据库连接管理能力，支持异步数
 
 ### 1. 配置管理
 
-DatabaseConfig 使用 @dataclass(init=False) 和自定义 __init__ 方法，支持 **kwargs 传递额外引擎参数：
+DatabaseConfig 使用 @dataclass(init=False) 禁用自动生成的 __init__ 方法，然后提供自定义 __init__ 方法来支持 **kwargs
+传递额外引擎参数。这种设计允许在保持 dataclass 便利性的同时，实现灵活的参数处理：
 
 ```python
 @dataclass(init=False)
@@ -185,7 +186,7 @@ class DatabaseConfig:
     def __init__(self, url: str, echo: bool = False, pool_size: int = 5,
                  max_overflow: int = 10, pool_timeout: int = 30,
                  pool_recycle: int = 3600, **kwargs: Any) -> None:
-        # 支持 **kwargs 传递额外引擎参数
+        # 禁用自动生成的 __init__，使用自定义实现支持 **kwargs 传递额外引擎参数
 ```
 
 ### Database 类

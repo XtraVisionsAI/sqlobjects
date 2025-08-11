@@ -123,7 +123,7 @@ class StringFunctionMixin:
 
 #### 3. 类型注册系统
 
-支持延迟初始化、LRU 缓存和自动参数提取：
+支持延迟初始化、LRU 缓存和自动参数提取。类型注册表使用延迟初始化模式，只有在首次访问时才初始化内置类型，并使用 LRU 缓存提高查找性能：
 
 ```python
 class TypeRegistry:
@@ -131,23 +131,26 @@ class TypeRegistry:
     
     def __init__(self):
         self._types: dict[str, TypeDefinition] = {}
-        self._aliases: dict[str, str] = {
-            "str": "string", "int": "integer", 
-            "bool": "boolean", "decimal": "numeric"
-        }
-        self._initialized = False
+        self._aliases: dict[str, str] = {}  # 类型别名映射
+        self._initialized = False  # 延迟初始化标志
     
-    @lru_cache(maxsize=128)
+    @lru_cache(maxsize=128)  # LRU 缓存提高查找性能
     def get_type(self, name: str) -> TypeDefinition:
-        """缓存类型查找，支持延迟初始化"""
+        """缓存类型查找，支持延迟初始化和错误处理"""
         if not self._initialized:
-            self._init_builtin_types()
-        return self._types.get(self._resolve_alias(name))
+            self._init_builtin_types()  # 首次访问时初始化
+        
+        type_def = self._types.get(self._resolve_alias(name))
+        if not type_def:
+            available_types = list(self._types.keys())
+            raise ValueError(f"Unknown type: '{name}'. Available types: {available_types}")
+        
+        return type_def
 ```
 
 #### 4. 参数处理系统
 
-支持类型参数和列参数的自动分离，以及参数转换：
+支持类型参数和列参数的自动分离，以及参数转换和默认值处理。参数处理系统包括类型参数提取、列参数过滤和参数转换逻辑：
 
 ```python
 # 类型定义结构
@@ -165,15 +168,32 @@ class TypeDefinition(TypedDict):
 
 # 参数处理流程
 def _get_type_params(type_def: TypeDefinition, kwargs: dict[str, Any]) -> dict[str, Any]:
-    """提取类型构建参数，应用转换函数"""
+    """从 kwargs 中获取类型构建参数，应用转换和默认值"""
     type_params = {}
+    type_param_names = {arg["name"] for arg in type_def["arguments"]}
+    
+    # 提取并转换参数
     for key, value in kwargs.items():
         if key in type_param_names:
             arg_def = next(arg for arg in type_def["arguments"] if arg["name"] == key)
             if "transform" in arg_def and arg_def["transform"]:
                 value = arg_def["transform"](value)  # 应用转换
             type_params[key] = value
+    
+    # 应用默认值
+    for arg in type_def["arguments"]:
+        if arg["name"] not in type_params and not arg["required"] and arg["default"] is not None:
+            default_value = arg["default"]
+            if "transform" in arg and arg["transform"]:
+                default_value = arg["transform"](default_value)
+            type_params[arg["name"]] = default_value
+    
     return type_params
+
+def _get_column_params(type_def: TypeDefinition, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """从 kwargs 中获取列参数（排除类型参数）"""
+    type_param_names = {arg["name"] for arg in type_def["arguments"]}
+    return {key: value for key, value in kwargs.items() if key not in type_param_names}
 ```
 
 ### 与其他模块的集成
@@ -379,7 +399,7 @@ tracking_id: Column[str] = uuid_column(repr=False)  # 不在显示中包含
 
 # 二进制类型
 file_data: Column[bytes] = binary_column(length=1024, nullable=True)
-image_data: Column[bytes] = binary_column(type="varbinary", length=2048)
+image_data: Column[bytes] = binary_column(type="binary", length=2048)
 avatar: Column[bytes] = binary_column(init=False, repr=False)  # 内部存储
 
 

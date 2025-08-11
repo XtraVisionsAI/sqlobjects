@@ -13,9 +13,9 @@ from sqlobjects.expressions import SubqueryExpression
 subq = User.objects.filter(is_active=True).subquery()  # Auto-inferred type
 
 # Explicit type specification
-table_subq = User.objects.filter(age__gte=18).subquery(query_type="table")
+table_subq = User.objects.filter(User.age >= 18).subquery(query_type="table")
 scalar_subq = User.objects.aggregate(count=func.count()).subquery(query_type="scalar")
-exists_subq = Post.objects.filter(author_id=F("id")).subquery(query_type="exists")
+exists_subq = Post.objects.filter(author_id=User.id).subquery(query_type="exists")
 
 # Named subqueries for complex queries
 active_users = User.objects.filter(is_active=True).subquery("active_users")
@@ -41,7 +41,7 @@ user_profiles = User.objects.values("id", "username", "email").subquery()  # →
 user_ids = User.objects.filter(is_active=True).values_list("id").subquery()  # → table
 
 # Default: Table subquery when inference is uncertain
-general_query = User.objects.filter(created_at__gte=date.today()).subquery()  # → table
+general_query = User.objects.filter(User.created_at >= date.today()).subquery()  # → table
 ```
 
 ### 3. Subquery Usage Patterns
@@ -64,15 +64,15 @@ users_with_posts = await User.objects.filter(has_posts_subq).all()
 
 # Complex nested subqueries
 department_avg_subq = Employee.objects.filter(
-    department_id=F("department_id")
+    department_id=Employee.department_id
 ).aggregate(
-    dept_avg=F("salary").avg()
+    dept_avg=func.avg(Employee.salary)
 ).subquery(query_type="scalar")
 
 high_performers = await Employee.objects.filter(
-    F("salary") > department_avg_subq * 1.1
+    Employee.salary > department_avg_subq * 1.1
 ).annotate(
-    performance_ratio=F("salary") / department_avg_subq
+    performance_ratio=Employee.salary / department_avg_subq
 ).all()
 ```
 
@@ -101,34 +101,34 @@ username_col = user_subq.c.username
 ```python
 # Correlated subqueries
 latest_post_subq = Post.objects.filter(
-    author_id=F("id")
+    author_id=User.id
 ).order_by("-created_at").limit(1).subquery(query_type="scalar")
 
 users_with_latest_post = await User.objects.annotate(
     latest_post_date=latest_post_subq
 ).filter(
-    latest_post_date__gte=date.today() - timedelta(days=30)
+    User.latest_post_date >= date.today() - timedelta(days=30)
 ).all()
 
 # Multiple subqueries in single query
-avg_age_subq = User.objects.aggregate(avg_age=F("age").avg()).subquery(query_type="scalar")
+avg_age_subq = User.objects.aggregate(avg_age=func.avg(User.age)).subquery(query_type="scalar")
 max_posts_subq = Post.objects.aggregate(max_posts=func.count()).group_by("author_id").subquery(query_type="scalar")
 
 complex_users = await User.objects.filter(
-    F("age") > avg_age_subq,
-    F("posts_count") >= max_posts_subq * 0.8
+    User.age > avg_age_subq,
+    User.posts_count >= max_posts_subq * 0.8
 ).all()
 
 # Subqueries in aggregations
 dept_employee_count_subq = Employee.objects.filter(
-    department_id=F("department_id")
+    department_id=Employee.department_id
 ).aggregate(
     emp_count=func.count()
 ).subquery(query_type="scalar")
 
 department_stats = await Department.objects.annotate(
     employee_count=dept_employee_count_subq,
-    avg_salary_per_employee=F("total_salary") / dept_employee_count_subq
+    avg_salary_per_employee=Department.total_salary / dept_employee_count_subq
 ).all()
 ```
 
@@ -136,13 +136,12 @@ department_stats = await Department.objects.annotate(
 
 ```python
 from sqlobjects.exceptions import ValidationError
-from sqlobjects.locales import t
 
-# Subquery validation errors are localized
+# Subquery validation errors use English messages
 try:
     invalid_subq = User.objects.filter(invalid_field=True).subquery(query_type="invalid")
 except ValidationError as e:
-    print(e.message)  # Localized error message
+    print(e.message)  # English error message
 
 # Handle subquery conversion failures
 try:
@@ -297,7 +296,7 @@ users = await User.objects.options(
 ).all()
 
 # Query explanation for debugging
-explain_result = await User.objects.filter(age__gte=18).explain(
+explain_result = await User.objects.filter(User.age >= 18).explain(
     analyze=True,
     output="json"
 )
@@ -357,7 +356,7 @@ users = await User.objects.filter(is_active=True).all(session=db_session)
 
 - `update(values, *, filter=None, **conditions)` - Update with complex conditions and explicit values parameter
 - `bulk_update(mappings, match_fields)` - True bulk update using executemany for performance
-- `delete(*, filter=None, **conditions)` - Delete with complex conditions (Q objects, F expressions)
+- `delete(*, filter=None, **conditions)` - Delete with complex conditions (Q objects, SQLAlchemy expressions)
 - `bulk_delete(ids, id_field)` - True bulk delete using IN clauses for performance
 - `delete_all()` - Delete all records (with fast TRUNCATE option)
 
@@ -460,28 +459,52 @@ if auto_default and self._default_db == db_name:
 
 ## Configuration System Rules
 
-### 1. Database-Specific Configuration
+### 1. Model Configuration Processing
+
+```python
+# Configuration is processed through ConfigParser
+from sqlobjects.config import ConfigParser, ModelConfig
+
+class ObjectModel:
+    @classmethod
+    def _process_config(cls):
+        """Process and apply model configuration"""
+        parser = ConfigParser()
+        configs = [parser.parse_class_attributes(cls)]
+        
+        # Parse Config inner class if present
+        config_class = getattr(cls, "Config", None)
+        if config_class:
+            configs.append(parser.parse_config_class(config_class))
+        
+        # Merge configurations and apply
+        merged_config = parser.merge_configs(*configs)
+        cls._apply_config(merged_config)
+```
+
+### 2. Database-Specific Configuration
 
 ```python
 from sqlobjects.base import ObjectModel
-from sqlobjects.config import mysql_config, postgresql_config
+from sqlobjects.config import mysql_config, postgresql_config, multi_db_config
 
 class User(ObjectModel):
     # ... fields ...
 
     class Config:
-        db_options = mysql_config(
-            engine="InnoDB",
-            charset="utf8mb4",
-            row_format="DYNAMIC"
+        # Multi-database configuration
+        db_options = multi_db_config(
+            mysql={"engine": "InnoDB", "charset": "utf8mb4"},
+            postgresql={"tablespace": "fast_storage"},
+            generic={"comment": "User data table"}
         )
 ```
 
-### 2. Index and Constraint Creation
+### 3. Index and Constraint Creation
 
 ```python
 from sqlobjects.base import ObjectModel
-from sqlobjects.config import index, constraint
+from sqlobjects.config import index, constraint, unique
 
 class Product(ObjectModel):
     # ... fields ...
@@ -492,121 +515,106 @@ class Product(ObjectModel):
             index("idx_name_category", "name", "category_id")
         ]
         constraints = [
-            constraint("price > 0", "chk_price_positive")
+            constraint("price > 0", "chk_price_positive"),
+            unique("name", "category", name="uq_name_category")
         ]
 ```
 
 ## Function Categories and Usage Patterns
 
 ```python
-# === F Class Instance Methods (Single Field Operations) ===
+# === Field Methods (Enhanced Comparators) ===
 
-# String functions on F instances
-F("name").upper()               # Convert to uppercase
-F("description").trim()         # Remove whitespace
-F("text").length()              # String length
-F("content").substr(1, 10)      # Extract substring
-F("text").replace("old", "new") # Replace substring
+# String functions on field instances
+User.name.upper()               # Convert to uppercase
+User.description.trim()         # Remove whitespace
+User.text.length()              # String length
+User.content.substring(1, 10)   # Extract substring
 
-# Math functions on F instances
-F("value").abs()                # Absolute value
-F("price").round(2)             # Round to 2 decimals
-F("area").sqrt()                # Square root
-F("base") ** 2                  # Power using operator
+# Math functions on field instances
+User.value.abs()                # Absolute value
+User.price.round(2)             # Round to 2 decimals
+User.area.sqrt()                # Square root
 
-# Date/time extraction on F instances
-F("created_at").year()          # Extract year
-F("created_at").month()         # Extract month
-F("created_at").day()           # Extract day
-F("timestamp").hour()           # Extract hour
-
-# Aggregates on F instances
-F("amount").sum()               # Sum values
-F("score").avg()                # Average
-F("price").max()                # Maximum
-F("age").min()                  # Minimum
-F("id").count()                 # Count non-null
-
-# Type conversion on F instances
-F("id").to_string()             # Convert to string
-F("code").to_integer()          # Convert to integer
-F("price").to_decimal(10, 2)    # Convert to decimal
-F("flag").to_boolean()          # Convert to boolean
+# Date/time extraction on field instances
+User.created_at.year()          # Extract year
+User.created_at.month()         # Extract month
+User.created_at.day()           # Extract day
+User.timestamp.hour()           # Extract hour
 
 # === func Object Methods (Multi-Field Operations) ===
 
 # String functions with multiple arguments
-func.concat(F("first"), " ", F("last"))    # Concatenate strings
-func.upper(F("name"))                       # Also available on func
-func.substr(F("text"), 1, 10)               # Also available on func
-func.length(F("description"))               # Also available on func
+func.concat(User.first_name, " ", User.last_name)  # Concatenate strings
+func.upper(User.name)                               # Also available on func
+func.substr(User.text, 1, 10)                       # Also available on func
+func.length(User.description)                       # Also available on func
 
 # Math functions with multiple arguments
-func.power(F("base"), F("exponent"))        # Power function
-func.round(F("value"), F("precision"))      # Dynamic precision
-func.abs(F("difference"))                   # Also available on func
+func.power(User.base, User.exponent)                # Power function
+func.round(User.value, User.precision)              # Dynamic precision
+func.abs(User.difference)                           # Also available on func
 
 # Date/time functions
-func.now()                                  # Current timestamp
-func.current_date()                         # Current date
-func.extract('year', from_=F("date"))       # Extract date part
+func.now()                                          # Current timestamp
+func.current_date()                                 # Current date
+func.extract('year', User.date)                     # Extract date part
 
 # Aggregate functions
-func.count()                                # Count all rows (COUNT(*))
-func.sum(F("amount"))                       # Sum values
-func.avg(F("score"))                        # Average
-func.max(F("price"))                        # Maximum
-func.min(F("age"))                          # Minimum
+func.count()                                        # Count all rows (COUNT(*))
+func.sum(User.amount)                               # Sum values
+func.avg(User.score)                                # Average
+func.max(User.price)                                # Maximum
+func.min(User.age)                                  # Minimum
 
 # Conditional functions
-func.coalesce(F("nickname"), F("name"), "Anonymous")  # First non-null
-func.nullif(F("value"), 0)                            # Return null if equal
+func.coalesce(User.nickname, User.name, "Anonymous")  # First non-null
+func.nullif(User.value, 0)                           # Return null if equal
 
 # Case expressions (func only)
 func.case(
-    (F("score") >= 90, "A"),
-    (F("score") >= 80, "B"),
+    (User.score >= 90, "A"),
+    (User.score >= 80, "B"),
     else_="F"
 )
 
 # Window functions (func only)
-func.row_number()                           # Row number
-func.rank()                                 # Rank with gaps
-func.dense_rank()                           # Rank without gaps
-func.lag(F("value"), 1)                     # Previous row value
-func.lead(F("value"), 1)                    # Next row value
+func.row_number()                                   # Row number
+func.rank()                                         # Rank with gaps
+func.dense_rank()                                   # Rank without gaps
+func.lag(User.value, 1)                             # Previous row value
+func.lead(User.value, 1)                            # Next row value
 
 # Database-specific functions (automatic fallback)
-func.json_extract(F("data"), "$.key")       # JSON extraction
-func.array_length(F("tags"))                # Array length (PostgreSQL)
-func.group_concat(F("names"))               # Group concatenation (MySQL)
+func.json_extract(User.data, "$.key")               # JSON extraction
+func.array_length(User.tags)                        # Array length (PostgreSQL)
+func.group_concat(User.names)                       # Group concatenation (MySQL)
 
 # === Usage Guidelines ===
 
-# Prefer F instance methods for single-field operations
-F("name").upper().trim()                    # Chainable
-F("price").round(2).to_string()             # Multiple transformations
+# Use field methods for single-field operations
+User.name.upper().trim()                            # Chainable
 
 # Use func for multi-field operations
-func.concat(F("first_name"), " ", F("last_name"))  # Multiple fields
-func.coalesce(F("mobile"), F("phone"), "N/A")      # Multiple fallbacks
+func.concat(User.first_name, " ", User.last_name)   # Multiple fields
+func.coalesce(User.mobile, User.phone, "N/A")       # Multiple fallbacks
 
 # Complex expressions combining both
-total_with_tax = func.round(F("subtotal") * F("tax_rate"), 2)
+total_with_tax = func.round(User.subtotal * User.tax_rate, 2)
 full_address = func.concat(
-    F("street").trim(),
+    User.street.trim(),
     ", ",
-    F("city").upper(),
+    User.city.upper(),
     " ",
-    F("postal_code")
+    User.postal_code
 )
 
 # Subquery expressions in complex queries
-avg_salary_subq = Employee.objects.aggregate(avg_salary=F("salary").avg()).subquery(query_type="scalar")
+avg_salary_subq = Employee.objects.aggregate(avg_salary=func.avg(Employee.salary)).subquery(query_type="scalar")
 high_earners = await Employee.objects.filter(
-    F("salary") > avg_salary_subq * 1.2  # 20% above average
+    Employee.salary > avg_salary_subq * 1.2  # 20% above average
 ).annotate(
-    salary_ratio=F("salary") / avg_salary_subq
+    salary_ratio=Employee.salary / avg_salary_subq
 ).all()
 ```
 
@@ -616,15 +624,15 @@ high_earners = await Employee.objects.filter(
 
 ```python
 # Prefer scalar subqueries for single value comparisons
-avg_salary = Employee.objects.aggregate(avg_sal=F("salary").avg()).subquery(query_type="scalar")
-high_earners = await Employee.objects.filter(F("salary") > avg_salary).all()
+avg_salary = Employee.objects.aggregate(avg_sal=func.avg(Employee.salary)).subquery(query_type="scalar")
+high_earners = await Employee.objects.filter(Employee.salary > avg_salary).all()
 
 # Use table subqueries for complex JOINs
 active_users = User.objects.filter(is_active=True).select_related("profile").subquery("active")
 results = await Post.objects.join(active_users, Post.author_id == active_users.c.id).all()
 
 # Use EXISTS for boolean conditions (often more efficient than IN)
-has_orders = Order.objects.filter(customer_id=F("id")).subquery(query_type="exists")
+has_orders = Order.objects.filter(customer_id=Customer.id).subquery(query_type="exists")
 active_customers = await Customer.objects.filter(has_orders).all()
 
 # Avoid deeply nested subqueries when possible

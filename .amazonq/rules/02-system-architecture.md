@@ -150,7 +150,28 @@ The `auto_default` parameter controls automatic default database selection when 
 
 ## Signal and Event System Rules
 
-### 1. SQLAlchemy Event Integration
+### 1. Custom Signal System
+
+```python
+# SQLObjects provides custom signal system for model operations
+from sqlobjects.signals import SignalMixin, SignalContext, Operation
+
+class ModelMixin(SignalMixin):
+    async def save(self, session=None, commit=False, validate=True):
+        # Send before_save signal
+        context = SignalContext(operation=Operation.SAVE, session=session, instance=self)
+        await self._emit_signal("before", context)
+        
+        # Perform save operation
+        session.add(self)
+        if commit:
+            await session.commit()
+        
+        # Send after_save signal
+        await self._emit_signal("after", context)
+```
+
+### 2. SQLAlchemy Event Integration
 
 ```python
 # Import SQLAlchemy event system
@@ -317,7 +338,7 @@ Always use `uv run pytest` for running tests.
 ### 3. Test Database Management
 
 ```python
-# In test fixtures, use is_default=False to avoid global state pollution
+# In test fixtures, recommend using is_default=False to avoid global state pollution
 @pytest.fixture
 async def test_db():
     db = await init_db("sqlite+aiosqlite:///:memory:", name="test_db", is_default=False)
@@ -356,8 +377,8 @@ from sqlobjects.fields import composite, column_property, synonym
 # Query operations
 from sqlobjects.queries import Q, QuerySet
 
-# Expressions and functions (unified system)
-from sqlobjects.expressions import F, func, SubqueryExpression
+# Expressions and functions
+from sqlobjects.expressions import func, SubqueryExpression
 
 # Database operations
 from sqlobjects.database import (
@@ -368,9 +389,6 @@ from sqlobjects.database import (
 # Session management
 from sqlobjects.session import ctx_session, ctx_sessions, SessionContextManager
 
-# Signal and event handling
-from sqlobjects.signals import event
-
 # Exception handling
 from sqlobjects.exceptions import (
     DoesNotExist, 
@@ -380,20 +398,12 @@ from sqlobjects.exceptions import (
     create_validation_error
 )
 
-# Validators
+# Common validators
 from sqlobjects.validators import (
     validate_email,
-    validate_url,
     validate_length,
     validate_range,
-    validate_regex,
     validate_choices,
-    validate_date,
-    validate_time,
-    validate_decimal,
-    validate_json,
-    validate_file,
-    validate_image,
     combine_validators
 )
 
@@ -455,7 +465,7 @@ from sqlobjects.fields import (
 ### 3. Expression System Imports
 
 ```python
-# Primary expression system (recommended)
+# Primary expression system
 from sqlobjects.expressions import func, SubqueryExpression
 
 # For raw SQLAlchemy integration when needed
@@ -511,8 +521,8 @@ class User(ObjectModel):
     @classmethod
     async def get_active_users_with_stats(cls):
         return await cls.objects.filter(is_active=True).annotate(
-            post_count=F.count(F("posts")),
-            latest_post=F.max(F("posts__created_at"))
+            post_count=func.count(cls.posts),
+            latest_post=func.max(cls.posts.created_at)
         ).all()
 ```
 

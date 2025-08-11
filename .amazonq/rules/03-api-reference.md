@@ -10,10 +10,9 @@ All ObjectsManager and QuerySet methods follow a consistent session parameter pa
 async def method_name(
     self,
     *args,
-    session: AsyncSession | None = None,
-    **kwargs
+    **kwargs  # session parameter is handled within kwargs
 ) -> ReturnType:
-    session = session or self._session
+    session = kwargs.pop('session', None) or self._session
     # ... method implementation
 ```
 
@@ -151,7 +150,7 @@ SQLObjects features a unified type system with automatic parameter extraction an
 - `column(type="array", item_type="string", dimensions=1)` for arrays (with automatic type conversion)
 - `column(type="enum", enum_class=MyEnum)` for enums (positional parameter)
 
-- `column(type="varbinary", length=255)` for variable-length binary data
+- `column(type="binary", length=255)` for variable-length binary data
 - `column(type="unicode", length=100)` for Unicode strings (legacy)
 - `column(type="unicodetext")` for Unicode text (legacy)
 
@@ -166,55 +165,14 @@ SQLObjects features a unified type system with automatic parameter extraction an
 - `array_column("string")` for array fields
 - `enum_column(MyEnum)` for enum fields
 - `uuid_column()` for UUID fields
-- `binary_column("varbinary")` for binary data with type variants
+- `binary_column("rbinary")` for binary data with type variants
 
+#### Type System Features
 
-#### Advanced Type System Features
-
-1. **Automatic Parameter Extraction**: The system uses `inspect` to automatically extract SQLAlchemy type constructor
-   parameters:
-   ```python
-   # Standard types use automatic extraction
-   column(type="string", length=255)  # → String(length=255)
-   numeric_column(precision=10, scale=2)  # → Numeric(precision=10, scale=2)
-   ```
-
-2. **Transform Functions**: Special types can define transform functions for parameter conversion:
-   ```python
-   # Array item_type is automatically converted from string to SQLAlchemy type
-   array_column("string")  # "string" → String() instance
-   column(type="array", item_type="integer", dimensions=2)
-   ```
-
-3. **Positional Parameters**: Some types use positional parameters for cleaner syntax:
-   ```python
-   # Enum class is passed as positional parameter
-   enum_column(MyEnum)  # → Enum(MyEnum)
-   column(type="enum", enum_class=MyEnum)
-   ```
-
-4. **Custom Type Registration**: Register custom types with full feature support:
-   ```python
-   from sqlobjects.fields import register_field_type
-   
-   # Automatic parameter extraction
-   register_field_type(MyCustomType, "custom", aliases=["my_type"])
-   
-   # Manual definition with transform functions
-   register_field_type({
-       "type": MySpecialType,
-       "arguments": [
-           {"name": "param", "type": str, "required": True, "default": None,
-            "transform": my_transform_func, "positional": True}
-       ]
-   }, "special")
-   ```
-
-5. **Type Aliases**: Common aliases are supported:
-    - `"str"` → `"string"`
-    - `"int"` → `"integer"`
-    - `"bool"` → `"boolean"`
-    - `"decimal"` → `"numeric"`
+- **Automatic Type Handling**: The system automatically handles SQLAlchemy type creation
+- **Type Aliases**: Common aliases are supported (`str` → `string`, `int` → `integer`, etc.)
+- **Special Types**: Array and enum types have enhanced syntax for easier usage
+- **Custom Types**: Support for registering custom field types when needed
 
 #### Common Type Examples
 
@@ -269,7 +227,7 @@ external_id: Column[str] = uuid_column(unique=True)
 
 # Binary and Pickle types
 file_data: Column[bytes] = binary_column(length=1024)
-image_data: Column[bytes] = binary_column(type="varbinary", length=2048)
+image_data: Column[bytes] = binary_column(type="binary", length=2048)
 
 
 # Unicode types (for legacy databases)
@@ -480,7 +438,7 @@ empty_users = User.objects.none()  # Returns QuerySet
 
 ```python
 # Basic execution methods
-users = await User.objects.filter(age__gte=18).all()  # Returns list[User]
+users = await User.objects.filter(User.age >= 18).all()  # Returns list[User]
 user = await User.objects.get(id=1)  # Returns User or raises exception
 first_user = await User.objects.first()  # Returns User | None
 last_user = await User.objects.last()  # Returns User | None
@@ -523,23 +481,18 @@ results = await User.objects.aggregate(
     avg_age=func.avg('age')
 )  # Returns dict[str, Any]
 
-# Update and delete operations with unified parameter structure
-affected_rows = await User.objects.update(
-    values={"last_seen": datetime.now()},
-    filter=Q(age__gte=18),
-    is_active=True  # Simple condition combined with filter using AND
+# Update and delete operations (use QuerySet methods)
+affected_rows = await User.objects.filter(User.age >= 18).update(
+    last_seen=datetime.now()
 )  # Returns int
-deleted_rows = await User.objects.delete(
-    filter=Q(created_at__lt=cutoff_date),
-    is_active=False  # Simple condition
-)  # Returns int
+deleted_rows = await User.objects.filter(
+    User.created_at < cutoff_date
+).delete()  # Returns int
 
-# Exists method with unified parameter structure
-exists = await User.objects.exists(
-    filter=Q(username__icontains="admin"),
-    is_active=True,
-    session=analytics_session
-)  # Returns bool
+# Exists method
+exists = await User.objects.filter(
+    User.username.like("%admin%")
+).exists(session=analytics_session)  # Returns bool
 
 # Bulk operations for performance
 mappings = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
@@ -554,7 +507,7 @@ diff_users = await active_users.difference(inactive_users)  # Returns list[User]
 # Advanced query methods
 date_list = await User.objects.dates('created_at', 'month', order='DESC')  # Returns list[date]
 datetime_list = await User.objects.datetimes('created_at', 'day', order='ASC')  # Returns list[datetime]
-explain_result = await User.objects.filter(age__gte=18).explain(analyze=True)  # Returns dict
+explain_result = await User.objects.filter(User.age >= 18).explain(analyze=True)  # Returns dict
 raw_users = await User.objects.raw("SELECT * FROM users WHERE age > :age", {"age": 18})  # Returns list[User]
 
 # Iterator for large datasets
@@ -574,11 +527,11 @@ from sqlobjects.expressions import SubqueryExpression
 # Subquery creation (returns SubqueryExpression, not QuerySet)
 active_users_subq = User.objects.filter(is_active=True).subquery("active_users")
 avg_age_subq = User.objects.aggregate(avg_age=func.avg("age")).subquery(query_type="scalar")
-exists_subq = Post.objects.filter(author_id=F("id")).subquery(query_type="exists")
+exists_subq = Post.objects.filter(author_id=User.id).subquery(query_type="exists")
 
 # Using subqueries in queries
 results = await Post.objects.join(active_users_subq, Post.author_id == active_users_subq.c.id).all()
-older_users = await User.objects.filter(F("age") > avg_age_subq).all()
+older_users = await User.objects.filter(User.age > avg_age_subq).all()
 users_with_posts = await User.objects.filter(exists_subq).all()
 
 # Automatic type inference (recommended)
@@ -588,150 +541,79 @@ user_list_subq = User.objects.only("id", "username").subquery()  # Auto-inferred
 
 ## Expression System Rules
 
-### 1. F Class - Field References with Instance Methods
-
-```python
-from sqlobjects.expressions import F, func
-
-# Field references
-price_field = F("price")
-total_expr = F("price") * F("quantity")
-
-# Chainable instance methods for single-field operations
-upper_name = F("name").upper()
-trimmed_name = F("name").trim()
-rounded_price = F("price").round(2)
-
-# Aggregate methods on F instances
-total_sales = F("amount").sum()
-avg_rating = F("rating").avg()
-max_score = F("score").max()
-
-# String operations
-substring = F("description").substr(1, 10)
-replaced = F("text").replace("old", "new")
-concatenated = F("first_name").concat_with(" ", F("last_name"))
-
-# Math operations
-absolute = F("value").abs()
-square_root = F("area").sqrt()
-power = F("base") ** 2  # Uses __pow__ operator
-
-# Date/time extraction
-year_part = F("created_at").year()
-month_part = F("created_at").month()
-
-# Type conversion
-string_id = F("id").to_string()
-integer_code = F("code").to_integer()
-decimal_price = F("price").to_decimal(10, 2)
-```
-
-### 2. func Object - Multi-Field and Database Functions
+### 1. func Object - Database Functions
 
 ```python
 from sqlobjects.expressions import func
 
 # Multi-field operations
-full_name = func.concat(F("first_name"), " ", F("last_name"))
-total_amount = func.sum(F("price") * F("quantity"))
+full_name = func.concat(User.first_name, " ", User.last_name)
+total_amount = func.sum(User.price * User.quantity)
 
 # Database functions
 current_time = func.now()
 current_date = func.current_date()
 
 # Aggregations with multiple expressions
-avg_total = func.avg(F("price") * F("quantity"))
-max_date = func.max(F("created_at"))
+avg_total = func.avg(User.price * User.quantity)
+max_date = func.max(User.created_at)
 
 # Conditional functions
-first_non_null = func.coalesce(F("nickname"), F("username"), "Anonymous")
-null_if_zero = func.nullif(F("value"), 0)
+first_non_null = func.coalesce(User.nickname, User.username, "Anonymous")
+null_if_zero = func.nullif(User.value, 0)
 
 # Case expressions with enhanced syntax
 status = func.case(
-    (F("score") >= 90, "A"),
-    (F("score") >= 80, "B"),
-    (F("score") >= 70, "C"),
+    (User.score >= 90, "A"),
+    (User.score >= 80, "B"),
+    (User.score >= 70, "C"),
     else_="F"
 )
 
 # Dictionary syntax for case expressions
 grade = func.case({
-    F("score") >= 90: "Excellent",
-    F("score") >= 80: "Good",
-    F("score") >= 70: "Average"
+    User.score >= 90: "Excellent",
+    User.score >= 80: "Good",
+    User.score >= 70: "Average"
 }, else_="Poor")
 
 # Window functions
 row_num = func.row_number()
 rank_val = func.rank()
-lag_value = func.lag(F("salary"), 1)
+lag_value = func.lag(User.salary, 1)
 
 # SQLAlchemy compatibility - automatic fallback
-any_sqlalchemy_func = func.custom_db_function(F("field"), param=value)
+any_sqlalchemy_func = func.custom_db_function(User.field, param=value)
 ```
 
-### 3. Window Functions
+### 2. Window Functions
 
 ```python
-# Window functions with F class
-window_sum = F("amount").sum().window().partition_by("department").order_by("-created_at")
-row_number = func.row_number().window().order_by("-salary")
-
-# Complex window expressions
-running_total = F("amount").sum().window().partition_by("category").order_by("date")
-rank_in_dept = func.rank().window().partition_by("department_id").order_by("-salary")
+# Window functions
+row_number = func.row_number().over(order_by=User.salary.desc())
+rank_in_dept = func.rank().over(partition_by=User.department_id, order_by=User.salary.desc())
 
 # Use in queries
 employees = await Employee.objects.annotate(
-    row_number=func.row_number().window().order_by("-salary"),
-    department_rank=func.rank().window().partition_by("department_id").order_by("-salary"),
-    running_total=F("salary").sum().window().partition_by("department_id").order_by("hire_date")
+    row_number=func.row_number().over(order_by=Employee.salary.desc()),
+    department_rank=func.rank().over(partition_by=Employee.department_id, order_by=Employee.salary.desc())
 ).all()
 ```
 
-### 4. Mixed Usage Support
+### 3. Raw SQLAlchemy Integration
 
 ```python
-# F expressions and Model.field can be mixed
-from myapp.models import User
-
-# Both patterns work seamlessly
-full_name1 = func.concat(F("first_name"), " ", User.last_name)
-full_name2 = func.concat(User.first_name, " ", F("last_name"))
-
-# In aggregations
-total_with_bonus = func.sum(F("salary") + User.bonus)
-avg_age = func.avg(User.age)
-
-# In case expressions
-status = func.case(
-    (F("is_active") == True, "Active"),
-    (User.is_suspended == True, "Suspended"),
-    else_="Inactive"
-)
-```
-
-### 5. Raw SQLAlchemy Integration
-
-```python
-from sqlobjects.expressions import RawExpression
 from sqlalchemy import text, func as sa_func
 
-# Wrap raw SQLAlchemy expressions
-raw_timestamp = RawExpression(text("CURRENT_TIMESTAMP"))
-complex_json = RawExpression(sa_func.json_extract(F("data"), "$.key"))
-
-# Use in queries
+# Use raw SQLAlchemy expressions directly
 users = await User.objects.annotate(
-    current_time=RawExpression(text("NOW()")),
-    json_value=RawExpression(sa_func.json_extract(F("metadata"), "$.name"))
+    current_time=text("NOW()"),
+    json_value=sa_func.json_extract(User.metadata, "$.name")
 ).all()
 
 # For complex database-specific functions
-postgres_array = RawExpression(sa_func.array_agg(F("tags")))
-mysql_group_concat = RawExpression(sa_func.group_concat(F("names")))
+postgres_array = sa_func.array_agg(User.tags)
+mysql_group_concat = sa_func.group_concat(User.names)
 ```
 
 ## Batch Operations Best Practices
@@ -739,18 +621,17 @@ mysql_group_concat = RawExpression(sa_func.group_concat(F("names")))
 ### 1. Update Operations
 
 ```python
-# Conditional updates with explicit values parameter
-await User.objects.update(
-    values={"status": "active", "last_seen": datetime.now()},
+# Conditional updates with values parameter
+await User.objects.filter(
     is_active=True,
     department="IT"
-)
+).update(values={"status": "active", "last_seen": datetime.now()})
 
-# Complex conditions with Q objects and F expressions
+# Complex conditions with Q objects and SQLAlchemy expressions
 await User.objects.update(
     values={"status": "premium"},
     Q(subscription_type="paid") | Q(is_vip=True),
-    F("account_balance") > 1000
+    User.account_balance > 1000
 )
 
 # True bulk update for large datasets (10-100x faster)
@@ -779,17 +660,17 @@ await User.objects.bulk_update(
 ### 2. Delete Operations
 
 ```python
-# Conditional deletes with complex conditions using Q objects, F expressions, and SQLAlchemy expressions
-await User.objects.delete(
-    Q(is_active=False) & Q(last_login__lt=datetime.now() - timedelta(days=365)),
+# Conditional deletes with complex conditions using Q objects and SQLAlchemy expressions
+await User.objects.filter(
+    Q(is_active=False) & Q(last_login < datetime.now() - timedelta(days=365)),
     User.account_type == "trial"
-)
+).delete()
 
-# Using F expressions and SQLAlchemy expressions for dynamic conditions
-await User.objects.delete(
-    F("created_at") < datetime.now() - timedelta(days=30),
-    F("login_count") == 0
-)
+# Using SQLAlchemy expressions for dynamic conditions
+await User.objects.filter(
+    User.created_at < datetime.now() - timedelta(days=30),
+    User.login_count == 0
+).delete()
 
 # True bulk delete for large ID lists (10-100x faster)
 user_ids = [1, 2, 3, 4, 5, ...]  # Thousands of IDs

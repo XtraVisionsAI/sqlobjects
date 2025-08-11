@@ -280,7 +280,7 @@ users = await User.objects.all()
 
 #### 与 exceptions 模块的集成
 
-ObjectsManager 使用 exceptions 模块处理查询和操作错误：
+ObjectsManager 使用 exceptions 模块处理查询和操作错误，并提供增强的错误信息和多错误支持：
 
 ```python
 # objects.py 中使用异常系统
@@ -300,25 +300,33 @@ class ObjectsManager:
         return results[0]
     
     async def create(self, validate=True, session=None, commit=False, **kwargs) -> T:
-        """创建对象，增强验证错误信息"""
+        """创建对象，支持单个和多个验证错误的增强处理"""
         try:
             obj = self._model(**kwargs)
             await obj.save(session=session, commit=commit, validate=validate)
             return obj
         except ValidationError as e:
-            # 增强错误信息
-            enhanced_error = ValidationError(
-                f"Failed to create {self._model.__name__}: {e.message}",
-                field=e.field, code=e.code, params=e.params
-            )
-            enhanced_error.operation = "create"
-            enhanced_error.model_class = self._model.__name__
-            raise enhanced_error from e
+            if not e.is_multiple:
+                # 单个错误的增强处理
+                enhanced_error = ValidationError(
+                    f"Failed to create {self._model.__name__}: {e.message}",
+                    field=e.field, code=e.code, params=e.params
+                )
+                enhanced_error.operation = "create"
+                enhanced_error.model_class = self._model.__name__
+                raise enhanced_error from e
+            else:
+                # 多个错误的增强处理
+                enhanced_message = f"Failed to create {self._model.__name__}: {e.message}"
+                enhanced_error = ValidationError(enhanced_message, field_errors=e.field_errors)
+                enhanced_error.operation = "create"
+                enhanced_error.model_class = self._model.__name__
+                raise enhanced_error from e
 ```
 
 #### 与 signals 模块的集成
 
-ObjectsManager 的操作方法集成信号系统：
+ObjectsManager 的操作方法集成信号系统，支持批量操作和实例操作的信号触发：
 
 ```python
 # 批量操作中的信号触发
@@ -331,9 +339,37 @@ async def bulk_create(self, objects, session=None, commit=False):
     )
     await self._model._emit_class_signal("before", context)
     
-    # ... 执行数据库操作
+    # 执行数据库操作
+    stmt = insert(self._model).values(objects)
+    await session.execute(stmt)
     
+    # 更新上下文并发送后置信号
+    context.affected_count = len(objects)
     await self._model._emit_class_signal("after", context)
+
+# update_or_create 中的实例信号触发
+async def update_or_create(self, *filters, defaults=None, validate=True, session=None, commit=False):
+    try:
+        obj = await queryset.get(session=session)
+        if defaults:
+            # 为更新操作发送信号
+            context = SignalContext(
+                operation=Operation.SAVE, 
+                session=session, 
+                model_class=obj.__class__, 
+                instance=obj
+            )
+            await obj._emit_signal("before", context)
+            
+            # 执行更新操作
+            for key, value in defaults.items():
+                setattr(obj, key, value)
+            
+            await obj._emit_signal("after", context)
+        return obj, False
+    except DoesNotExist:
+        # 创建新对象时会通过 create() 方法自动触发信号
+        return await self.create(validate=validate, session=session, commit=commit, **create_kwargs), True
 ```
 
 #### 模块职责分离

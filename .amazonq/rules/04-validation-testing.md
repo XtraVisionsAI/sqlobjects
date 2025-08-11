@@ -89,8 +89,17 @@ await user.save(validate=False)  # Skip validation
 user_data = {"username": "john", "email": "john@example.com"}
 user = User.from_dict(user_data, validate=True)
 
-# Note: get_or_create and update_or_create methods are not yet implemented
-# Current implementation focuses on basic CRUD operations
+# Get or create patterns
+user, created = await User.objects.get_or_create(
+    User.username == "john",
+    defaults={"email": "john@example.com"}
+)
+
+# Update or create patterns
+user, created = await User.objects.update_or_create(
+    User.username == "john",
+    defaults={"last_login": datetime.now()}
+)
 ```
 
 ### 4. Built-in Validators
@@ -281,7 +290,7 @@ class TestUserModel:
         assert len(users) == 2
         
         user = await User.objects.get(username="alice", session=test_session)
-        assert user.age == 25
+        assert user.age == 25e == 25
 ```
 
 ### 2. Test Fixtures
@@ -293,7 +302,7 @@ async def test_db():
     db = await init_db(
         "sqlite+aiosqlite:///:memory:", 
         name="test_db", 
-        is_default=False  # Avoid global state pollution
+        is_default=False  # Recommended to avoid global state pollution
     )
     await create_tables(ObjectModel, "test_db")
     yield db
