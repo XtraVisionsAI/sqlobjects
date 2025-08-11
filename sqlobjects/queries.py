@@ -8,14 +8,15 @@ chainable query operations.
 from collections.abc import AsyncGenerator, Sequence
 from typing import Any, Generic, TypeVar, Union
 
-from sqlalchemy import and_, asc, desc, func, literal, not_, or_, select
+from sqlalchemy import and_, asc, delete, desc, func, literal, not_, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, defer, joinedload, selectinload
 from sqlalchemy.sql import ColumnElement, Select
 from sqlalchemy.sql.elements import BinaryExpression, ClauseElement
 
 from .exceptions import DoesNotExist, MultipleObjectsReturned
 from .expressions import SubqueryExpression
+from .signals import Operation, SignalContext
 
 
 # Export classes for use in other modules
@@ -325,8 +326,6 @@ class QuerySet(Generic[T]):
         Returns:
             New QuerySet instance with the related objects preloaded
         """
-        from sqlalchemy.orm import joinedload
-
         options = []
         for relation in relations:
             if relation:
@@ -344,8 +343,6 @@ class QuerySet(Generic[T]):
         Returns:
             New QuerySet instance with the related objects prefetched
         """
-        from sqlalchemy.orm import selectinload
-
         options = [selectinload(relation) for relation in relations]
         new_query = self._query.options(*options)
         return self._clone(query=new_query)
@@ -391,9 +388,7 @@ class QuerySet(Generic[T]):
         Returns:
             New QuerySet with deferred field loading
         """
-        from sqlalchemy.orm import defer as sqlalchemy_defer
-
-        options = [sqlalchemy_defer(getattr(self._model, field)) for field in fields]
+        options = [defer(getattr(self._model, field)) for field in fields]
         new_query = self._query.options(*options)
         return self._clone(query=new_query)
 
@@ -945,8 +940,6 @@ class QuerySet(Generic[T]):
         Returns:
             Dictionary containing the query execution plan
         """
-        from sqlalchemy import text
-
         session = session or self._session
 
         # Detect database dialect
@@ -1048,8 +1041,6 @@ class QuerySet(Generic[T]):
         Returns:
             List of model instances created from query results
         """
-        from sqlalchemy import text
-
         session = session or self._session
         query = text(sql)
         result = await session.execute(query, params or {})
@@ -1159,10 +1150,6 @@ class QuerySet(Generic[T]):
         Returns:
             Number of affected rows
         """
-        from sqlalchemy import update
-
-        from .signals import Operation, SignalContext
-
         session = session or self._session
 
         # Emit before_update signal
@@ -1207,10 +1194,6 @@ class QuerySet(Generic[T]):
         Returns:
             Number of deleted rows
         """
-        from sqlalchemy import delete
-
-        from .signals import Operation, SignalContext
-
         session = session or self._session
 
         # Emit before_delete signal
