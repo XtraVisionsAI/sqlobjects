@@ -77,9 +77,10 @@ SQLObjects uses a unified session parameter pattern across all methods:
 
 ```python
 # All query methods follow this pattern
-async def method_name(self, *args, **kwargs) -> ReturnType:
-    # Extract session from kwargs
-    session = kwargs.pop('session', None) or self._session
+async def method_with_kwargs(self, *args, *, session: AsyncSession | None = None, **kwargs) -> ReturnType:
+    # ... method implementation
+
+async def method_without_kwargs(self, *args, *, session: AsyncSession | None = None) -> ReturnType:
     # ... method implementation
 ```
 
@@ -87,9 +88,8 @@ async def method_name(self, *args, **kwargs) -> ReturnType:
 
 1. **Intuitive API**: All parameters are keyword arguments with equal priority
 2. **Multi-database Support**: Easy to specify which database to use
-3. **Backward Compatible**: Works with existing code that doesn't specify session
-4. **Flexible Ordering**: Session parameter can be placed anywhere in the call
-5. **Consistent**: Same pattern across all ObjectsManager and QuerySet methods
+3. **Flexible Ordering**: Session parameter can be placed anywhere in the call
+4. **Consistent**: Same pattern across all ObjectsManager and QuerySet methods
 
 ## Naming Conventions
 
