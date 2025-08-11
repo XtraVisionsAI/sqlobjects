@@ -1139,13 +1139,13 @@ class QuerySet(Generic[T]):
     # 数据操作方法 (Data Operations Methods)
     # ========================================
 
-    async def update(self, session: AsyncSession | None = None, commit: bool = False, **values) -> int:
+    async def update(self, values: dict, session: AsyncSession | None = None, commit: bool = False) -> int:
         """Perform bulk update on objects matching the query conditions.
 
         Args:
+            values: Field values to update
             session: Database session to use
             commit: Whether to commit the transaction
-            values: Field values to update
 
         Returns:
             Number of affected rows
