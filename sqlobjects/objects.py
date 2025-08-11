@@ -683,7 +683,7 @@ class ObjectsManager(Generic[T]):
                 commit=True
             )
         """
-        return await self.filter().update(values, session=session, commit=commit)
+        return await self.filter().update(session=session, commit=commit, **values)
 
     # ========== Aggregation & Statistics ==========
     async def count(self, session: AsyncSession | None = None) -> int:

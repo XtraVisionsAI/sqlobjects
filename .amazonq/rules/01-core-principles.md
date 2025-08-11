@@ -77,10 +77,10 @@ SQLObjects uses a unified session parameter pattern across all methods:
 
 ```python
 # All query methods follow this pattern
-async def method_with_kwargs(self, *args, *, session: AsyncSession | None = None, **kwargs) -> ReturnType:
+async def method_with_kwargs(self, *args, session: AsyncSession | None = None, **kwargs) -> ReturnType:
     # ... method implementation
 
-async def method_without_kwargs(self, *args, *, session: AsyncSession | None = None) -> ReturnType:
+async def method_without_kwargs(self, *args, session: AsyncSession | None = None) -> ReturnType:
     # ... method implementation
 ```
 

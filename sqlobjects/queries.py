@@ -188,6 +188,46 @@ class QuerySet(Generic[T]):
     # 查询构建方法 (Query Building Methods)
     # ========================================
 
+    def _process_conditions(self, conditions) -> list[Any]:
+        """Process conditions into SQLAlchemy expressions.
+
+        Unified condition processing logic to reduce code duplication between
+        filter and exclude methods.
+
+        Args:
+            conditions: Sequence of Q objects, SQLObjects expressions, or SQLAlchemy expressions
+
+        Returns:
+            List of processed SQLAlchemy condition expressions
+        """
+        condition_list = []
+        for condition in conditions:
+            if isinstance(condition, Q):
+                # Convert Q object to SQLAlchemy expression
+                condition_list.append(condition._to_sqlalchemy(self._model))  # noqa
+            elif hasattr(condition, "resolve"):
+                # Handle SubqueryExpression and other SQLObjects expressions
+                condition_list.append(condition.resolve(self._model))
+            else:
+                # Direct SQLAlchemy expressions
+                condition_list.append(condition)
+        return condition_list
+
+    def _clone(self, **kwargs) -> "QuerySet[T]":
+        """Create a QuerySet copy with optional parameter overrides.
+
+        Helper method to improve code reusability across QuerySet methods.
+
+        Args:
+            **kwargs: Optional parameters including session and query
+
+        Returns:
+            New QuerySet instance
+        """
+        session = kwargs.get("session", self._session)
+        query = kwargs.get("query", self._query)
+        return QuerySet(session, self._model, query)
+
     def filter(self, *conditions, session: AsyncSession | None = None) -> "QuerySet[T]":
         """Filter the QuerySet to include only objects matching the given conditions.
 
@@ -199,22 +239,12 @@ class QuerySet(Generic[T]):
             New QuerySet instance with the filter conditions applied
         """
         session = session or self._session
-        condition_list = []
-
-        for condition in conditions:
-            if isinstance(condition, Q):
-                condition_list.append(condition._to_sqlalchemy(self._model))  # noqa
-            elif hasattr(condition, "resolve"):
-                # Handle SubqueryExpression and other SQLObjects expressions
-                condition_list.append(condition.resolve(self._model))
-            else:
-                # Direct SQLAlchemy expressions
-                condition_list.append(condition)
+        condition_list = self._process_conditions(conditions)
 
         if condition_list:
             new_query = self._query.where(and_(*condition_list))
-            return QuerySet(session, self._model, new_query)
-        return self
+            return self._clone(session=session, query=new_query)
+        return self._clone(session=session)
 
     def exclude(self, *conditions, session: AsyncSession | None = None) -> "QuerySet[T]":
         """Exclude objects matching the given conditions from the QuerySet.
@@ -227,20 +257,12 @@ class QuerySet(Generic[T]):
             New QuerySet instance with the exclusion conditions applied
         """
         session = session or self._session
-        condition_list = []
-
-        for condition in conditions:
-            if isinstance(condition, Q):
-                condition_list.append(not_(condition._to_sqlalchemy(self._model)))  # noqa
-            elif hasattr(condition, "resolve"):
-                condition_list.append(not_(condition.resolve(self._model)))
-            else:
-                condition_list.append(not_(condition))
+        condition_list = [not_(cond) for cond in self._process_conditions(conditions)]
 
         if condition_list:
             new_query = self._query.where(and_(*condition_list))
-            return QuerySet(session, self._model, new_query)
-        return self
+            return self._clone(session=session, query=new_query)
+        return self._clone(session=session)
 
     def order_by(self, *fields) -> "QuerySet[T]":
         """Order the QuerySet results by the specified fields.
@@ -268,7 +290,7 @@ class QuerySet(Generic[T]):
                 order_clauses.append(field)
 
         new_query = self._query.order_by(*order_clauses)
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def limit(self, count: int) -> "QuerySet[T]":
         """Limit the number of results returned by the QuerySet.
@@ -280,7 +302,7 @@ class QuerySet(Generic[T]):
             New QuerySet instance with the limit applied
         """
         new_query = self._query.limit(count)
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def offset(self, count: int) -> "QuerySet[T]":
         """Skip the specified number of results from the beginning.
@@ -292,7 +314,7 @@ class QuerySet(Generic[T]):
             New QuerySet instance with the offset applied
         """
         new_query = self._query.offset(count)
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def select_related(self, *relations) -> "QuerySet[T]":
         """Preload related objects using JOIN operations.
@@ -311,7 +333,7 @@ class QuerySet(Generic[T]):
                 options.append(joinedload(getattr(self._model, relation)))
 
         new_query = self._query.options(*options)
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def prefetch_related(self, *relations) -> "QuerySet[T]":
         """Prefetch related objects using separate queries.
@@ -324,23 +346,9 @@ class QuerySet(Generic[T]):
         """
         from sqlalchemy.orm import selectinload
 
-        options = []
-        for relation in relations:
-            if "." in relation:
-                # Use string paths and let SQLAlchemy parse them automatically
-                parts = relation.split(".")
-                option = selectinload(getattr(self._model, parts[0]))
-
-                # Use string paths directly
-                for part in parts[1:]:
-                    option = option.selectinload(part)
-
-                options.append(option)
-            else:
-                options.append(selectinload(getattr(self._model, relation)))
-
+        options = [selectinload(relation) for relation in relations]
         new_query = self._query.options(*options)
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def distinct(self, *fields) -> "QuerySet[T]":
         """Apply DISTINCT clause to eliminate duplicate rows.
@@ -356,7 +364,7 @@ class QuerySet(Generic[T]):
             new_query = self._query.distinct(*columns)
         else:
             new_query = self._query.distinct()
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def only(self, *fields) -> "QuerySet[T]":
         """Load only the specified fields from the database.
@@ -372,7 +380,7 @@ class QuerySet(Generic[T]):
         if self._query.whereclause is not None:
             new_query = new_query.where(self._query.whereclause)
 
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def defer(self, *fields) -> "QuerySet[T]":
         """Defer loading of the specified fields until they are accessed.
@@ -387,7 +395,7 @@ class QuerySet(Generic[T]):
 
         options = [sqlalchemy_defer(getattr(self._model, field)) for field in fields]
         new_query = self._query.options(*options)
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def annotate(self, **kwargs) -> "QuerySet[T]":
         """Add annotation fields to the queryset.
@@ -407,7 +415,7 @@ class QuerySet(Generic[T]):
                 annotations.append(expr.label(alias))
 
         new_query = self._query.add_columns(*annotations)
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def group_by(self, *fields) -> "QuerySet[T]":
         """Add GROUP BY clause.
@@ -428,7 +436,7 @@ class QuerySet(Generic[T]):
                 group_columns.append(field)
 
         new_query = self._query.group_by(*group_columns)
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def having(self, *conditions) -> "QuerySet[T]":
         """Add HAVING clause for aggregated queries.
@@ -447,7 +455,7 @@ class QuerySet(Generic[T]):
                 having_conditions.append(condition)
 
         new_query = self._query.having(and_(*having_conditions))
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def options(self, *options) -> "QuerySet[T]":
         """Add SQLAlchemy query options.
@@ -459,7 +467,7 @@ class QuerySet(Generic[T]):
             QuerySet with options applied
         """
         new_query = self._query.options(*options)
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def join(
         self,
@@ -490,7 +498,7 @@ class QuerySet(Generic[T]):
             else:
                 new_query = self._query.join(target_model, on_condition)
 
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def select_for_update(self, nowait: bool = False, skip_locked: bool = False) -> "QuerySet[T]":
         """Apply row-level locking to the query using FOR UPDATE.
@@ -509,7 +517,7 @@ class QuerySet(Generic[T]):
         else:
             new_query = self._query.with_for_update()
 
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def none(self) -> "QuerySet[T]":
         """Return an empty queryset that will never match any objects.
@@ -518,7 +526,7 @@ class QuerySet(Generic[T]):
             New QuerySet that returns no results
         """
         new_query = self._query.where(literal(False))
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     def reverse(self) -> "QuerySet[T]":
         """Reverse the ordering of the queryset.
@@ -528,7 +536,7 @@ class QuerySet(Generic[T]):
         """
         # Simple implementation: reverse by id field
         new_query = self._query.order_by(desc(getattr(self._model, "id", literal(1))))
-        return QuerySet(self._session, self._model, new_query)
+        return self._clone(query=new_query)
 
     # ========================================
     # 查询执行方法 (Query Execution Methods)
@@ -665,13 +673,18 @@ class QuerySet(Generic[T]):
         """Get dictionaries containing only the specified field values.
 
         Args:
-            *fields: Field names to include in the result
+            *fields: Field names to include in the result, will returne all fields if not specified.
             session: Database session to use
 
         Returns:
             List of dictionaries with field names as keys
         """
         session = session or self._session
+
+        if not fields:
+            # Return all fields if none specified
+            fields = tuple(col.name for col in self._model.__table__.columns)  # noqa
+
         columns = [getattr(self._model, field) for field in fields]
         query = select(*columns)
         if self._query.whereclause is not None:
@@ -694,6 +707,9 @@ class QuerySet(Generic[T]):
         Returns:
             List of tuples (or flat list if flat=True and single field)
         """
+        if not fields:
+            raise ValueError("values_list() requires at least one field name")
+
         session = session or self._session
         columns = [getattr(self._model, field) for field in fields]
         query = select(*columns)
@@ -1132,13 +1148,13 @@ class QuerySet(Generic[T]):
     # 数据操作方法 (Data Operations Methods)
     # ========================================
 
-    async def update(self, values: dict, session: AsyncSession | None = None, commit: bool = False) -> int:
+    async def update(self, session: AsyncSession | None = None, commit: bool = False, **values) -> int:
         """Perform bulk update on objects matching the query conditions.
 
         Args:
-            values: Field values to update
             session: Database session to use
             commit: Whether to commit the transaction
+            values: Field values to update
 
         Returns:
             Number of affected rows
