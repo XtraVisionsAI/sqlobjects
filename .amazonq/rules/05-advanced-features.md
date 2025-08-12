@@ -2,7 +2,7 @@
 
 ## Subquery System Rules
 
-### 1. Intelligent Subquery Creation
+### 1. Intelligent Subquery Creation with Type Inference
 
 SQLObjects provides an intelligent subquery system with automatic type inference:
 
@@ -26,25 +26,47 @@ active_users = User.objects.filter(User.is_active == True).subquery("active_user
 The system automatically infers subquery types based on query structure:
 
 ```python
-# Scalar subquery inference
-# Rule 1: Single column + aggregates + LIMIT 1 or count query
+# Scalar subquery inference rules
+# Rule 1: Single column + aggregates + LIMIT 1 or count query → scalar
 avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).subquery()  # → scalar
 
-# Rule 2: Single column aggregate queries (common for comparisons)
+# Rule 2: Single column aggregate queries (common for comparisons) → scalar
 max_salary = Employee.objects.aggregate(max_sal=func.max(Employee.salary)).subquery()  # → scalar
 
-# Table subquery inference
-# Rule 3: Multi-column queries
+# Table subquery inference rules
+# Rule 3: Multi-column queries → table
 user_profiles = User.objects.values("id", "username", "email").subquery()  # → table
 
-# Rule 4: Single column non-aggregate (for IN conditions)
+# Rule 4: Single column non-aggregate (for IN conditions) → table
 user_ids = User.objects.filter(User.is_active == True).values_list("id").subquery()  # → table
 
 # Default: Table subquery when inference is uncertain
 general_query = User.objects.filter(User.created_at >= date.today()).subquery()  # → table
 ```
 
-### 3. Subquery Usage Patterns
+### 3. Subquery Type Conversion
+
+```python
+# Convert between subquery types
+base_query = User.objects.filter(User.is_active == True)
+
+# Create different subquery types from same base
+table_subq = base_query.subquery().as_table()  # For JOINs
+scalar_subq = base_query.subquery().as_scalar()  # For comparisons
+exists_subq = base_query.subquery().as_exists()  # For boolean conditions
+
+# Alias subqueries
+aliased_subq = base_query.subquery().alias("active_users")
+
+# Access subquery columns (table subqueries only)
+user_subq = User.objects.only("id", "username").subquery("users")
+user_id_col = user_subq.c.id  # Access specific column
+username_col = user_subq.c.username
+```
+
+
+
+### 4. Subquery Usage Patterns
 
 ```python
 # Table subqueries for JOIN operations

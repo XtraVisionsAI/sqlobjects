@@ -193,12 +193,41 @@ class User(ObjectModel):
         ordering = ["-created_at"]
 ```
 
-### 2. Field Definition
+### 2. Unified Type System Architecture
 
-Use type-safe field definitions with `Column[T]` annotations:
+SQLObjects features a unified type system with automatic parameter extraction and transformation support:
 
 ```python
-# Recommended: Use shortcut functions with database constraints
+from typing import Any, Callable, NotRequired, TypedDict
+
+class TypeArgument(TypedDict):
+    name: str
+    type: type
+    required: bool
+    default: Any
+    transform: NotRequired[Callable[[Any], Any]]  # Optional value transformation
+    positional: NotRequired[bool]  # Optional positional parameter flag
+
+class TypeDefinition(TypedDict):
+    type: type
+    arguments: list[TypeArgument]
+
+# Type registration with LRU cache and lazy initialization
+from functools import lru_cache
+
+class TypeRegistry:
+    def __init__(self):
+        self._types: dict[str, TypeDefinition] = {}
+        self._aliases: dict[str, str] = {}  # Type alias mapping
+        self._initialized = False  # Lazy initialization flag
+    
+    @lru_cache(maxsize=128)  # LRU cache for lookup performance
+    def get_type(self, name: str) -> TypeDefinition:
+        if not self._initialized:
+            self._init_builtin_types()  # Initialize on first access
+        return self._types.get(self._resolve_alias(name))
+
+# Field definition with type-safe annotations
 name: Column[str] = str_column(length=50, nullable=False)
 age: Column[int] = int_column(nullable=False)
 is_active: Column[bool] = bool_column(default=True, nullable=False)
@@ -207,8 +236,10 @@ is_active: Column[bool] = bool_column(default=True, nullable=False)
 internal_id: Column[str] = str_column(init=False, repr=False)  # Internal field
 api_key: Column[str] = str_column(default_factory=generate_key, repr=False)
 
-# Alternative: Use column() function
-name: Column[str] = column(type="string", length=50, nullable=False)
-age: Column[int] = column(type="integer", nullable=False)
-id: Column[int] = column(type="integer", primary_key=True, autoincrement=True)
+# Array types with transform function
+tags: Column[list[str]] = array_column("string")  # item_type transformed via _transform_array_item_type
+matrix: Column[list[list[int]]] = array_column("integer", dimensions=2)
+
+# Enum types with positional parameter
+status: Column[UserStatus] = enum_column(UserStatus, default=UserStatus.ACTIVE)  # enum_class as positional
 ```

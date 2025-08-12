@@ -101,7 +101,7 @@ user, created = await User.objects.update_or_create(
 )
 ```
 
-### 4. Built-in Validators
+### 4. Built-in Validators with File Support
 
 ```python
 from sqlobjects.base import ObjectModel
@@ -110,7 +110,7 @@ from sqlobjects.validators import (
     validate_email, validate_url, validate_length, validate_range,
     validate_regex, validate_choices, validate_date, validate_time,
     validate_decimal, validate_json, validate_file, validate_image,
-    combine_validators
+    combine_validators, FileValidator, ImageValidator
 )
 
 class User(ObjectModel):
@@ -146,6 +146,25 @@ class User(ObjectModel):
     
     # Decimal validation
     price: Column[str] = str_column(validators=[validate_decimal(10, 2)])
+    
+    # File validation
+    document: Column[str] = str_column(validators=[
+        FileValidator(
+            allowed_extensions=["pdf", "doc", "docx"],
+            max_size=10 * 1024 * 1024,  # 10MB
+            min_size=1024  # 1KB
+        )
+    ])
+    
+    # Image validation
+    avatar: Column[str] = str_column(validators=[
+        ImageValidator(
+            allowed_extensions=["jpg", "png", "webp"],
+            max_width=1920,
+            max_height=1080,
+            max_size=5 * 1024 * 1024  # 5MB
+        )
+    ])
 ```
 
 ### 5. Data Conversion

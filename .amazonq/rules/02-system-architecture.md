@@ -7,6 +7,30 @@
 ```python
 from sqlobjects.database import init_db, init_dbs, create_tables, DatabaseConfig
 from sqlobjects.base import ObjectModel
+from dataclasses import dataclass
+from typing import Any
+
+# DatabaseConfig with @dataclass(init=False) design
+@dataclass(init=False)
+class DatabaseConfig:
+    url: str
+    echo: bool
+    pool_size: int
+    max_overflow: int
+    pool_timeout: int
+    pool_recycle: int
+    engine_kwargs: dict[str, Any]
+    
+    def __init__(self, url: str, echo: bool = False, pool_size: int = 5, 
+                 max_overflow: int = 10, pool_timeout: int = 30, 
+                 pool_recycle: int = 3600, **kwargs: Any) -> None:
+        self.url = url
+        self.echo = echo
+        self.pool_size = pool_size
+        self.max_overflow = max_overflow
+        self.pool_timeout = pool_timeout
+        self.pool_recycle = pool_recycle
+        self.engine_kwargs = kwargs  # Collect extra engine parameters
 
 # Single database - returns Database instance (default database)
 db = await init_db("sqlite+aiosqlite:///test.db")
@@ -89,10 +113,12 @@ from sqlalchemy import event
 event.listens_for(main_db.engine.sync_engine, "connect")(my_handler)
 ```
 
-### 3. Session Management
+### 3. Session Management and Transaction Modes
 
 ```python
 from sqlobjects.session import ctx_session, ctx_sessions, SessionContextManager
+import asyncio
+import contextvars
 
 # Set session factory for databases
 SessionContextManager.set_session_factory(main_factory, "main", is_default=True)
@@ -112,7 +138,34 @@ async with ctx_sessions("main", "logs") as sessions:
 
 # Or use default session
 user = await User.objects.create(username="test")
+
+# Three Transaction Modes
+
+# Mode 1: ContextVar Inheritance - Unified Transaction
+async with ctx_session() as session:
+    tasks = [asyncio.create_task(process_batch(batch)) for batch in batches]
+    await asyncio.gather(*tasks)  # All tasks share same session via ContextVar
+
+# Mode 2: Independent Context - Isolated Transactions
+tasks = [
+    asyncio.create_task(process_batch_isolated(batch), context=contextvars.copy_context())
+    for batch in batches
+]
+await asyncio.gather(*tasks, return_exceptions=True)  # Each task has independent session
+
+# Mode 3: Explicit Session Passing - Full Control
+async with ctx_session() as session:
+    tasks = [asyncio.create_task(process_batch_explicit(batch, session)) for batch in batches]
+    await asyncio.gather(*tasks)  # Explicitly share same session
 ```
+
+#### Transaction Mode Comparison
+
+| Mode | Advantages | Use Cases | Considerations |
+|------|------------|-----------|----------------|
+| **ContextVar Inheritance** | Clean code, automatic propagation | Unified transactions, code simplification | Depends on ContextVar mechanism |
+| **Independent Context** | Complete isolation, failure doesn't affect others | Independent transactions, fault tolerance | Manual context management required |
+| **Explicit Passing** | Clear control, no implicit mechanisms | Complex transaction logic, debugging friendly | Slightly more verbose code |
 
 ### 4. Database Connection Management
 
@@ -148,31 +201,78 @@ The `auto_default` parameter controls automatic default database selection when 
 - **Testing Environments**: Clean up test databases and automatically switch to remaining databases
 - **Fault Recovery**: Close problematic databases and automatically failover to backup databases
 
-## Signal and Event System Rules
-
-### 1. Custom Signal System
+**Selection Logic:**
 
 ```python
-# SQLObjects provides custom signal system for model operations
-from sqlobjects.signals import SignalMixin, SignalContext, Operation
-
-class ModelMixin(SignalMixin):
-    async def save(self):
-        # Get session from context
-        session = self._get_session()
-        
-        # Send before_save signal
-        context = SignalContext(operation=Operation.SAVE, session=session, instance=self)
-        await self._emit_signal("before", context)
-        
-        # Perform save operation
-        session.add(self)
-        
-        # Send after_save signal
-        await self._emit_signal("after", context)
+# Internal behavior when auto_default=True and closing default database
+if auto_default and self._default_db == db_name:
+    self._default_db = next(iter(self._databases), None)
+    if self._default_db:
+        default_db = self._databases[self._default_db]
+        SessionContextManager.set_session_factory(default_db.session_factory, self._default_db, is_default=True)
 ```
 
-### 2. SQLAlchemy Event Integration
+## Signal and Event System Rules
+
+### 1. Enhanced Signal System with Smart SAVE Operation
+
+```python
+# SQLObjects provides enhanced signal system with intelligent operation detection
+from sqlobjects.signals import SignalMixin, SignalContext, Operation, emit_signals
+
+class User(ObjectModel, SignalMixin):
+    # Instance-level signals (single record operations)
+    async def before_save(self, context: SignalContext):
+        print("Universal save logic")  # Always triggered for SAVE operations
+    
+    async def before_create(self, context: SignalContext):
+        self.created_at = datetime.now()  # Only triggered for CREATE
+    
+    async def before_update(self, context: SignalContext):
+        self.updated_at = datetime.now()  # Only triggered for UPDATE
+    
+    # Bulk operation signals (multiple records)
+    @classmethod
+    async def before_bulk_save(cls, context: SignalContext):
+        print(f"Bulk save operation affecting {context.affected_count} records")
+    
+    @classmethod
+    async def before_bulk_update(cls, context: SignalContext):
+        print(f"Bulk update operation affecting {context.affected_count} records")
+
+# Smart SAVE operation with dual signal emission
+@emit_signals(Operation.SAVE)  # Automatically detects CREATE vs UPDATE
+async def save(self):
+    # New instance: triggers before_save → before_create → DB operation → after_save → after_create
+    # Existing instance: triggers before_save → before_update → DB operation → after_save → after_update
+    pass
+```
+
+### 2. Operation Types and Signal Naming Conventions
+
+```python
+# Operation enumeration
+class Operation(Enum):
+    CREATE = "create"  # Explicit create operations
+    UPDATE = "update"  # Explicit update operations
+    DELETE = "delete"  # Delete operations
+    SAVE = "save"      # Smart save operations (auto-detects CREATE/UPDATE)
+
+# Signal handler naming conventions:
+# Instance-level signals (single record operations):
+# - before_create, after_create
+# - before_update, after_update
+# - before_delete, after_delete
+# - before_save, after_save
+
+# Bulk operation signals (multiple records):
+# - before_bulk_create, after_bulk_create
+# - before_bulk_update, after_bulk_update
+# - before_bulk_delete, after_bulk_delete
+# - before_bulk_save, after_bulk_save
+```
+
+### 3. SQLAlchemy Event Integration
 
 ```python
 # Import SQLAlchemy event system
@@ -195,7 +295,7 @@ def before_insert_user(mapper, connection, target):
     target.created_at = datetime.now()
 ```
 
-### 2. Database Event Convenience Methods
+### 6. Database Event Convenience Methods
 
 ```python
 # Use Database instance on() method for event registration
@@ -223,29 +323,63 @@ def after_rollback(session):
     print("Rolled back!")
 ```
 
-### 3. Model-Level Signal Handling
+### 4. Signal Decorator Usage Patterns
 
 ```python
-# Model signals are handled through SQLAlchemy events
-class User(ObjectModel):
-    # ... fields ...
-    
-    @classmethod
-    def setup_events(cls):
-        """Setup model-level events"""
-        event.listens_for(cls, "before_insert")(cls.before_insert_handler)
-        event.listens_for(cls, "after_update")(cls.after_update_handler)
-    
-    @staticmethod
-    def before_insert_handler(mapper, connection, target):
-        target.created_at = datetime.now()
-    
-    @staticmethod
-    def after_update_handler(mapper, connection, target):
-        target.updated_at = datetime.now()
+# Explicit operation type specification
+@emit_signals(Operation.CREATE)
+async def create_user(cls, **kwargs):
+    # Only triggers CREATE-specific signals
+    pass
 
-# Setup events after model definition
-User.setup_events()
+@emit_signals(Operation.UPDATE)
+async def update_user(self, **kwargs):
+    # Only triggers UPDATE-specific signals
+    pass
+
+# Smart SAVE operation with dual signal emission
+@emit_signals(Operation.SAVE)
+async def save_user(self):
+    # Automatically detects CREATE vs UPDATE and triggers both generic and specific signals
+    pass
+
+# Bulk operations with explicit bulk signal naming
+@emit_signals(Operation.UPDATE, is_bulk=True)
+async def bulk_update_users(cls, mappings):
+    # Triggers before_bulk_update and after_bulk_update signals
+    pass
+
+@emit_signals(Operation.SAVE, is_bulk=True)
+async def bulk_save_users(cls, data):
+    # Triggers before_bulk_save and after_bulk_save signals
+    pass
+```
+
+### 5. Signal Context and Operation Detection
+
+```python
+# SignalContext provides comprehensive operation information
+@dataclass
+class SignalContext:
+    operation: Operation                    # Original operation type
+    session: AsyncSession                   # Database session
+    model_class: Any                        # Target model class
+    instance: Any | None = None             # Instance for single operations
+    affected_count: int | None = None       # Row count for bulk operations
+    update_data: dict[str, Any] | None = None  # Update data for bulk operations
+    actual_operation: Operation | None = None  # Detected operation for SAVE
+
+# Automatic operation detection for SAVE operations
+def _determine_save_operation(self_or_cls) -> Operation:
+    if hasattr(self_or_cls, "__table__"):  # Instance method
+        # Check if instance has primary key set (indicates UPDATE)
+        primary_keys = [col.name for col in self_or_cls.__table__.primary_key.columns]
+        if any(getattr(self_or_cls, pk, None) is not None for pk in primary_keys):
+            return Operation.UPDATE
+        else:
+            return Operation.CREATE
+    else:
+        return Operation.CREATE  # Class methods default to CREATE
 ```
 
 ## Exception Handling Rules
@@ -275,13 +409,34 @@ except DoesNotExist:
 ```python
 from sqlobjects.exceptions import ValidationError, ValidationErrorCollector, create_validation_error
 
+# Complete English error message mapping
+_ERROR_MESSAGES = {
+    "required": "This field is required",
+    "invalid": "Invalid value",
+    "min_length": "Ensure this value has at least {min_length} characters",
+    "max_length": "Ensure this value has at most {max_length} characters",
+    "min_value": "Ensure this value is greater than or equal to {min_value}",
+    "max_value": "Ensure this value is less than or equal to {max_value}",
+    "invalid_email": "Enter a valid email address",
+    "invalid_url": "Enter a valid URL",
+    "invalid_choice": "'{value}' is not a valid choice",
+    "invalid_date": "Enter a valid date",
+    "invalid_time": "Enter a valid time",
+    "invalid_decimal": "Enter a valid decimal number",
+    "invalid_json": "Enter valid JSON",
+    "file_not_found": "File not found: {path}",
+    "file_too_large": "File size {size} exceeds maximum allowed size {max_size}",
+    "invalid_file_extension": "File extension '{extension}' not allowed. Allowed: {allowed}",
+    "invalid_image_format": "Invalid image format '{extension}'. Allowed: {allowed}"
+}
+
 # Use create_validation_error for consistent error messages
 if not email:
     raise create_validation_error("required", field="email")
 
-# Or create ValidationError directly
-if not email:
-    raise ValidationError("This field is required", field="email", code="required")
+# Parameterized error messages
+if len(password) < 8:
+    raise create_validation_error("min_length", field="password", params={"min_length": 8})
 
 # Multiple field validation with English messages
 collector = ValidationErrorCollector()
@@ -331,13 +486,89 @@ class TestUserModel:
         assert user.username == "testuser"
 ```
 
+### 2. ModelProxy Session Management
+
+```python
+from sqlobjects.base import ModelProxy, ModelMixin
+from sqlalchemy.ext.asyncio import AsyncSession, async_object_session
+
+class ModelProxy(ModelMixin):
+    def __init__(self, instance, db_or_session: str | AsyncSession):
+        self._instance = instance
+        self._db_or_session = db_or_session
+        self._session_attached = False
+    
+    def _ensure_session_attachment(self, session: AsyncSession) -> None:
+        """Ensure instance is properly attached to the specified session"""
+        if self._session_attached:
+            return
+        
+        current_session = async_object_session(self._instance)
+        if current_session is None:
+            session.add(self._instance)
+        elif current_session is not session:
+            self._handle_session_migration(current_session, session)
+        
+        self._session_attached = True
+    
+    def _handle_session_migration(self, old_session: AsyncSession, new_session: AsyncSession) -> None:
+        """Handle instance migration between different sessions"""
+        try:
+            old_session.expunge(self._instance)
+        except Exception:
+            pass
+        new_session.add(self._instance)
+    
+    def __getattr__(self, name):
+        """Proxy attribute access to the wrapped instance"""
+        return getattr(self._instance, name)
+```
+
 ### 2. Test Execution
 
 Always use `uv run pytest` for running tests.
 
-### 3. Test Database Management
+### 3. Test Database Management with ConfigManager
 
 ```python
+# ConfigManager and _ConfigParser separation
+class ConfigManager:
+    """Global configuration manager with caching and lifecycle management"""
+    
+    def __init__(self):
+        self.parser = _ConfigParser()
+        self._config_cache: dict[type, ModelConfig] = {}
+    
+    def process_model_config(self, model_class: type) -> tuple[ModelConfig, bool]:
+        """Process model configuration and cache results"""
+        config = self.parser.process_complete_config(model_class)
+        is_abstract = self._is_abstract_model(model_class, config)
+        if not is_abstract:
+            self._apply_config_to_model(model_class, config)
+        self._config_cache[model_class] = config
+        return config, is_abstract
+
+class _ConfigParser:
+    """Internal configuration parser for parsing and merging logic"""
+    
+    def process_complete_config(self, model_class: type) -> ModelConfig:
+        """Process complete model configuration"""
+        configs = []
+        
+        # Parse class attributes
+        class_config = self.parse_class_attributes(model_class)
+        if class_config:
+            configs.append(class_config)
+        
+        # Parse Config inner class
+        config_class = getattr(model_class, "Config", None)
+        if config_class:
+            inner_config = self.parse_config_class(config_class)
+            if inner_config:
+                configs.append(inner_config)
+        
+        return self.merge_configs(*configs) if configs else ModelConfig()
+
 # In test fixtures, recommend using is_default=False to avoid global state pollution
 @pytest.fixture
 async def test_db():
@@ -396,6 +627,14 @@ from sqlobjects.exceptions import (
     ValidationError,
     ValidationErrorCollector,
     create_validation_error
+)
+
+# Signal system
+from sqlobjects.signals import (
+    Operation,
+    SignalContext,
+    SignalMixin,
+    emit_signals
 )
 
 # Common validators
@@ -471,6 +710,7 @@ from sqlobjects.expressions import func, SubqueryExpression
 # For raw SQLAlchemy integration when needed
 from sqlalchemy import text, literal, and_, or_, not_
 from sqlalchemy import func as sa_func  # Only when func object is insufficient
+from sqlalchemy import event  # For SQLAlchemy event system integration
 
 # Usage patterns
 # Use: User.name.upper() for field-level operations (enhanced comparators)
@@ -486,7 +726,7 @@ from sqlalchemy import func as sa_func  # Only when func object is insufficient
 When implementing model classes, organize methods in this order:
 
 ```python
-class User(ObjectModel):
+class User(ObjectModel, SignalMixin):
     # 1. Field definitions
     id: Column[int] = int_column(primary_key=True)
     username: Column[str] = str_column(length=50)
@@ -506,18 +746,37 @@ class User(ObjectModel):
         # Field validator setup
         pass
     
-    # 4. Instance methods
+    # 4. Signal handlers
+    async def before_save(self, context: SignalContext):
+        # Universal save logic
+        self.updated_at = datetime.now()
+    
+    async def before_create(self, context: SignalContext):
+        # Create-specific logic
+        self.created_at = datetime.now()
+    
+    @classmethod
+    async def before_bulk_update(cls, context: SignalContext):
+        # Bulk operation logic
+        print(f"Updating {context.affected_count} users")
+    
+    # 5. Instance methods with signal decorators
+    @emit_signals(Operation.SAVE)
+    async def save(self):
+        # Smart save with dual signal emission
+        pass
+    
     async def custom_method(self):
         # Custom business logic
         pass
     
-    # 5. Class methods and properties
+    # 6. Class methods and properties
     @classmethod
     def custom_class_method(cls):
         # Custom class-level logic
         pass
     
-    # 6. Query methods using expressions
+    # 7. Query methods using expressions
     @classmethod
     async def get_active_users_with_stats(cls):
         return await cls.objects.filter(User.is_active == True).annotate(
@@ -544,6 +803,7 @@ from sqlobjects.expressions import func, SubqueryExpression
 from sqlobjects.exceptions import ValidationError, DoesNotExist
 from sqlobjects.session import ctx_session
 from sqlobjects.config import index, constraint
+from sqlobjects.signals import SignalMixin, SignalContext, Operation, emit_signals
 ```
 
 ### 3. Documentation Standards

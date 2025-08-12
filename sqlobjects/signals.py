@@ -28,20 +28,26 @@ class Operation(Enum):
     lifecycle events.
 
     Values:
-        SAVE: Create or update operations on individual model instances
+        CREATE: Create operations for new model instances
+        UPDATE: Update operations on existing model instances
         DELETE: Delete operations on individual instances or bulk deletions
-        UPDATE: Bulk update operations affecting multiple records
+        SAVE: Generic save operations (create or update, for backward compatibility)
 
     Examples:
-        >>> # Used in signal context
+        >>> # Used in signal context for create operation
         >>> context = SignalContext(
-        ...     operation=Operation.SAVE, session=session, model_class=User, instance=user_instance
+        ...     operation=Operation.CREATE, session=session, model_class=User, instance=user_instance
+        ... )
+        >>> # Used in signal context for update operation
+        >>> context = SignalContext(
+        ...     operation=Operation.UPDATE, session=session, model_class=User, instance=user_instance
         ... )
     """
 
-    SAVE = "save"
-    DELETE = "delete"
+    CREATE = "create"
     UPDATE = "update"
+    DELETE = "delete"
+    SAVE = "save"
 
 
 @dataclass
@@ -79,6 +85,7 @@ class SignalContext:
     instance: Any | None = None  # Instance object for single instance operations
     affected_count: int | None = None  # Number of rows affected by batch operations
     update_data: dict[str, Any] | None = None  # Data for update operations
+    actual_operation: Operation | None = None  # Actual operation for SAVE (CREATE or UPDATE)
 
     @property
     def is_bulk(self) -> bool:
@@ -123,12 +130,25 @@ class SignalMixin:
     and asynchronous signal handlers.
 
     Signal Handler Methods:
-        - before_save(context): Called before save operations
-        - after_save(context): Called after save operations
+        Instance-level signals (single record operations):
+        - before_create(context): Called before create operations
+        - after_create(context): Called after create operations
+        - before_update(context): Called before update operations
+        - after_update(context): Called after update operations
         - before_delete(context): Called before delete operations
         - after_delete(context): Called after delete operations
-        - before_update(context): Called before bulk update operations
-        - after_update(context): Called after bulk update operations
+        - before_save(context): Called before save operations (backward compatibility)
+        - after_save(context): Called after save operations (backward compatibility)
+
+        Class-level signals (bulk operations):
+        - before_bulk_create(context): Called before bulk create operations
+        - after_bulk_create(context): Called after bulk create operations
+        - before_bulk_update(context): Called before bulk update operations
+        - after_bulk_update(context): Called after bulk update operations
+        - before_bulk_delete(context): Called before bulk delete operations
+        - after_bulk_delete(context): Called after bulk delete operations
+        - before_bulk_save(context): Called before bulk save operations (backward compatibility)
+        - after_bulk_save(context): Called after bulk save operations (backward compatibility)
 
     Examples:
         >>> class User(ObjectModel, SignalMixin):
@@ -157,22 +177,15 @@ class SignalMixin:
             >>> # This is called internally by the ORM
             >>> await instance._emit_signal("before", context)
         """
-        signal_name = f"{timing}_{context.operation.value}"
-        handler = getattr(self, signal_name, None)
-
-        if handler and callable(handler):
-            if inspect.iscoroutinefunction(handler):
-                await handler(context)
-            else:
-                handler(context)
+        await _emit_signal_handlers(self, timing, context)
 
     @classmethod
-    async def _emit_class_signal(cls, timing: str, context: SignalContext) -> None:
-        """Emit a class-level signal for the specified timing and operation.
+    async def _emit_bulk_signal(cls, timing: str, context: SignalContext) -> None:
+        """Emit a bulk signal for the specified timing and operation.
 
-        This method looks for class-level signal handler methods and calls
-        them if they exist. Class-level signals are typically used for
-        bulk operations that don't involve specific instances.
+        This method looks for bulk signal handler methods and calls
+        them if they exist. Bulk signals are used for operations that
+        affect multiple records without specific instances.
 
         Args:
             timing: Signal timing ("before" or "after")
@@ -181,40 +194,33 @@ class SignalMixin:
         Examples:
             >>> class User(ObjectModel, SignalMixin):
             ...     @classmethod
-            ...     async def before_update(cls, context: SignalContext) -> None:
+            ...     async def before_bulk_update(cls, context: SignalContext) -> None:
             ...         print(f"About to update {context.affected_count} users")
             >>> # This is called internally by the ORM
-            >>> await User._emit_class_signal("before", context)
+            >>> await User._emit_bulk_signal("before", context)
         """
-        signal_name = f"{timing}_{context.operation.value}"
-        handler = getattr(cls, signal_name, None)
-
-        if handler and callable(handler):
-            if inspect.iscoroutinefunction(handler):
-                await handler(context)
-            else:
-                handler(context)
+        await _emit_signal_handlers(cls, timing, context)
 
 
 def emit_signals(operation: Operation, is_bulk: bool = False):
     """Decorator to automatically emit pre/post signals for database operations.
 
     Args:
-        operation: The database operation type (Operation.SAVE, Operation.DELETE, Operation.UPDATE)
+        operation: The database operation type
         is_bulk: Whether this is a bulk operation (affects signal emission strategy)
 
     Returns:
         Decorated function that emits signals before and after execution
 
     Examples:
-        @emit_signals(Operation.SAVE)
+        @emit_signals(Operation.SAVE)  # Automatically detects CREATE vs UPDATE
         async def save(self, validate: bool = True):
-            # Method implementation
+            # Will emit both SAVE and CREATE/UPDATE signals
             pass
 
-        @emit_signals(Operation.UPDATE, is_bulk=True)
-        async def update(self, values: dict[str, Any]) -> int:
-            # Method implementation
+        @emit_signals(Operation.DELETE)
+        async def delete(self, **kwargs):
+            # Emit DELETE signals
             pass
     """
 
@@ -225,10 +231,17 @@ def emit_signals(operation: Operation, is_bulk: bool = False):
             self_or_cls = args[0]
             session = _extract_session(self_or_cls, kwargs)
 
-            # Create signal context
+            # Create signal context with original operation
             context = _create_signal_context(
                 operation=operation, session=session, self_or_cls=self_or_cls, is_bulk=is_bulk, kwargs=kwargs
             )
+
+            # For SAVE operations, determine actual CREATE/UPDATE type
+            if operation == Operation.SAVE:
+                actual_operation = _determine_save_operation(self_or_cls)
+                context.actual_operation = actual_operation
+            else:
+                context.actual_operation = operation
 
             # Emit pre signal
             await _emit_pre_signal(self_or_cls, context, is_bulk)
@@ -251,6 +264,20 @@ def emit_signals(operation: Operation, is_bulk: bool = False):
         return wrapper  # type: ignore
 
     return decorator
+
+
+def _determine_save_operation(self_or_cls) -> Operation:
+    """Determine whether a SAVE operation is CREATE or UPDATE."""
+    if hasattr(self_or_cls, "__table__"):  # Instance method
+        # Check if instance has primary key set (indicates UPDATE)
+        primary_keys = [col.name for col in self_or_cls.__table__.primary_key.columns]
+        if any(getattr(self_or_cls, pk, None) is not None for pk in primary_keys):
+            return Operation.UPDATE
+        else:
+            return Operation.CREATE
+    else:
+        # For class methods, cannot determine, return CREATE as default
+        return Operation.CREATE
 
 
 def _extract_session(self_or_cls, kwargs) -> Any:
@@ -302,10 +329,10 @@ def _create_signal_context(operation: Operation, session, self_or_cls, is_bulk: 
 async def _emit_pre_signal(self_or_cls, context: SignalContext, is_bulk: bool):
     """Emit pre-operation signal."""
     if is_bulk:
-        # Class-level signal for bulk operations
+        # Bulk signal for bulk operations
         model_class = context.model_class
-        if hasattr(model_class, "_emit_class_signal"):
-            await model_class._emit_class_signal("before", context)  # noqa
+        if hasattr(model_class, "_emit_bulk_signal"):
+            await model_class._emit_bulk_signal("before", context)  # noqa
     else:
         # Instance-level signal
         if hasattr(self_or_cls, "_emit_signal"):
@@ -315,10 +342,10 @@ async def _emit_pre_signal(self_or_cls, context: SignalContext, is_bulk: bool):
 async def _emit_post_signal(self_or_cls, context: SignalContext, is_bulk: bool):
     """Emit post-operation signal."""
     if is_bulk:
-        # Class-level signal for bulk operations
+        # Bulk signal for bulk operations
         model_class = context.model_class
-        if hasattr(model_class, "_emit_class_signal"):
-            await model_class._emit_class_signal("after", context)  # noqa
+        if hasattr(model_class, "_emit_bulk_signal"):
+            await model_class._emit_bulk_signal("after", context)  # noqa
     else:
         # Instance-level signal
         if hasattr(self_or_cls, "_emit_signal"):
@@ -335,6 +362,43 @@ def _extract_affected_count(kwargs: dict) -> int | None:
     elif "objects" in kwargs and isinstance(kwargs["objects"], list):
         return len(kwargs["objects"])
     return None
+
+
+async def _emit_signal_handlers(target, timing: str, context: SignalContext) -> None:
+    """Common logic for emitting signal handlers."""
+    # Determine if this is a bulk operation
+    is_bulk = context.is_bulk
+    bulk_prefix = "bulk_" if is_bulk else ""
+
+    if context.operation == Operation.SAVE and context.actual_operation:
+        # For SAVE operations, emit both SAVE and actual operation signals
+        # Emit SAVE signal first
+        save_signal_name = f"{timing}_{bulk_prefix}save"
+        save_handler = getattr(target, save_signal_name, None)
+        if save_handler and callable(save_handler):
+            if inspect.iscoroutinefunction(save_handler):
+                await save_handler(context)
+            else:
+                save_handler(context)
+
+        # Then emit specific CREATE/UPDATE signal
+        specific_signal_name = f"{timing}_{bulk_prefix}{context.actual_operation.value}"
+        specific_handler = getattr(target, specific_signal_name, None)
+        if specific_handler and callable(specific_handler):
+            if inspect.iscoroutinefunction(specific_handler):
+                await specific_handler(context)
+            else:
+                specific_handler(context)
+    else:
+        # For non-SAVE operations, emit the specific signal
+        signal_name = f"{timing}_{bulk_prefix}{context.operation.value}"
+        handler = getattr(target, signal_name, None)
+
+        if handler and callable(handler):
+            if inspect.iscoroutinefunction(handler):
+                await handler(context)
+            else:
+                handler(context)
 
 
 def _update_context_with_result(context: SignalContext, result):
