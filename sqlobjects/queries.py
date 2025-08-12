@@ -17,7 +17,7 @@ from sqlalchemy.sql.elements import BinaryExpression, ClauseElement
 
 from .exceptions import DoesNotExist, MultipleObjectsReturned
 from .expressions import SubqueryExpression
-from .signals import Operation, SignalContext, emit_signals
+from .signals import Operation, emit_signals
 
 
 # Export classes for use in other modules
@@ -175,7 +175,11 @@ class QuerySet(Generic[T]):
     """
 
     def __init__(
-        self, model: type[T], query: Select | None = None, db_or_session: str | AsyncSession | None = None
+        self,
+        model: type[T],
+        query: Select | None = None,
+        db_or_session: str | AsyncSession | None = None,
+        default_ordering: bool = True,
     ) -> None:
         """Initialize a new QuerySet instance.
 
@@ -183,14 +187,20 @@ class QuerySet(Generic[T]):
             model: Model class this QuerySet operates on
             query: Optional existing SQLAlchemy Select query to build upon
             db_or_session: Database name or session for executing queries
+            default_ordering: Whether to apply model's default ordering
         """
         self._db_or_session = db_or_session
         self._model = model
         self._query = query if query is not None else select(model)
+        self._default_ordering = default_ordering
+
+        # Apply default ordering if no query provided and model has default ordering
+        if query is None and default_ordering and self._has_default_ordering():
+            self._query = self._apply_default_ordering(self._query)
 
     @property
     def _session(self) -> AsyncSession:
-        """获取有效的会话对象"""
+        """Get the effective session object"""
         if self._db_or_session is None:
             return SessionContextManager.get_session()
         elif isinstance(self._db_or_session, str):
@@ -199,7 +209,87 @@ class QuerySet(Generic[T]):
             return self._db_or_session
 
     # ========================================
-    # 查询构建方法 (Query Building Methods)
+    # Ordering Internal Methods
+    # ========================================
+
+    def _has_default_ordering(self) -> bool:
+        """Check if model has default ordering configured.
+
+        Returns:
+            True if model has default ordering configured
+        """
+        return hasattr(self._model, "_default_ordering") and bool(self._model._default_ordering)  # noqa # type: ignore
+
+    def _build_order_clauses(self, fields: list[str]) -> list[Any]:
+        """Build SQLAlchemy order clauses from field names.
+
+        Handles field name prefix "-" for descending order logic.
+
+        Args:
+            fields: List of field names, "-" prefix indicates descending order
+
+        Returns:
+            List of SQLAlchemy order clause expressions
+        """
+        order_clauses = []
+        for field_name in fields:
+            if field_name.startswith("-"):
+                # Descending order
+                field_name = field_name[1:]
+                if hasattr(self._model, field_name):
+                    order_clauses.append(desc(getattr(self._model, field_name)))
+            else:
+                # Ascending order
+                if hasattr(self._model, field_name):
+                    order_clauses.append(asc(getattr(self._model, field_name)))
+        return order_clauses
+
+    def _apply_default_ordering(self, query: Select) -> Select:
+        """Apply default ordering from model configuration.
+
+        Only applies when model has default ordering configured.
+
+        Args:
+            query: SQLAlchemy Select query to apply ordering to
+
+        Returns:
+            Query with default ordering applied
+        """
+        if not self._has_default_ordering():
+            return query
+
+        order_clauses = self._build_order_clauses(self._model._default_ordering)  # noqa # type: ignore
+        if order_clauses:
+            query = query.order_by(*order_clauses)
+        return query
+
+    def _ensure_ordering(self, query: Select) -> Select:
+        """Ensure query has ordering, prioritizing existing ordering over default.
+
+        Priority logic:
+        1. If default ordering is disabled, return as-is
+        2. If query already has ordering, keep existing ordering
+        3. Otherwise apply default ordering (if available)
+
+        Args:
+            query: SQLAlchemy Select query to ensure ordering on
+
+        Returns:
+            Query with ordering applied (existing or default)
+        """
+        # If default ordering is disabled, return as-is
+        if not self._default_ordering:
+            return query
+
+        # If query already has ordering, keep existing ordering
+        if hasattr(query, "_order_by") and query._order_by:  # noqa # type: ignore
+            return query
+
+        # Apply default ordering (if available)
+        return self._apply_default_ordering(query)
+
+    # ========================================
+    # Query Building Methods
     # ========================================
 
     def _process_conditions(self, conditions) -> list[Any]:
@@ -238,7 +328,22 @@ class QuerySet(Generic[T]):
         Returns:
             New QuerySet instance
         """
-        return QuerySet(self._model, query, self._session)
+        return QuerySet(self._model, query or self._query, self._db_or_session, self._default_ordering)
+
+    def skip_default_ordering(self) -> "QuerySet[T]":
+        """Return a QuerySet that skips applying default ordering.
+
+        Returns:
+            New QuerySet instance with default ordering disabled
+
+        Examples:
+            # Skip default ordering for performance
+            count = User.objects.skip_default_ordering().count()
+
+            # Use custom ordering instead of default
+            users = User.objects.skip_default_ordering().order_by('name').all()
+        """
+        return QuerySet(self._model, self._query, self._db_or_session, default_ordering=False)
 
     def filter(self, *conditions) -> "QuerySet[T]":
         """Filter the QuerySet to include only objects matching the given conditions.
@@ -285,19 +390,21 @@ class QuerySet(Generic[T]):
             New QuerySet instance with the ordering applied
         """
         order_clauses = []
+        string_fields = []
+
         for field in fields:
             if isinstance(field, str):
-                # Django-style string field
-                if field.startswith("-"):
-                    order_clauses.append(desc(getattr(self._model, field[1:])))
-                else:
-                    order_clauses.append(asc(getattr(self._model, field)))
+                string_fields.append(field)
             elif hasattr(field, "resolve"):
                 # SQLObjects expressions
                 order_clauses.append(field.resolve(self._model))
             else:
                 # SQLAlchemy expressions
                 order_clauses.append(field)
+
+        # Process string fields using the common helper
+        if string_fields:
+            order_clauses.extend(self._build_order_clauses(string_fields))
 
         new_query = self._query.order_by(*order_clauses)
         return self._clone(query=new_query)
@@ -538,12 +645,19 @@ class QuerySet(Generic[T]):
         Returns:
             New QuerySet with reversed ordering
         """
-        # Simple implementation: reverse by id field
-        new_query = self._query.order_by(desc(getattr(self._model, "id", literal(1))))
+        # Use default ordering if available, otherwise reverse by id field
+        if self._has_default_ordering():
+            reversed_fields = [
+                field[1:] if field.startswith("-") else f"-{field}"
+                for field in self._model._default_ordering  # noqa # type: ignore
+            ]
+            new_query = self.order_by(*reversed_fields)._query
+        else:
+            new_query = self._query.order_by(desc(getattr(self._model, "id", literal(1))))
         return self._clone(query=new_query)
 
     # ========================================
-    # 查询执行方法 (Query Execution Methods)
+    # Query Execution Methods
     # ========================================
 
     async def all(self) -> list[T]:
@@ -552,8 +666,8 @@ class QuerySet(Generic[T]):
         Returns:
             List of all model instances matching the QuerySet conditions
         """
-
-        result = await self._session.execute(self._query)
+        query = self._ensure_ordering(self._query)
+        result = await self._session.execute(query)
         return list(result.scalars())
 
     async def get(self, *conditions) -> T:
@@ -583,8 +697,8 @@ class QuerySet(Generic[T]):
         Returns:
             First model instance matching the conditions, or None if no matches found
         """
-
-        result = await self._session.execute(self._query)
+        query = self._ensure_ordering(self._query)
+        result = await self._session.execute(query)
         return result.scalars().first()
 
     async def last(self) -> T | None:
@@ -663,7 +777,6 @@ class QuerySet(Generic[T]):
         Returns:
             List of dictionaries with field names as keys
         """
-
         if not fields:
             # Return all fields if none specified
             fields = tuple(col.name for col in self._model.__table__.columns)  # noqa
@@ -673,6 +786,7 @@ class QuerySet(Generic[T]):
         if self._query.whereclause is not None:
             query = query.where(self._query.whereclause)
 
+        query = self._ensure_ordering(query)
         result = await self._session.execute(query)
         results = result.all()
         return [dict(zip(fields, row, strict=False)) for row in results]
@@ -695,6 +809,7 @@ class QuerySet(Generic[T]):
         if self._query.whereclause is not None:
             query = query.where(self._query.whereclause)
 
+        query = self._ensure_ordering(query)
         result = await self._session.execute(query)
         results = result.all()
 
@@ -740,10 +855,10 @@ class QuerySet(Generic[T]):
         Yields:
             Model instances one by one
         """
-
+        query = self._ensure_ordering(self._query)
         count = 0
 
-        stream = await self._session.stream_scalars(self._query)
+        stream = await self._session.stream_scalars(query)
         async for item in stream:
             yield item
             count += 1
@@ -761,22 +876,23 @@ class QuerySet(Generic[T]):
         Returns:
             Single object (for integer key) or list of objects (for slice key)
         """
+        base_query = self._ensure_ordering(self._query)
 
         if isinstance(key, slice):
             start = key.start or 0
             stop = key.stop
             if stop is not None:
-                new_query = self._query.offset(start).limit(stop - start)
+                new_query = base_query.offset(start).limit(stop - start)
                 result = await self._session.execute(new_query)
                 return list(result.scalars().all())
             else:
-                new_query = self._query.offset(start)
+                new_query = base_query.offset(start)
                 result = await self._session.execute(new_query)
                 return list(result.scalars().all())
         elif isinstance(key, int):
             if key < 0:
                 raise ValueError("Negative indexing is not supported")
-            new_query = self._query.offset(key).limit(1)
+            new_query = base_query.offset(key).limit(1)
             result = await self._session.execute(new_query)
             item = result.scalars().first()
             if item is None:
@@ -1017,7 +1133,7 @@ class QuerySet(Generic[T]):
         return [self._model(**dict(row._mapping)) for row in result]  # noqa
 
     # ========================================
-    # 集合操作方法 (Set Operations Methods)
+    # Set Operations Methods
     # ========================================
 
     async def union(self, *other_qs: "QuerySet[T]", all_: bool = False) -> list[T]:
@@ -1103,7 +1219,7 @@ class QuerySet(Generic[T]):
         return [item for item in self_results if getattr(item, "id", id(item)) not in exclude_ids]
 
     # ========================================
-    # 数据操作方法 (Data Operations Methods)
+    # Data Operations Methods
     # ========================================
 
     @emit_signals(Operation.UPDATE)
@@ -1152,7 +1268,7 @@ class QuerySet(Generic[T]):
         return affected_count
 
     # ========================================
-    # 子查询方法 (Subquery Methods)
+    # Subquery Methods
     # ========================================
 
     def subquery(self, name: str | None = None, query_type: str = "auto") -> SubqueryExpression:
