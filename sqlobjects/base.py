@@ -240,6 +240,7 @@ class ModelMixin(SignalMixin):
             cls.setup_validators()
 
     # ========== Instance Operations ==========
+
     @emit_signals(Operation.SAVE)
     async def save(self, validate: bool = True):
         """Validate and save the model instance to the database.
