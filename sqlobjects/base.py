@@ -11,7 +11,7 @@ from .config import ConfigParser, ModelConfig
 from .exceptions import ValidationError, ValidationErrorCollector
 from .objects import ObjectsDescriptor
 from .session import SessionContextManager
-from .signals import Operation, SignalContext, SignalMixin
+from .signals import Operation, SignalContext, SignalMixin, emit_signals
 from .utils.naming import to_snake_case
 from .utils.pattern import pluralize
 
@@ -246,6 +246,7 @@ class ModelMixin(SignalMixin):
             cls.setup_validators()
 
     # ========== Instance Operations ==========
+    @emit_signals(Operation.SAVE)
     async def save(self, validate: bool = True):
         """Validate and save the model instance to the database.
 
@@ -263,13 +264,9 @@ class ModelMixin(SignalMixin):
         """
         session = self._get_session()
         instance = self._get_instance()
-        model_class = self._get_model_class()
 
         if validate:
             self.validate_all()
-
-        context = SignalContext(operation=Operation.SAVE, session=session, model_class=model_class, instance=instance)
-        await self._emit_signal("before", context)
 
         original_validators: dict[str, Any] = {}
         if not validate:
@@ -281,10 +278,10 @@ class ModelMixin(SignalMixin):
         finally:
             if not validate and original_validators:
                 self._restore_sqlalchemy_validators(original_validators)
-            await self._emit_signal("after", context)
 
         return self
 
+    @emit_signals(Operation.DELETE)
     async def delete(self):
         """Delete this model instance from the database.
 
@@ -295,15 +292,9 @@ class ModelMixin(SignalMixin):
         """
         session = self._get_session()
         instance = self._get_instance()
-        model_class = self._get_model_class()
-
-        context = SignalContext(operation=Operation.DELETE, session=session, model_class=model_class, instance=instance)
-        await self._emit_signal("before", context)
 
         await session.delete(instance)
         await session.flush()
-
-        await self._emit_signal("after", context)
 
     async def refresh(self):
         """Refresh this instance with the latest data from the database.

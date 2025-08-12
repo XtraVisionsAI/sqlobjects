@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .exceptions import DoesNotExist, MultipleObjectsReturned, ValidationError
 from .queries import QuerySet, T
 from .session import SessionContextManager
-from .signals import Operation, SignalContext
+from .signals import Operation, SignalContext, emit_signals
 
 
 class ObjectsDescriptor(Generic[T]):
@@ -82,7 +82,7 @@ class ObjectsManager(Generic[T]):
         Returns:
             QuerySet with filter conditions applied
         """
-        return QuerySet(self._session, self._model).filter(*args)
+        return QuerySet(self._model, None, self._session).filter(*args)
 
     async def all(self) -> list[T]:
         """Get all objects of this model.
@@ -370,11 +370,9 @@ class ObjectsManager(Generic[T]):
         return {getattr(obj, actual_field): obj for obj in objects}
 
     # ========== Create Operations ==========
-    async def create(
-        self,
-        validate: bool = True,
-        **kwargs,
-    ) -> T:
+
+    @emit_signals(Operation.SAVE)
+    async def create(self, validate: bool = True, **kwargs) -> T:
         """Create a new object with the given field values.
 
         Args:
@@ -391,10 +389,14 @@ class ObjectsManager(Generic[T]):
             TypeError: If invalid field names or values are provided
             AttributeError: If specified field names don't exist on the model
         """
-
         try:
             obj = self._model(**kwargs)
-            await obj.save(validate=validate)  # type: ignore[attr-defined]
+            # 直接执行数据库操作，不调用 obj.save() 避免重复触发信号
+            if validate:
+                obj.validate_all()  # type: ignore[attr-defined]
+
+            self._session.add(obj)
+            await self._session.flush()
             return obj
         except ValidationError as e:
             if not e.is_multiple:
@@ -414,10 +416,8 @@ class ObjectsManager(Generic[T]):
                 enhanced_error.model_class = self._model.__name__
                 raise enhanced_error from e
 
-    async def bulk_create(
-        self,
-        objects: list[dict[str, Any]],
-    ) -> None:
+    @emit_signals(Operation.SAVE, is_bulk=True)
+    async def bulk_create(self, objects: list[dict[str, Any]]) -> None:
         """Create multiple objects for better performance.
 
         Args:
@@ -426,25 +426,15 @@ class ObjectsManager(Generic[T]):
         if not objects:
             return
 
-        context = SignalContext(
-            operation=Operation.SAVE, session=self._session, model_class=self._model, affected_count=len(objects)
-        )
-        await self._model._emit_class_signal("before", context)  # type: ignore[attr-defined] # noqa
-
         stmt = insert(self._model).values(objects)
         await self._session.execute(stmt)
         await self._session.flush()
 
-        context.affected_count = len(objects)
-        await self._model._emit_class_signal("after", context)  # type: ignore[attr-defined] # noqa
-
     # ========== Update & Delete Operations ==========
 
+    @emit_signals(Operation.UPDATE, is_bulk=True)
     async def bulk_update(
-        self,
-        mappings: list[dict[str, Any]],
-        match_fields: list[str] | None = None,
-        batch_size: int = 1000,
+        self, mappings: list[dict[str, Any]], match_fields: list[str] | None = None, batch_size: int = 1000
     ) -> int:
         """Perform true bulk update operations for better performance.
 
@@ -468,12 +458,6 @@ class ObjectsManager(Generic[T]):
             match_fields = ["id"]
 
         total_affected = 0
-
-        # Signal context for bulk operation
-        context = SignalContext(
-            operation=Operation.UPDATE, session=self._session, model_class=self._model, affected_count=len(mappings)
-        )
-        await self._model._emit_class_signal("before", context)  # type: ignore[attr-defined] # noqa
 
         # Process in batches using Core-level update
         for i in range(0, len(mappings), batch_size):
@@ -519,18 +503,10 @@ class ObjectsManager(Generic[T]):
         # Note: This may cause issues in async mode if objects are accessed immediately
         self._session.expire_all()
 
-        # Update context and emit after signal
-        context.affected_count = total_affected
-        await self._model._emit_class_signal("after", context)  # type: ignore[attr-defined] # noqa
-
         return total_affected
 
-    async def bulk_delete(
-        self,
-        ids: list[Any],
-        id_field: str = "id",
-        batch_size: int = 1000,
-    ) -> int:
+    @emit_signals(Operation.DELETE, is_bulk=True)
+    async def bulk_delete(self, ids: list[Any], id_field: str = "id", batch_size: int = 1000) -> int:
         """Perform true bulk delete operations for better performance.
 
         Args:
@@ -551,12 +527,6 @@ class ObjectsManager(Generic[T]):
 
         total_affected = 0
 
-        # Signal context for bulk operation
-        context = SignalContext(
-            operation=Operation.DELETE, session=self._session, model_class=self._model, affected_count=len(ids)
-        )
-        await self._model._emit_class_signal("before", context)  # type: ignore[attr-defined] # noqa
-
         # Process in batches using IN clause
         for i in range(0, len(ids), batch_size):
             batch_ids = ids[i : i + batch_size]
@@ -567,17 +537,9 @@ class ObjectsManager(Generic[T]):
             total_affected += result.rowcount if result.rowcount is not None else 0
 
         await self._session.flush()
-
-        # Update context and emit after signal
-        context.affected_count = total_affected
-        await self._model._emit_class_signal("after", context)  # type: ignore[attr-defined] # noqa
-
         return total_affected
 
-    async def delete_all(
-        self,
-        fast: bool = False,
-    ) -> int:
+    async def delete_all(self, fast: bool = False) -> int:
         """Delete all records from the table.
 
         Args:
@@ -599,34 +561,24 @@ class ObjectsManager(Generic[T]):
             # Use QuerySet.delete() for transaction safety and signal support
             return await self.filter().delete()
 
-    async def update_all(
-        self,
-        values: dict[str, Any],
-    ) -> int:
+    async def update_all(self, **values) -> int:
         """Update all records in the table with the given values.
 
         Args:
-            values: Field values to update
+            **values: Field values to update
 
         Returns:
             Number of updated rows
 
         Examples:
             # Update all users' status
-            affected = await User.objects.update_all({"status": "migrated"})
-
-            # Update with commit
-            affected = await User.objects.update_all(
-                {"last_updated": datetime.now()},
-                commit=True
-            )
+            affected = await User.objects.update_all(status="migrated")
         """
-        return await self.filter().update(values)
+        return await self.filter().update(**values)
 
     # ========== Aggregation & Statistics ==========
-    async def count(
-        self,
-    ) -> int:
+
+    async def count(self) -> int:
         """Count the total number of objects.
 
         Returns:
@@ -634,10 +586,7 @@ class ObjectsManager(Generic[T]):
         """
         return await self.filter().count()
 
-    async def aggregate(
-        self,
-        **kwargs,
-    ) -> dict[str, Any]:
+    async def aggregate(self, **kwargs) -> dict[str, Any]:
         """Perform aggregation operations on the queryset.
 
         Args:
@@ -648,10 +597,7 @@ class ObjectsManager(Generic[T]):
         """
         return await self.filter().aggregate(**kwargs)
 
-    async def values(
-        self,
-        *fields,
-    ) -> list[dict[str, Any]]:
+    async def values(self, *fields) -> list[dict[str, Any]]:
         """Get dictionaries containing only the specified field values.
 
         Args:
@@ -662,11 +608,7 @@ class ObjectsManager(Generic[T]):
         """
         return await self.filter().values(*fields)
 
-    async def values_list(
-        self,
-        *fields,
-        flat: bool = False,
-    ) -> list:
+    async def values_list(self, *fields, flat: bool = False) -> list:
         """Get list of tuples or single values for the specified fields.
 
         Args:
@@ -679,10 +621,8 @@ class ObjectsManager(Generic[T]):
         return await self.filter().values_list(*fields, flat=flat)
 
     # ========== Utility Methods ==========
-    async def random(
-        self,
-        count: int = 1,
-    ) -> list[T]:
+
+    async def random(self, count: int = 1) -> list[T]:
         """Get random objects from the table.
 
         Args:

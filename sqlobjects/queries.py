@@ -17,7 +17,7 @@ from sqlalchemy.sql.elements import BinaryExpression, ClauseElement
 
 from .exceptions import DoesNotExist, MultipleObjectsReturned
 from .expressions import SubqueryExpression
-from .signals import Operation, SignalContext
+from .signals import Operation, SignalContext, emit_signals
 
 
 # Export classes for use in other modules
@@ -1106,22 +1106,16 @@ class QuerySet(Generic[T]):
     # 数据操作方法 (Data Operations Methods)
     # ========================================
 
-    async def update(self, values: dict) -> int:
+    @emit_signals(Operation.UPDATE)
+    async def update(self, **values) -> int:
         """Perform bulk update on objects matching the query conditions.
 
         Args:
-            values: Field values to update
+            **values: Field values to update
 
         Returns:
             Number of affected rows
         """
-
-        # Emit before_update signal
-        context = SignalContext(
-            operation=Operation.UPDATE, session=self._session, model_class=self._model, update_data=values
-        )
-        await self._model._emit_class_signal("before", context)  # type: ignore[attr-defined] # noqa
-
         # Resolve expressions in update values
         resolved_values = {}
         for key, value in values.items():
@@ -1138,24 +1132,15 @@ class QuerySet(Generic[T]):
         affected_count = result.rowcount if result.rowcount is not None else 0
 
         await self._session.flush()
-
-        # Update context and emit after_update signal
-        context.affected_count = affected_count
-        await self._model._emit_class_signal("after", context)  # type: ignore[attr-defined] # noqa
-
         return affected_count
 
+    @emit_signals(Operation.DELETE)
     async def delete(self) -> int:
         """Perform bulk delete on objects matching the query conditions.
 
         Returns:
             Number of deleted rows
         """
-
-        # Emit before_delete signal
-        context = SignalContext(operation=Operation.DELETE, session=self._session, model_class=self._model)
-        await self._model._emit_class_signal("before", context)  # type: ignore[attr-defined] # noqa
-
         stmt = delete(self._model)
         if self._query.whereclause is not None:
             stmt = stmt.where(self._query.whereclause)
@@ -1164,11 +1149,6 @@ class QuerySet(Generic[T]):
         affected_count = result.rowcount if result.rowcount is not None else 0
 
         await self._session.flush()
-
-        # Update context and emit after_delete signal
-        context.affected_count = affected_count
-        await self._model._emit_class_signal("after", context)  # type: ignore[attr-defined] # noqa
-
         return affected_count
 
     # ========================================

@@ -1,7 +1,9 @@
+import functools
 import inspect
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, TypeVar
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,8 +13,11 @@ __all__ = [
     "Operation",
     "SignalContext",
     "SignalMixin",
+    "emit_signals",
     "event",
 ]
+
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 class Operation(Enum):
@@ -189,3 +194,151 @@ class SignalMixin:
                 await handler(context)
             else:
                 handler(context)
+
+
+def emit_signals(operation: Operation, is_bulk: bool = False):
+    """Decorator to automatically emit pre/post signals for database operations.
+
+    Args:
+        operation: The database operation type (Operation.SAVE, Operation.DELETE, Operation.UPDATE)
+        is_bulk: Whether this is a bulk operation (affects signal emission strategy)
+
+    Returns:
+        Decorated function that emits signals before and after execution
+
+    Examples:
+        @emit_signals(Operation.SAVE)
+        async def save(self, validate: bool = True):
+            # Method implementation
+            pass
+
+        @emit_signals(Operation.UPDATE, is_bulk=True)
+        async def update(self, values: dict[str, Any]) -> int:
+            # Method implementation
+            pass
+    """
+
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            # Extract self/cls and session from arguments
+            self_or_cls = args[0]
+            session = _extract_session(self_or_cls, kwargs)
+
+            # Create signal context
+            context = _create_signal_context(
+                operation=operation, session=session, self_or_cls=self_or_cls, is_bulk=is_bulk, kwargs=kwargs
+            )
+
+            # Emit pre signal
+            await _emit_pre_signal(self_or_cls, context, is_bulk)
+
+            try:
+                # Execute original method
+                result = await func(*args, **kwargs)
+
+                # Update context with result if needed
+                _update_context_with_result(context, result)
+
+                # Emit post signal
+                await _emit_post_signal(self_or_cls, context, is_bulk)
+
+                return result
+
+            except Exception:
+                raise
+
+        return wrapper  # type: ignore
+
+    return decorator
+
+
+def _extract_session(self_or_cls, kwargs) -> Any:
+    """Extract session from method arguments or instance."""
+    # Try to get session from kwargs first
+    if "session" in kwargs:
+        return kwargs["session"]
+
+    # Try to get session from instance/class - support both property and method
+    if hasattr(self_or_cls, "_session"):
+        session_attr = self_or_cls._session  # noqa
+        # Handle both property and method cases
+        return session_attr() if callable(session_attr) else session_attr
+    elif hasattr(self_or_cls, "_get_session"):
+        return self_or_cls._get_session()  # noqa
+
+    # Fallback to default session
+    from .session import SessionContextManager
+
+    return SessionContextManager.get_session()
+
+
+def _create_signal_context(operation: Operation, session, self_or_cls, is_bulk: bool, kwargs: dict) -> SignalContext:
+    """Create appropriate signal context based on operation type."""
+    if is_bulk:
+        # Bulk operation context - support ObjectsManager and QuerySet
+        if hasattr(self_or_cls, "_model"):
+            model_class = self_or_cls._model  # noqa
+        elif hasattr(self_or_cls, "__table__"):
+            model_class = self_or_cls.__class__
+        else:
+            model_class = self_or_cls
+
+        return SignalContext(
+            operation=operation,
+            session=session,
+            model_class=model_class,
+            instance=None,
+            affected_count=kwargs.get("affected_count") or _extract_affected_count(kwargs),
+            update_data=kwargs.get("values") or kwargs.get("update_data"),
+        )
+    else:
+        # Single instance operation context
+        instance = self_or_cls if hasattr(self_or_cls, "__table__") else None
+        model_class = self_or_cls.__class__ if instance else self_or_cls
+        return SignalContext(operation=operation, session=session, model_class=model_class, instance=instance)
+
+
+async def _emit_pre_signal(self_or_cls, context: SignalContext, is_bulk: bool):
+    """Emit pre-operation signal."""
+    if is_bulk:
+        # Class-level signal for bulk operations
+        model_class = context.model_class
+        if hasattr(model_class, "_emit_class_signal"):
+            await model_class._emit_class_signal("before", context)  # noqa
+    else:
+        # Instance-level signal
+        if hasattr(self_or_cls, "_emit_signal"):
+            await self_or_cls._emit_signal("before", context)  # noqa
+
+
+async def _emit_post_signal(self_or_cls, context: SignalContext, is_bulk: bool):
+    """Emit post-operation signal."""
+    if is_bulk:
+        # Class-level signal for bulk operations
+        model_class = context.model_class
+        if hasattr(model_class, "_emit_class_signal"):
+            await model_class._emit_class_signal("after", context)  # noqa
+    else:
+        # Instance-level signal
+        if hasattr(self_or_cls, "_emit_signal"):
+            await self_or_cls._emit_signal("after", context)  # noqa
+
+
+def _extract_affected_count(kwargs: dict) -> int | None:
+    """Extract affected count from method arguments."""
+    # For bulk operations, try to extract count from various argument patterns
+    if "mappings" in kwargs and isinstance(kwargs["mappings"], list):
+        return len(kwargs["mappings"])
+    elif "ids" in kwargs and isinstance(kwargs["ids"], list):
+        return len(kwargs["ids"])
+    elif "objects" in kwargs and isinstance(kwargs["objects"], list):
+        return len(kwargs["objects"])
+    return None
+
+
+def _update_context_with_result(context: SignalContext, result):
+    """Update signal context with method execution result."""
+    if context.is_bulk and isinstance(result, int):
+        # Update affected_count for bulk operations that return row count
+        context.affected_count = result
