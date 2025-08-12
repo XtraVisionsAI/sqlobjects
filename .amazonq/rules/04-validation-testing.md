@@ -69,10 +69,9 @@ user = await User.objects.create(
 )
 
 # Create with specific session
-user = await User.objects.create(
+user = await User.objects.using(analytics_session).create(
     username="john",
-    email="john@example.com",
-    session=analytics_session
+    email="john@example.com"
 )
 
 # Instance-level validation methods
@@ -82,8 +81,8 @@ user.validate_fields(["username", "email"])  # Validate specific fields
 user.validate()  # Model-level validation hook
 
 # Save with validation control
-await user.save(validate=True)  # Full validation (default)
-await user.save(validate=False)  # Skip validation
+await user.save()  # Full validation (default)
+await user.using(session).save()  # With specific session
 
 # Create from dictionary with validation
 user_data = {"username": "john", "email": "john@example.com"}
@@ -176,11 +175,11 @@ user = User(username="john", email="john@example.com")
 # Save instance to database
 await user.save()  # With validation
 await user.save(validate=False)  # Skip validation
-await user.save(commit=True)  # Auto-commit transaction
+# Save operations now handle transactions through session context
 
 # Delete instance from database
 await user.delete()  # Delete this instance
-await user.delete(commit=True)  # Auto-commit transaction
+await user.using(session).delete()  # With specific session
 
 # Refresh instance from database
 await user.refresh()  # Refresh all fields
@@ -259,10 +258,9 @@ from sqlobjects.session import ctx_session
 class TestUserModel:
     @pytest.mark.asyncio
     async def test_create_user(self, test_session):
-        user = await User.objects.create(
+        user = await User.objects.using(test_session).create(
             username="testuser",
-            email="test@example.com",
-            session=test_session
+            email="test@example.com"
         )
         assert user.id is not None
         assert user.username == "testuser"
@@ -282,15 +280,15 @@ class TestUserModel:
     @pytest.mark.asyncio
     async def test_user_queries(self, test_session):
         # Create test data
-        await User.objects.create(username="alice", age=25, session=test_session)
-        await User.objects.create(username="bob", age=30, session=test_session)
+        await User.objects.using(test_session).create(username="alice", age=25)
+        await User.objects.using(test_session).create(username="bob", age=30)
         
         # Test queries
-        users = await User.objects.filter(age__gte=25).all(session=test_session)
+        users = await User.objects.using(test_session).filter(User.age >= 25).all()
         assert len(users) == 2
         
-        user = await User.objects.get(username="alice", session=test_session)
-        assert user.age == 25e == 25
+        user = await User.objects.using(test_session).get(username="alice")
+        assert user.age == 25
 ```
 
 ### 2. Test Fixtures
@@ -319,11 +317,10 @@ async def sample_users(test_session):
     """Create sample test data"""
     users = []
     for i in range(5):
-        user = await User.objects.create(
+        user = await User.objects.using(test_session).create(
             username=f"user{i}",
             email=f"user{i}@test.com",
-            age=20 + i,
-            session=test_session
+            age=20 + i
         )
         users.append(user)
     return users
@@ -362,26 +359,25 @@ class TestUserDatabase:
     async def test_crud_operations(self, test_session):
         """Test complete CRUD cycle"""
         # Create
-        user = await User.objects.create(
+        user = await User.objects.using(test_session).create(
             username="testuser",
-            email="test@example.com",
-            session=test_session
+            email="test@example.com"
         )
         assert user.id is not None
         
         # Read
-        retrieved = await User.objects.get(id=user.id, session=test_session)
+        retrieved = await User.objects.using(test_session).get(id=user.id)
         assert retrieved.username == "testuser"
         
         # Update
         retrieved.email = "updated@example.com"
-        await retrieved.save(session=test_session)
+        await retrieved.using(test_session).save()
         
         # Delete
-        await retrieved.delete(session=test_session)
+        await retrieved.using(test_session).delete()
         
         with pytest.raises(DoesNotExist):
-            await User.objects.get(id=user.id, session=test_session)
+            await User.objects.using(test_session).get(id=user.id)
 ```
 
 #### Performance Tests
@@ -400,7 +396,7 @@ class TestUserPerformance:
         ]
         
         start_time = time.time()
-        await User.objects.bulk_create(users_data, session=test_session)
+        await User.objects.using(test_session).bulk_create(users_data)
         create_time = time.time() - start_time
         
         # Bulk update test
@@ -410,7 +406,7 @@ class TestUserPerformance:
         ]
         
         start_time = time.time()
-        await User.objects.bulk_update(mappings, match_fields=["id"], session=test_session)
+        await User.objects.using(test_session).bulk_update(mappings, match_fields=["id"])
         update_time = time.time() - start_time
         
         # Assert reasonable performance
@@ -434,7 +430,7 @@ class TestDataFactory:
             "is_active": True
         }
         defaults.update(kwargs)
-        return await User.objects.create(session=session, **defaults)
+        return await User.objects.using(session).create(**defaults)
     
     @staticmethod
     async def create_users(session, count=5, **kwargs):
@@ -457,9 +453,8 @@ class TestUserQueries:
     async def test_filter_by_age(self, test_session):
         await TestDataFactory.create_users(test_session, count=10)
         
-        young_users = await User.objects.filter(
-            age__lt=25, 
-            session=test_session
+        young_users = await User.objects.using(test_session).filter(
+            User.age < 25
         ).all()
         assert len(young_users) == 5
 ```
@@ -499,7 +494,7 @@ class TestErrorHandling:
     async def test_does_not_exist_exception(self, test_session):
         """Test DoesNotExist exception handling"""
         with pytest.raises(DoesNotExist) as exc_info:
-            await User.objects.get(username="nonexistent", session=test_session)
+            await User.objects.using(test_session).get(username="nonexistent")
         
         # Verify localized error message
         assert "does not exist" in str(exc_info.value).lower()
@@ -521,13 +516,13 @@ class TestErrorHandling:
         """Test transaction rollback on error"""
         try:
             async with ctx_session("test_db") as session:
-                await User.objects.create(username="user1", session=session)
+                await User.objects.using(session).create(username="user1")
                 # Simulate error
                 raise Exception("Simulated error")
         except Exception:
             pass
         
         # Verify rollback occurred
-        count = await User.objects.count(session=test_session)
+        count = await User.objects.using(test_session).count()
         assert count == 0
 ```

@@ -237,14 +237,20 @@ register_field_type({
 ### 2. Query Optimization
 
 ```python
-# Use select_related for one-to-one and many-to-one
+# Use select_related for one-to-one and many-to-one - string syntax
 users = await User.objects.select_related('profile').all()
+# SQLAlchemy expression syntax (recommended)
+users = await User.objects.select_related(User.profile).all()
 
-# Use prefetch_related for one-to-many and many-to-many
+# Use prefetch_related for one-to-many and many-to-many - string syntax
 users = await User.objects.prefetch_related('posts').all()
+# SQLAlchemy expression syntax (recommended)
+users = await User.objects.prefetch_related(User.posts).all()
 
-# Combine both for complex relationships
-users = await User.objects.select_related('profile').prefetch_related('posts__tags').all()
+# Combine both for complex relationships - string syntax
+users = await User.objects.select_related('profile').prefetch_related('posts.tags').all()
+# SQLAlchemy expression syntax (recommended)
+users = await User.objects.select_related(User.profile).prefetch_related(User.posts).all()
 
 # Use only() to load specific fields
 users = await User.objects.only('id', 'username', 'email').all()
@@ -288,8 +294,11 @@ user = await User.objects.select_for_update(nowait=True).get(id=1)
 user = await User.objects.select_for_update(skip_locked=True).get(id=1)
 
 # Query optimization with options
-from sqlalchemy.orm import joinedload, selectinload
+# Using SQLObjects relationship loading (recommended)
+users = await User.objects.select_related(User.profile).prefetch_related(User.posts).all()
 
+# Or using SQLAlchemy options directly
+from sqlalchemy.orm import joinedload, selectinload
 users = await User.objects.options(
     joinedload(User.profile),
     selectinload(User.posts)
@@ -325,26 +334,25 @@ Methods are organized into functional groups:
 - `update_or_create(*filters, *, defaults, **conditions)` - Update/create patterns with complex filter support
 - `in_bulk()` - Efficient bulk retrieval by field values
 
-#### Session Parameter Support
+#### Session Management with using() Method
 
-Most methods accept an optional `session` parameter in `**kwargs` to specify which database session to use:
+Methods use the `using()` method pattern to specify which database session to use:
 
 ```python
 # Basic usage with default session
 user = await User.objects.get(username="john")
 
 # Using specific database session
-user = await User.objects.get(username="john", session=analytics_session)
+user = await User.objects.using(analytics_session).get(username="john")
 
 # Complex query with session
-user = await User.objects.get(
+user = await User.objects.using(main_session).get(
     Q(username="john") | Q(email="john@example.com"),
-    is_active=True,
-    session=main_session
+    is_active=True
 )
 
 # Chain methods with session
-users = await User.objects.filter(is_active=True).all(session=db_session)
+users = await User.objects.using(db_session).filter(is_active=True).all()
 ```
 
 #### Create Operations

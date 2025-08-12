@@ -51,12 +51,11 @@ users = await User.objects.filter(
 users = await User.objects.filter(User.age >= 18).all()
 
 # 使用指定会话
-users = await User.objects.filter(User.age >= 18).all(session=analytics_session)
+users = await User.objects.using(analytics_session).filter(User.age >= 18).all()
 
 # 链式调用中的会话传递
-user = await User.objects.filter(
-    User.is_active == True,
-    session=main_session
+user = await User.objects.using(main_session).filter(
+    User.is_active == True
 ).first()
 ```
 
@@ -102,9 +101,24 @@ class Q:
 class QuerySet(Generic[T]):
     """查询集合，提供链式查询接口"""
     
+    def __init__(self, model: type[T], query: Select | None = None, db_or_session: str | AsyncSession | None = None):
+        self._db_or_session = db_or_session
+        self._model = model
+        self._query = query if query is not None else select(model)
+    
+    @property
+    def _session(self) -> AsyncSession:
+        """获取有效的会话对象"""
+        if self._db_or_session is None:
+            return SessionContextManager.get_session()
+        elif isinstance(self._db_or_session, str):
+            return SessionContextManager.get_session(self._db_or_session)
+        else:
+            return self._db_or_session
+    
     # 查询构建方法（返回新的 QuerySet）
-    def filter(self, *conditions, session=None) -> "QuerySet[T]"
-    def exclude(self, *conditions, session=None) -> "QuerySet[T]"
+    def filter(self, *conditions) -> "QuerySet[T]"
+    def exclude(self, *conditions) -> "QuerySet[T]"
     def order_by(self, *fields) -> "QuerySet[T]"
     def limit(self, count: int) -> "QuerySet[T]"
     def offset(self, count: int) -> "QuerySet[T]"
@@ -123,32 +137,32 @@ class QuerySet(Generic[T]):
     def reverse(self) -> "QuerySet[T]"
     
     # 查询执行方法（执行数据库查询）
-    async def all(self, session=None) -> list[T]
-    async def get(self, *conditions, session=None) -> T
-    async def first(self, session=None) -> T | None
-    async def last(self, session=None) -> T | None
-    async def earliest(self, *fields, session=None) -> T | None
-    async def latest(self, *fields, session=None) -> T | None
-    async def count(self, session=None) -> int
-    async def exists(self, session=None) -> bool
-    async def values(self, *fields, session=None) -> list[dict[str, Any]]
-    async def values_list(self, *fields, flat=False, session=None) -> list[Any] | list[tuple[Any, ...]]
-    async def aggregate(self, session=None, **kwargs) -> dict[str, Any]
-    async def iterator(self, session=None, memory_cleanup_interval=1000) -> AsyncGenerator[T, None]
-    async def get_item(self, key, session=None) -> T | list[T]
-    async def dates(self, field: str, kind: str, order="ASC", session=None) -> list[Any]
-    async def datetimes(self, field: str, kind: str, order="ASC", session=None) -> list[Any]
-    async def explain(self, output=None, analyze=False, session=None, **options) -> dict[str, Any]  # 查询执行计划分析
-    async def raw(self, sql: str, params=None, session=None) -> list[T]
+    async def all(self) -> list[T]
+    async def get(self, *conditions) -> T
+    async def first(self) -> T | None
+    async def last(self) -> T | None
+    async def earliest(self, *fields) -> T | None
+    async def latest(self, *fields) -> T | None
+    async def count(self) -> int
+    async def exists(self) -> bool
+    async def values(self, *fields) -> list[dict[str, Any]]
+    async def values_list(self, *fields, flat=False) -> list[Any] | list[tuple[Any, ...]]
+    async def aggregate(self, **kwargs) -> dict[str, Any]
+    async def iterator(self, memory_cleanup_interval=1000) -> AsyncGenerator[T, None]
+    async def get_item(self, key) -> T | list[T]
+    async def dates(self, field: str, kind: str, order="ASC") -> list[Any]
+    async def datetimes(self, field: str, kind: str, order="ASC") -> list[Any]
+    async def explain(self, output=None, analyze=False, **options) -> dict[str, Any]  # 查询执行计划分析
+    async def raw(self, sql: str, params=None) -> list[T]
     
     # 集合操作方法（Set Operations）
-    async def union(self, *other_qs, all_=False, session=None) -> list[T]
-    async def intersection(self, *other_qs, session=None) -> list[T]
-    async def difference(self, *other_qs, session=None) -> list[T]
+    async def union(self, *other_qs, all_=False) -> list[T]
+    async def intersection(self, *other_qs) -> list[T]
+    async def difference(self, *other_qs) -> list[T]
     
     # 数据操作方法（Data Operations）
-    async def update(self, values: dict, session=None, commit=False) -> int
-    async def delete(self, session=None, commit=False) -> int
+    async def update(self, values: dict) -> int
+    async def delete(self) -> int
     
     # 子查询方法（Subquery Methods）
     def subquery(self, name=None, query_type="auto") -> SubqueryExpression
@@ -179,7 +193,7 @@ User.objects.filter(
 from sqlobjects.fields import FunctionResult
 
 # 表达式处理逻辑
-def filter(self, *conditions, session=None):
+def filter(self, *conditions):
     for condition in conditions:
         if isinstance(condition, Q):
             # Q 对象处理
@@ -223,7 +237,7 @@ mixed = Q(User.name.like('%admin%')) & (User.last_login >= func.now())
 
 ```python
 # 过滤和排除
-User.objects.filter(User.age >= 18, session=session)
+User.objects.filter(User.age >= 18)
 User.objects.exclude(User.is_deleted == True)
 
 # 排序和限制
@@ -330,6 +344,9 @@ deleted_count = await User.objects.filter(is_deleted=True).delete()
 # 子查询
 avg_age_subq = User.objects.aggregate(avg_age=func.avg(User.age)).subquery()
 high_earners = await User.objects.filter(User.salary > avg_age_subq).all()
+
+# 使用指定会话
+users = await User.objects.using(analytics_session).filter(User.age >= 18).all()
 ```
 
 ## 使用指南
@@ -421,8 +438,8 @@ avg_salary_subq = User.objects.aggregate(avg_salary=func.avg(User.salary)).subqu
 high_earners = await User.objects.filter(User.salary > avg_salary_subq).all()
 
 # 多数据库支持
-main_users = await User.objects.filter(User.is_active == True).all(session=main_session)
-analytics_users = await User.objects.filter(User.created_at >= last_month).all(session=analytics_session)
+main_users = await User.objects.using(main_session).filter(User.is_active == True).all()
+analytics_users = await User.objects.using(analytics_session).filter(User.created_at >= last_month).all()
 
 # 批量操作
 updated_count = await User.objects.filter(
@@ -436,10 +453,8 @@ deleted_count = await User.objects.filter(
 
 # 事务控制
 async with ctx_session() as session:
-    users = await User.objects.filter(User.is_active == True).all(session=session)
-    await User.objects.filter(User.id.in_([u.id for u in users])).update(
-        values={"last_seen": datetime.now()}, 
-        session=session
+    users = await User.objects.using(session).filter(User.is_active == True).all()
+    await User.objects.using(session).filter(User.id.in_([u.id for u in users])).update(
+        values={"last_seen": datetime.now()}
     )
-    await session.commit()
 ```

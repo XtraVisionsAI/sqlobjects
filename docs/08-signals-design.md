@@ -134,7 +134,7 @@ class User(ObjectModel):
 
 #### Queries 模块集成
 
-信号处理器可以使用完整的 QuerySet API：
+信号处理器可以使用完整的 QuerySet API，支持 using() 方法指定会话：
 
 ```python
 from sqlobjects.base import ObjectModel
@@ -142,10 +142,13 @@ from sqlobjects.base import ObjectModel
 class User(ObjectModel):
     async def after_save(self, context: SignalContext) -> None:
         # 使用 QuerySet 进行相关操作
-        related_users = await User.objects.filter(
-            department_id=self.department_id,
-            session=context.session
+        related_users = await User.objects.using(context.session).filter(
+            department_id=self.department_id
         ).all()
+        
+        # ModelProxy 也支持信号处理
+        for user in related_users:
+            await user.using(context.session).save()
 ```
 
 #### 模块职责分离
@@ -262,16 +265,19 @@ from datetime import datetime
 class User(ObjectModel):
     async def after_save(self, context: SignalContext) -> None:
         # 使用 Q 对象构建复杂查询
-        related_users = await User.objects.filter(
-            Q(department_id=self.department_id) & Q(is_active=True),
-            session=context.session
+        related_users = await User.objects.using(context.session).filter(
+            Q(department_id=self.department_id) & Q(is_active=True)
         ).exclude(id=self.id).all()
         
         # 批量更新相关数据
-        await User.objects.filter(
-            department_id=self.department_id,
-            session=context.session
+        await User.objects.using(context.session).filter(
+            department_id=self.department_id
         ).update(values={"last_department_update": datetime.now()})
+        
+        # 使用 ModelProxy 进行实例操作
+        for user in related_users:
+            user.last_activity = datetime.now()
+            await user.using(context.session).save()
 ```
 
 #### 错误处理

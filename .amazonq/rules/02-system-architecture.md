@@ -103,12 +103,12 @@ SessionContextManager.set_default("analytics")
 
 # Single database context manager
 async with ctx_session() as session:
-    user = await User.objects.create(username="test", session=session)
+    user = await User.objects.using(session).create(username="test")
 
 # Multiple databases context manager
 async with ctx_sessions("main", "logs") as sessions:
-    user = await User.objects.create(username="test", session=sessions["main"])
-    await Log.objects.create(message="User created", session=sessions["logs"])
+    user = await User.objects.using(sessions["main"]).create(username="test")
+    await Log.objects.using(sessions["logs"]).create(message="User created")
 
 # Or use default session
 user = await User.objects.create(username="test")
@@ -157,15 +157,16 @@ The `auto_default` parameter controls automatic default database selection when 
 from sqlobjects.signals import SignalMixin, SignalContext, Operation
 
 class ModelMixin(SignalMixin):
-    async def save(self, session=None, commit=False, validate=True):
+    async def save(self):
+        # Get session from context
+        session = self._get_session()
+        
         # Send before_save signal
         context = SignalContext(operation=Operation.SAVE, session=session, instance=self)
         await self._emit_signal("before", context)
         
         # Perform save operation
         session.add(self)
-        if commit:
-            await session.commit()
         
         # Send after_save signal
         await self._emit_signal("after", context)
@@ -264,7 +265,7 @@ except MultipleObjectsReturned:
 
 # Using specific session for exception handling
 try:
-    user = await User.objects.get(email=email, session=analytics_session)
+    user = await User.objects.using(analytics_session).get(email=email)
 except DoesNotExist:
     raise DoesNotExist(f"User with email '{email}' does not exist")
 ```
@@ -322,10 +323,9 @@ from sqlobjects import ObjectModel
 class TestUserModel:
     @pytest.mark.asyncio
     async def test_create_user(self, session):
-        user = await User.objects.create(
+        user = await User.objects.using(session).create(
             username="testuser",
-            email="test@example.com",
-            session=session
+            email="test@example.com"
         )
         assert user.id is not None
         assert user.username == "testuser"
@@ -349,7 +349,7 @@ async def test_db():
 # Test-specific database operations
 async def test_user_creation(test_db):
     async with ctx_session("test_db") as session:
-        user = await User.objects.create(username="test", session=session)
+        user = await User.objects.using(session).create(username="test")
         assert user.id is not None
 ```
 

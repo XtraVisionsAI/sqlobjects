@@ -115,7 +115,55 @@ class Product(ObjectModel):
 
 ### 核心组件
 
-#### 1. ObjectModel 基类
+#### 1. ModelProxy 代理类
+
+为模型实例提供会话绑定功能，支持显式指定数据库会话：
+
+```python
+class ModelProxy(ModelMixin):
+    """模型代理类，绑定特定的数据库会话"""
+    
+    def __init__(self, instance, db_or_session: str | AsyncSession):
+        self._instance = instance
+        self._db_or_session = db_or_session
+        self._session_attached = False
+    
+    def _get_session(self) -> AsyncSession:
+        """获取绑定的会话"""
+        if isinstance(self._db_or_session, str):
+            session = SessionContextManager.get_session(self._db_or_session)
+        else:
+            session = self._db_or_session
+        
+        self._ensure_session_attachment(session)
+        return session
+    
+    def _ensure_session_attachment(self, session: AsyncSession) -> None:
+        """确保实例正确附加到指定会话"""
+        if self._session_attached:
+            return
+        
+        current_session = async_object_session(self._instance)
+        if current_session is None:
+            session.add(self._instance)
+        elif current_session is not session:
+            self._handle_session_migration(current_session, session)
+        
+        self._session_attached = True
+    
+    def __getattr__(self, name):
+        """代理属性访问到包装的实例"""
+        return getattr(self._instance, name)
+    
+    def __setattr__(self, name, value):
+        """代理属性设置到包装的实例"""
+        if name.startswith("_"):
+            super().__setattr__(name, value)
+        else:
+            setattr(self._instance, name, value)
+```
+
+#### 2. ObjectModel 基类
 
 继承自 SQLAlchemy DeclarativeBase 和 ModelMixin，提供完整的模型功能：
 
@@ -183,42 +231,52 @@ class ModelMixin(SignalMixin):
         if fields is None:
             self.validate()
     
+    # 会话指定方法
+    def using(self, db_or_session: str | AsyncSession) -> "ModelProxy":
+        """返回绑定到特定数据库/会话的代理对象"""
+        return ModelProxy(self._get_instance(), db_or_session)
+    
     # 实例操作方法
-    async def save(self, session=None, commit=False, validate=True):
+    async def save(self, validate: bool = True):
         """保存模型实例"""
-        session = session or SessionContextManager.get_session()
+        session = self._get_session()
+        instance = self._get_instance()
+        model_class = self._get_model_class()
         
         if validate:
             self.validate_all()
         
-        # 发送信号
-        context = SignalContext(operation=Operation.SAVE, session=session, instance=self)
+        context = SignalContext(operation=Operation.SAVE, session=session, model_class=model_class, instance=instance)
         await self._emit_signal("before", context)
         
-        session.add(self)
-        if commit:
-            await session.commit()
-            await session.refresh(self)
-        else:
-            await session.flush()
+        session.add(instance)
+        await session.flush()
         
         await self._emit_signal("after", context)
         return self
     
-    async def delete(self, session=None, commit=False):
+    async def delete(self):
         """删除模型实例"""
-        session = session or SessionContextManager.get_session()
+        session = self._get_session()
+        instance = self._get_instance()
+        model_class = self._get_model_class()
         
-        context = SignalContext(operation=Operation.DELETE, session=session, instance=self)
+        context = SignalContext(operation=Operation.DELETE, session=session, model_class=model_class, instance=instance)
         await self._emit_signal("before", context)
         
-        await session.delete(self)
-        if commit:
-            await session.commit()
-        else:
-            await session.flush()
+        await session.delete(instance)
+        await session.flush()
         
         await self._emit_signal("after", context)
+    
+    async def refresh(self):
+        """刷新实例数据"""
+        session = self._get_session()
+        instance = self._get_instance()
+        
+        await session.flush()
+        await session.refresh(instance)
+        return self
 ```
 
 #### 3. ModelConfig 配置系统
@@ -484,15 +542,15 @@ ModelMixin 继承 SignalMixin，支持模型操作信号：
 ```python
 # model 模块中的信号集成
 class ModelMixin(SignalMixin):
-    async def save(self, session=None, commit=False, validate=True):
+    async def save(self, validate=True):
         # 发送保存前信号
+        session = self._get_session()
         context = SignalContext(operation=Operation.SAVE, session=session, instance=self)
         await self._emit_signal("before", context)
         
         # 执行保存操作
         session.add(self)
-        if commit:
-            await session.commit()
+        await session.flush()
         
         # 发送保存后信号
         await self._emit_signal("after", context)
@@ -587,15 +645,16 @@ user.validate_all()                          # 完整验证
 user = User(name="John", email="john@example.com")
 await user.save()                                              # 保存（自动验证）
 await user.save(validate=False)                                # 跳过验证保存
-await user.save(commit=True)                                   # 保存并提交事务
+await user.using(analytics_session).save()                     # 使用指定会话保存
                                                                
 # 删除                                                           
 await user.delete()                                            # 删除
-await user.delete(commit=True)                                 # 删除并提交事务
+await user.using(analytics_session).delete()                   # 使用指定会话删除
                                                                
 # 刷新                                                           
 await user.refresh()                                           # 从数据库刷新
 await user.refresh_from_db(["name", "email"])                  # 刷新特定字段
+await user.using(analytics_session).refresh()                  # 使用指定会话刷新
 
 # 数据转换
 user_dict = user.to_dict()                                     # 转换为字典
@@ -699,6 +758,9 @@ class User(ObjectModel):
 # 创建用户
 user = User(name="John Doe", email="john@example.com", age=25)
 await user.save()
+
+# 使用指定会话
+await user.using(analytics_session).save()
 
 # 验证
 try:
@@ -904,7 +966,7 @@ async def product_management_example():
     
     # 验证和保存
     try:
-        await product.save(commit=True)
+        await product.save()
         print("产品创建成功")
     except ValidationError as e:
         print(f"验证失败: {e.message}")
@@ -917,7 +979,7 @@ async def product_management_example():
     product.status = "sale"
     
     try:
-        await product.save(commit=True)
+        await product.save()
         print("产品更新成功")
     except ValidationError as e:
         print(f"更新失败: {e.message}")
@@ -940,7 +1002,7 @@ async def product_management_example():
     }
     
     new_product = Product.from_dict(new_product_data)
-    await new_product.save(commit=True)
+    await new_product.save()
     
     print("产品管理示例完成")
 

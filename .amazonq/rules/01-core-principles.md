@@ -69,29 +69,31 @@ async def get_user_posts(user_id: int) -> list[Post]:
     return await user.posts.all()
 ```
 
-### 2. Session Parameter Handling
+### 2. Session Management with using() Method
 
-SQLObjects uses a unified session parameter pattern across all methods:
+SQLObjects uses the `using()` method pattern for session specification:
 
-#### Method Signature Pattern
+#### Method Pattern
 
 ```python
-# All query methods follow this pattern
-async def method_with_kwargs(self, *args, **kwargs) -> ReturnType:
-    session = kwargs.pop('session', None) or self._session
-    # ... method implementation
+# Default session usage
+user = await User.objects.create(username="john")
 
-async def method_without_kwargs(self, *args, session: AsyncSession | None = None) -> ReturnType:
-    session = session or self._session
-    # ... method implementation
+# Specific session usage
+user = await User.objects.using(session).create(username="john")
+user = await User.objects.using("database_name").create(username="john")
+
+# Model instance with specific session
+user = User(username="john")
+await user.using(session).save()
 ```
 
 #### Benefits of This Pattern
 
-1. **Intuitive API**: All parameters are keyword arguments with equal priority
+1. **Clean API**: No session parameters cluttering method signatures
 2. **Multi-database Support**: Easy to specify which database to use
-3. **Flexible Ordering**: Session parameter can be placed anywhere in the call
-4. **Consistent**: Same pattern across all ObjectsManager and QuerySet methods
+3. **Flexible Session Types**: Accepts AsyncSession instances or database names
+4. **Consistent**: Same pattern across ObjectsManager, QuerySet, and model instances
 
 ## Naming Conventions
 

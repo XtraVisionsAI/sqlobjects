@@ -402,9 +402,9 @@ Objects 模块使用异常系统处理查询和操作错误：
 from .exceptions import DoesNotExist, MultipleObjectsReturned, ValidationError
 
 class ObjectsManager:
-    async def get(self, *args, session=None) -> T:
+    async def get(self, *args) -> T:
         """获取单个对象，使用标准异常"""
-        results = await self.filter(*args).limit(2).all(session)
+        results = await self.filter(*args).limit(2).all()
         
         if not results:
             raise DoesNotExist(f"{self._model.__name__} matching query does not exist")
@@ -414,11 +414,14 @@ class ObjectsManager:
         
         return results[0]
     
-    async def create(self, validate=True, session=None, commit=False, **kwargs) -> T:
+    async def create(self, validate=True, **kwargs) -> T:
         """创建对象，增强验证错误信息"""
         try:
             obj = self._model(**kwargs)
-            await obj.save(session=session, commit=commit, validate=validate)
+            if self._db_or_session:
+                await obj.using(self._db_or_session).save(validate=validate)
+            else:
+                await obj.save(validate=validate)
             return obj
         except ValidationError as e:
             # 增强错误信息

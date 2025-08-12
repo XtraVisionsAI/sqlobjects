@@ -2,26 +2,25 @@
 
 ## API Design Rules
 
-### 1. Session Parameter Pattern
+### 1. Session Management Pattern
 
-All ObjectsManager and QuerySet methods follow a consistent session parameter pattern:
+SQLObjects uses the `using()` method pattern for session specification:
 
 ```python
-async def method_name(
-    self,
-    *args,
-    **kwargs  # session parameter is handled within kwargs
-) -> ReturnType:
-    session = kwargs.pop('session', None) or self._session
-    # ... method implementation
+# Default session usage
+user = await User.objects.create(username="john")
+
+# Specific session usage
+user = await User.objects.using(session).create(username="john")
+user = await User.objects.using("database_name").create(username="john")
 ```
 
 **Key Principles:**
 
-- **Explicit Session Parameter**: Session is always a named parameter for clarity
-- **Optional with Fallback**: Falls back to `self._session` from SessionContextManager
+- **using() Method**: Returns ObjectsManager or ModelProxy bound to specific session
+- **Flexible Session Types**: Accepts AsyncSession instances or database names
 - **Multi-database Support**: Easy to specify which database to use
-- **Type Safety**: Session parameter is properly typed
+- **Clean API**: No session parameters cluttering method signatures
 - **Consistent**: Same pattern across all database operation methods
 
 ### 2. Query Method Categories
@@ -61,7 +60,7 @@ user = await User.objects.get(username="john")
 count = await User.objects.filter(is_active=True).count()
 
 # With specific session
-users = await User.objects.filter(is_active=True).all(session=analytics_session)
+users = await User.objects.using(analytics_session).filter(is_active=True).all()
 ```
 
 ## Field Parameter Guidelines
@@ -407,9 +406,13 @@ ordered_users = User.objects.order_by('-created_at')  # Returns QuerySet
 limited_users = User.objects.limit(10)  # Returns QuerySet
 offset_users = User.objects.offset(20)  # Returns QuerySet
 
-# Relationship loading
+# Relationship loading - string syntax (supported)
 users_with_profile = User.objects.select_related('profile')  # Returns QuerySet
 users_with_posts = User.objects.prefetch_related('posts')  # Returns QuerySet
+
+# Relationship loading - SQLAlchemy expression syntax (recommended)
+users_with_profile = User.objects.select_related(User.profile)  # Returns QuerySet
+users_with_posts = User.objects.prefetch_related(User.posts)  # Returns QuerySet
 
 # Field selection and annotations
 user_subset = User.objects.only('id', 'username')  # Returns QuerySet
@@ -424,6 +427,10 @@ filtered_groups = User.objects.having(func.count() > 5)  # Returns QuerySet
 
 # Locking and options
 locked_users = User.objects.select_for_update()  # Returns QuerySet
+# Using SQLObjects relationship loading (recommended)
+optimized_users = User.objects.select_related(User.profile)  # Returns QuerySet
+
+# Or using SQLAlchemy options directly
 from sqlalchemy.orm import joinedload
 optimized_users = User.objects.options(joinedload(User.profile))  # Returns QuerySet
 
@@ -444,8 +451,8 @@ first_user = await User.objects.first()  # Returns User | None
 last_user = await User.objects.last()  # Returns User | None
 
 # Using specific database session
-user = await User.objects.get(username="john", session=analytics_session)
-users = await User.objects.filter(is_active=True).all(session=main_session)
+user = await User.objects.using(analytics_session).get(username="john")
+users = await User.objects.using(main_session).filter(is_active=True).all()
 
 # Ordering-based retrieval
 earliest = await User.objects.earliest('created_at')  # Returns User | None
@@ -490,9 +497,9 @@ deleted_rows = await User.objects.filter(
 ).delete()  # Returns int
 
 # Exists method
-exists = await User.objects.filter(
+exists = await User.objects.using(analytics_session).filter(
     User.username.like("%admin%")
-).exists(session=analytics_session)  # Returns bool
+).exists()  # Returns bool
 
 # Bulk operations for performance
 mappings = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
@@ -724,20 +731,18 @@ await User.objects.bulk_update(
 try:
     async with ctx_session() as session:
         # All operations in single transaction
-        await User.objects.bulk_update(mappings, session=session)
-        await User.objects.bulk_delete(old_ids, session=session)
+        await User.objects.using(session).bulk_update(mappings)
+        await User.objects.using(session).bulk_delete(old_ids)
         await session.commit()
 except Exception as e:
     # Transaction automatically rolled back
     logger.error(f"Bulk operation failed: {e}")
 
-# Manual commit control
-affected = await User.objects.bulk_update(
-    mappings,
-    commit=False  # Don't auto-commit
-)
-if affected > 0:
-    await session.commit()
-else:
-    await session.rollback()
+# Manual commit control with using() method
+async with ctx_session() as session:
+    affected = await User.objects.using(session).bulk_update(mappings)
+    if affected > 0:
+        await session.commit()
+    else:
+        await session.rollback()
 ```

@@ -8,6 +8,7 @@ chainable query operations.
 from collections.abc import AsyncGenerator, Sequence
 from typing import Any, Generic, TypeVar, Union
 
+from session import SessionContextManager
 from sqlalchemy import and_, asc, delete, desc, func, literal, not_, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, defer, joinedload, selectinload
@@ -173,17 +174,29 @@ class QuerySet(Generic[T]):
     unified session parameter handling for multi-database environments.
     """
 
-    def __init__(self, session: AsyncSession, model: type[T], query: Select | None = None) -> None:
+    def __init__(
+        self, model: type[T], query: Select | None = None, db_or_session: str | AsyncSession | None = None
+    ) -> None:
         """Initialize a new QuerySet instance.
 
         Args:
-            session: Database session for executing queries
             model: Model class this QuerySet operates on
             query: Optional existing SQLAlchemy Select query to build upon
+            db_or_session: Database name or session for executing queries
         """
-        self._session = session
+        self._db_or_session = db_or_session
         self._model = model
         self._query = query if query is not None else select(model)
+
+    @property
+    def _session(self) -> AsyncSession:
+        """获取有效的会话对象"""
+        if self._db_or_session is None:
+            return SessionContextManager.get_session()
+        elif isinstance(self._db_or_session, str):
+            return SessionContextManager.get_session(self._db_or_session)
+        else:
+            return self._db_or_session
 
     # ========================================
     # 查询构建方法 (Query Building Methods)
@@ -214,56 +227,52 @@ class QuerySet(Generic[T]):
                 condition_list.append(condition)
         return condition_list
 
-    def _clone(self, **kwargs) -> "QuerySet[T]":
+    def _clone(self, query=None) -> "QuerySet[T]":
         """Create a QuerySet copy with optional parameter overrides.
 
         Helper method to improve code reusability across QuerySet methods.
 
         Args:
-            **kwargs: Optional parameters including session and query
+           query:  Optional SQLAlchemy Select query to build upon
 
         Returns:
             New QuerySet instance
         """
-        session = kwargs.get("session", self._session)
-        query = kwargs.get("query", self._query)
-        return QuerySet(session, self._model, query)
+        return QuerySet(self._model, query, self._session)
 
-    def filter(self, *conditions, session: AsyncSession | None = None) -> "QuerySet[T]":
+    def filter(self, *conditions) -> "QuerySet[T]":
         """Filter the QuerySet to include only objects matching the given conditions.
 
         Args:
             *conditions: Q objects or SQLAlchemy expressions
-            session: Database session to use (optional)
 
         Returns:
             New QuerySet instance with the filter conditions applied
         """
-        session = session or self._session
+
         condition_list = self._process_conditions(conditions)
 
         if condition_list:
             new_query = self._query.where(and_(*condition_list))
-            return self._clone(session=session, query=new_query)
-        return self._clone(session=session)
+            return self._clone(query=new_query)
+        return self._clone()
 
-    def exclude(self, *conditions, session: AsyncSession | None = None) -> "QuerySet[T]":
+    def exclude(self, *conditions) -> "QuerySet[T]":
         """Exclude objects matching the given conditions from the QuerySet.
 
         Args:
             *conditions: Q objects or SQLAlchemy expressions
-            session: Database session to use (optional)
 
         Returns:
             New QuerySet instance with the exclusion conditions applied
         """
-        session = session or self._session
+
         condition_list = [not_(cond) for cond in self._process_conditions(conditions)]
 
         if condition_list:
             new_query = self._query.where(and_(*condition_list))
-            return self._clone(session=session, query=new_query)
-        return self._clone(session=session)
+            return self._clone(query=new_query)
+        return self._clone()
 
     def order_by(self, *fields) -> "QuerySet[T]":
         """Order the QuerySet results by the specified fields.
@@ -537,25 +546,21 @@ class QuerySet(Generic[T]):
     # 查询执行方法 (Query Execution Methods)
     # ========================================
 
-    async def all(self, session: AsyncSession | None = None) -> list[T]:
+    async def all(self) -> list[T]:
         """Execute the query and return all matching objects as a list.
-
-        Args:
-            session: Database session to use for the query execution
 
         Returns:
             List of all model instances matching the QuerySet conditions
         """
-        session = session or self._session
-        result = await session.execute(self._query)
+
+        result = await self._session.execute(self._query)
         return list(result.scalars())
 
-    async def get(self, *conditions, session: AsyncSession | None = None) -> T:
+    async def get(self, *conditions) -> T:
         """Get a single object matching the given conditions.
 
         Args:
             *conditions: Q objects or SQLAlchemy expressions
-            session: Database session to use for this query
 
         Returns:
             Single model instance
@@ -564,49 +569,41 @@ class QuerySet(Generic[T]):
             DoesNotExist: If no object matches the conditions
             MultipleObjectsReturned: If multiple objects match the conditions
         """
-        session = session or self._session
 
-        results = await self.filter(*conditions).limit(2).all(session)
+        results = await self.filter(*conditions).limit(2).all()
         if not results:
             raise DoesNotExist(f"{self._model.__name__} matching query does not exist")
         if len(results) > 1:
             raise MultipleObjectsReturned(f"Multiple {self._model.__name__} objects returned")
         return results[0]
 
-    async def first(self, session: AsyncSession | None = None) -> T | None:
+    async def first(self) -> T | None:
         """Get the first object matching the QuerySet conditions.
-
-        Args:
-            session: Database session to use for the query execution
 
         Returns:
             First model instance matching the conditions, or None if no matches found
         """
-        session = session or self._session
-        result = await session.execute(self._query)
+
+        result = await self._session.execute(self._query)
         return result.scalars().first()
 
-    async def last(self, session: AsyncSession | None = None) -> T | None:
+    async def last(self) -> T | None:
         """Get the last object matching the QuerySet conditions.
-
-        Args:
-            session: Database session to use for the query execution
 
         Returns:
             Last model instance matching the conditions, or None if no matches found
         """
-        session = session or self._session
+
         # Reverse the query to get the last item
         reversed_query = self._query.order_by(desc(getattr(self._model, "id", literal(1)))).limit(1)
-        result = await session.execute(reversed_query)
+        result = await self._session.execute(reversed_query)
         return result.scalars().first()
 
-    async def earliest(self, *fields, session: AsyncSession | None = None) -> T | None:
+    async def earliest(self, *fields) -> T | None:
         """Get the earliest object based on the specified fields.
 
         Args:
             *fields: Field names to order by for finding the earliest object
-            session: Database session to use for the query execution
 
         Returns:
             Earliest model instance, or None if no objects exist
@@ -615,16 +612,15 @@ class QuerySet(Generic[T]):
             fields = ["id"]
         order_clauses = [asc(getattr(self._model, field.lstrip("-"))) for field in fields]
         query = self._query.order_by(*order_clauses).limit(1)
-        session = session or self._session
-        result = await session.execute(query)
+
+        result = await self._session.execute(query)
         return result.scalars().first()
 
-    async def latest(self, *fields, session: AsyncSession | None = None) -> T | None:
+    async def latest(self, *fields) -> T | None:
         """Get the latest object based on the specified fields.
 
         Args:
             *fields: Field names to order by for finding the latest object
-            session: Database session to use for the query execution
 
         Returns:
             Latest model instance, or None if no objects exist
@@ -633,48 +629,40 @@ class QuerySet(Generic[T]):
             fields = ["id"]
         order_clauses = [desc(getattr(self._model, field.lstrip("-"))) for field in fields]
         query = self._query.order_by(*order_clauses).limit(1)
-        session = session or self._session
-        result = await session.execute(query)
+
+        result = await self._session.execute(query)
         return result.scalars().first()
 
-    async def count(self, session: AsyncSession | None = None) -> int:
+    async def count(self) -> int:
         """Count the number of objects matching the query conditions.
-
-        Args:
-            session: Database session to use
 
         Returns:
             Number of matching objects
         """
-        session = session or self._session
+
         count_query = select(func.count()).select_from(self._model)
         if self._query.whereclause is not None:
             count_query = count_query.where(self._query.whereclause)
-        result = await session.execute(count_query)
+        result = await self._session.execute(count_query)
         return result.scalar_one()
 
-    async def exists(self, session: AsyncSession | None = None) -> bool:
+    async def exists(self) -> bool:
         """Check if any objects match the query conditions.
-
-        Args:
-            session: Database session to use
 
         Returns:
             True if at least one object matches, False otherwise
         """
-        return await self.count(session) > 0
+        return await self.count() > 0
 
-    async def values(self, *fields, session: AsyncSession | None = None) -> list[dict[str, Any]]:
+    async def values(self, *fields) -> list[dict[str, Any]]:
         """Get dictionaries containing only the specified field values.
 
         Args:
             *fields: Field names to include in the result, will returne all fields if not specified.
-            session: Database session to use
 
         Returns:
             List of dictionaries with field names as keys
         """
-        session = session or self._session
 
         if not fields:
             # Return all fields if none specified
@@ -685,19 +673,16 @@ class QuerySet(Generic[T]):
         if self._query.whereclause is not None:
             query = query.where(self._query.whereclause)
 
-        result = await session.execute(query)
+        result = await self._session.execute(query)
         results = result.all()
         return [dict(zip(fields, row, strict=False)) for row in results]
 
-    async def values_list(
-        self, *fields, flat: bool = False, session: AsyncSession | None = None
-    ) -> list[Any] | list[tuple[Any, ...]]:
+    async def values_list(self, *fields, flat: bool = False) -> list[Any] | list[tuple[Any, ...]]:
         """Get list of tuples or single values for the specified fields.
 
         Args:
             *fields: Field names to include
             flat: If True and only one field specified, return flat list of values
-            session: Database session to use
 
         Returns:
             List of tuples (or flat list if flat=True and single field)
@@ -705,30 +690,28 @@ class QuerySet(Generic[T]):
         if not fields:
             raise ValueError("values_list() requires at least one field name")
 
-        session = session or self._session
         columns = [getattr(self._model, field) for field in fields]
         query = select(*columns)
         if self._query.whereclause is not None:
             query = query.where(self._query.whereclause)
 
-        result = await session.execute(query)
+        result = await self._session.execute(query)
         results = result.all()
 
         if flat and len(fields) == 1:
             return [row[0] for row in results]
         return [tuple(row) for row in results]
 
-    async def aggregate(self, session: AsyncSession | None = None, **kwargs) -> dict[str, Any]:
+    async def aggregate(self, **kwargs) -> dict[str, Any]:
         """Perform aggregation operations on the QuerySet.
 
         Args:
-            session: Database session to use for the query execution
             **kwargs: Aggregation expressions with their result aliases
 
         Returns:
             Dictionary mapping aggregation aliases to their computed values
         """
-        session = session or self._session
+
         aggregations = []
         labels = []
 
@@ -744,61 +727,57 @@ class QuerySet(Generic[T]):
         if self._query.whereclause is not None:
             query = query.where(self._query.whereclause)
 
-        result = await session.execute(query)
+        result = await self._session.execute(query)
         first_result = result.first()
         return dict(zip(labels, first_result, strict=False)) if first_result else {}
 
-    async def iterator(
-        self, session: AsyncSession | None = None, memory_cleanup_interval: int = 1000
-    ) -> AsyncGenerator[T, None]:
+    async def iterator(self, memory_cleanup_interval: int = 1000) -> AsyncGenerator[T, None]:
         """Async iterator for processing large datasets.
 
         Args:
-            session: Database session to use
             memory_cleanup_interval: Clear session cache every N items
 
         Yields:
             Model instances one by one
         """
-        session = session or self._session
+
         count = 0
 
-        stream = await session.stream_scalars(self._query)
+        stream = await self._session.stream_scalars(self._query)
         async for item in stream:
             yield item
             count += 1
 
             # Periodic memory cleanup
             if count % memory_cleanup_interval == 0:
-                session.expunge_all()
+                self._session.expunge_all()
 
-    async def get_item(self, key, session: AsyncSession | None = None) -> T | list[T]:
+    async def get_item(self, key) -> T | list[T]:
         """Get items by index or slice.
 
         Args:
             key: Integer index or slice object
-            session: Database session to use
 
         Returns:
             Single object (for integer key) or list of objects (for slice key)
         """
-        session = session or self._session
+
         if isinstance(key, slice):
             start = key.start or 0
             stop = key.stop
             if stop is not None:
                 new_query = self._query.offset(start).limit(stop - start)
-                result = await session.execute(new_query)
+                result = await self._session.execute(new_query)
                 return list(result.scalars().all())
             else:
                 new_query = self._query.offset(start)
-                result = await session.execute(new_query)
+                result = await self._session.execute(new_query)
                 return list(result.scalars().all())
         elif isinstance(key, int):
             if key < 0:
                 raise ValueError("Negative indexing is not supported")
             new_query = self._query.offset(key).limit(1)
-            result = await session.execute(new_query)
+            result = await self._session.execute(new_query)
             item = result.scalars().first()
             if item is None:
                 raise IndexError("Index out of range")
@@ -806,14 +785,13 @@ class QuerySet(Generic[T]):
         else:
             raise TypeError("Invalid key type for indexing")
 
-    async def dates(self, field: str, kind: str, order: str = "ASC", session: AsyncSession | None = None) -> list[Any]:
+    async def dates(self, field: str, kind: str, order: str = "ASC") -> list[Any]:
         """Get unique date list for the specified date field.
 
         Args:
             field: Date field name
             kind: Date precision ('year', 'month', 'day')
             order: Sort order ('ASC' or 'DESC')
-            session: Database session to use
 
         Returns:
             List of unique dates
@@ -821,7 +799,7 @@ class QuerySet(Generic[T]):
         Raises:
             ValueError: If unsupported date kind is specified
         """
-        session = session or self._session
+
         field_obj = getattr(self._model, field)
 
         # Use SQLAlchemy's dialect-aware date truncation
@@ -856,19 +834,16 @@ class QuerySet(Generic[T]):
         else:
             query = query.order_by(asc("date_value"))
 
-        result = await session.execute(query)
+        result = await self._session.execute(query)
         return [row[0] for row in result]
 
-    async def datetimes(
-        self, field: str, kind: str, order: str = "ASC", session: AsyncSession | None = None
-    ) -> list[Any]:
+    async def datetimes(self, field: str, kind: str, order: str = "ASC") -> list[Any]:
         """Get unique datetime list for the specified datetime field.
 
         Args:
             field: Datetime field name
             kind: Time precision ('year', 'month', 'day', 'hour', 'minute', 'second')
             order: Sort order ('ASC' or 'DESC')
-            session: Database session to use
 
         Returns:
             List of unique datetimes
@@ -876,7 +851,7 @@ class QuerySet(Generic[T]):
         Raises:
             ValueError: If unsupported datetime kind is specified
         """
-        session = session or self._session
+
         field_obj = getattr(self._model, field)
 
         # Use SQLAlchemy's dialect-aware datetime truncation
@@ -923,27 +898,23 @@ class QuerySet(Generic[T]):
         else:
             query = query.order_by(asc("datetime_value"))
 
-        result = await session.execute(query)
+        result = await self._session.execute(query)
         return [row[0] for row in result]
 
-    async def explain(
-        self, output: str | None = None, analyze: bool = False, session: AsyncSession | None = None, **options
-    ) -> dict[str, Any]:
+    async def explain(self, output: str | None = None, analyze: bool = False, **options) -> dict[str, Any]:
         """Get query execution plan using EXPLAIN.
 
         Args:
             output: Output format ('json' or 'text', defaults to 'text')
             analyze: Whether to actually execute the query for analysis
-            session: Database session to use
             **options: Other database-specific options
 
         Returns:
             Dictionary containing the query execution plan
         """
-        session = session or self._session
 
         # Detect database dialect
-        dialect_name = session.bind.dialect.name if session.bind else "sqlite"
+        dialect_name = self._session.bind.dialect.name if self._session.bind else "sqlite"
 
         # Build EXPLAIN query
         explain_prefix = self._build_explain_prefix(output, analyze, dialect_name, **options)
@@ -956,7 +927,7 @@ class QuerySet(Generic[T]):
         explain_query = text(f"{explain_prefix}{sql_query}")
 
         # Execute EXPLAIN query
-        result = await session.execute(explain_query)
+        result = await self._session.execute(explain_query)
         raw_result = result.fetchall()
 
         # Normalize return result
@@ -1030,46 +1001,44 @@ class QuerySet(Generic[T]):
             "analyze": "ANALYZE" in str(raw_result) if raw_result else False,
         }
 
-    async def raw(self, sql: str, params: dict | None = None, session: AsyncSession | None = None) -> list[T]:
+    async def raw(self, sql: str, params: dict | None = None) -> list[T]:
         """Execute raw SQL query and return model instances.
 
         Args:
             sql: Raw SQL query string
             params: Query parameters dictionary
-            session: Database session to use
 
         Returns:
             List of model instances created from query results
         """
-        session = session or self._session
+
         query = text(sql)
-        result = await session.execute(query, params or {})
+        result = await self._session.execute(query, params or {})
         return [self._model(**dict(row._mapping)) for row in result]  # noqa
 
     # ========================================
     # 集合操作方法 (Set Operations Methods)
     # ========================================
 
-    async def union(self, *other_qs: "QuerySet[T]", all_: bool = False, session: AsyncSession | None = None) -> list[T]:
+    async def union(self, *other_qs: "QuerySet[T]", all_: bool = False) -> list[T]:
         """Perform union operation on QuerySets.
 
         Args:
             *other_qs: Other QuerySet instances to union with
             all_: If True, use UNION ALL instead of UNION
-            session: Database session to use
 
         Returns:
             List of unique model instances from all QuerySets
         """
         if not other_qs:
-            return await self.all(session)
+            return await self.all()
 
         # Simple implementation: get all results and combine in memory
         all_results = []
         seen_ids = set()
 
         # Process current QuerySet
-        for item in await self.all(session):
+        for item in await self.all():
             item_id = getattr(item, "id", id(item))
             if item_id not in seen_ids:
                 seen_ids.add(item_id)
@@ -1077,7 +1046,7 @@ class QuerySet(Generic[T]):
 
         # Process other QuerySets
         for qs in other_qs:
-            for item in await qs.all(session):
+            for item in await qs.all():
                 item_id = getattr(item, "id", id(item))
                 if all_ or item_id not in seen_ids:
                     if not all_:
@@ -1086,50 +1055,48 @@ class QuerySet(Generic[T]):
 
         return all_results
 
-    async def intersection(self, *other_qs: "QuerySet[T]", session: AsyncSession | None = None) -> list[T]:
+    async def intersection(self, *other_qs: "QuerySet[T]") -> list[T]:
         """Perform intersection operation on QuerySets.
 
         Args:
             *other_qs: Other QuerySet instances to intersect with
-            session: Database session to use
 
         Returns:
             List of model instances present in all QuerySets
         """
         if not other_qs:
-            return await self.all(session)
+            return await self.all()
 
         # Get all objects and IDs from current QuerySet
-        self_results = await self.all(session)
+        self_results = await self.all()
         self_ids = {getattr(item, "id", id(item)) for item in self_results}
 
         # Progressively intersect with each additional QuerySet
         for qs in other_qs:
-            other_results = await qs.all(session)
+            other_results = await qs.all()
             other_ids = {getattr(item, "id", id(item)) for item in other_results}
             self_ids &= other_ids
 
         # Return objects whose IDs are in the final intersection
         return [item for item in self_results if getattr(item, "id", id(item)) in self_ids]
 
-    async def difference(self, *other_qs: "QuerySet[T]", session: AsyncSession | None = None) -> list[T]:
+    async def difference(self, *other_qs: "QuerySet[T]") -> list[T]:
         """Perform difference operation on QuerySets.
 
         Args:
             *other_qs: Other QuerySet instances to subtract from this QuerySet
-            session: Database session to use
 
         Returns:
             List of model instances in this QuerySet but not in others
         """
-        self_results = await self.all(session)
+        self_results = await self.all()
         if not other_qs:
             return self_results
 
         # Collect all IDs to exclude from other QuerySets
         exclude_ids = set()
         for qs in other_qs:
-            other_results = await qs.all(session)
+            other_results = await qs.all()
             exclude_ids.update(getattr(item, "id", id(item)) for item in other_results)
 
         # Return objects whose IDs are not in the exclusion set
@@ -1139,22 +1106,19 @@ class QuerySet(Generic[T]):
     # 数据操作方法 (Data Operations Methods)
     # ========================================
 
-    async def update(self, values: dict, session: AsyncSession | None = None, commit: bool = False) -> int:
+    async def update(self, values: dict) -> int:
         """Perform bulk update on objects matching the query conditions.
 
         Args:
             values: Field values to update
-            session: Database session to use
-            commit: Whether to commit the transaction
 
         Returns:
             Number of affected rows
         """
-        session = session or self._session
 
         # Emit before_update signal
         context = SignalContext(
-            operation=Operation.UPDATE, session=session, model_class=self._model, update_data=values
+            operation=Operation.UPDATE, session=self._session, model_class=self._model, update_data=values
         )
         await self._model._emit_class_signal("before", context)  # type: ignore[attr-defined] # noqa
 
@@ -1170,13 +1134,10 @@ class QuerySet(Generic[T]):
         if self._query.whereclause is not None:
             stmt = stmt.where(self._query.whereclause)
 
-        result = await session.execute(stmt)
+        result = await self._session.execute(stmt)
         affected_count = result.rowcount if result.rowcount is not None else 0
 
-        if commit:
-            await session.commit()
-        else:
-            await session.flush()
+        await self._session.flush()
 
         # Update context and emit after_update signal
         context.affected_count = affected_count
@@ -1184,33 +1145,25 @@ class QuerySet(Generic[T]):
 
         return affected_count
 
-    async def delete(self, session: AsyncSession | None = None, commit: bool = False) -> int:
+    async def delete(self) -> int:
         """Perform bulk delete on objects matching the query conditions.
-
-        Args:
-            session: Database session to use
-            commit: Whether to commit the transaction
 
         Returns:
             Number of deleted rows
         """
-        session = session or self._session
 
         # Emit before_delete signal
-        context = SignalContext(operation=Operation.DELETE, session=session, model_class=self._model)
+        context = SignalContext(operation=Operation.DELETE, session=self._session, model_class=self._model)
         await self._model._emit_class_signal("before", context)  # type: ignore[attr-defined] # noqa
 
         stmt = delete(self._model)
         if self._query.whereclause is not None:
             stmt = stmt.where(self._query.whereclause)
 
-        result = await session.execute(stmt)
+        result = await self._session.execute(stmt)
         affected_count = result.rowcount if result.rowcount is not None else 0
 
-        if commit:
-            await session.commit()
-        else:
-            await session.flush()
+        await self._session.flush()
 
         # Update context and emit after_delete signal
         context.affected_count = affected_count

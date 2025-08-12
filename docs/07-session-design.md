@@ -19,7 +19,11 @@ user = await User.objects.get(username="john")  # 自动创建和管理会话
 
 # 显式会话管理 - 事务控制
 async with ctx_session() as session:
-    await User.objects.create(username="jane", session=session)  # 显式事务边界
+    await User.objects.using(session).create(username="jane")  # 显式事务边界
+
+# 模型实例的会话绑定
+user = User(username="alice")
+await user.using(session).save()  # 使用 ModelProxy 绑定会话
 ```
 
 ### 2. 统一事务和独立事务支持
@@ -56,8 +60,14 @@ SessionContextManager.set_session_factory(analytics_factory, "analytics")
 
 # 跨数据库事务管理
 async with ctx_sessions("main", "analytics") as sessions:
-    await User.objects.create(name="John", session=sessions["main"])
-    await Event.objects.create(action="signup", session=sessions["analytics"])
+    await User.objects.using(sessions["main"]).create(name="John")
+    await Event.objects.using(sessions["analytics"]).create(action="signup")
+
+# 模型实例的多数据库支持
+user = User(name="Bob")
+await user.using(sessions["main"]).save()
+event = Event(action="signup", user_id=user.id)
+await event.using(sessions["analytics"]).save()
 ```
 
 ## 模块架构
@@ -85,15 +95,42 @@ def get_session(db_name: str | None = None) -> AsyncSession:
 
 ### 与其他模块的集成
 
-#### 与 ObjectsManager 的集成
+#### 与 ObjectsManager 和 ModelProxy 的集成
 
-ObjectsManager 通过 `_session` 属性自动获取会话，无需开发者显式管理：
+ObjectsManager 和 ModelProxy 都通过 `using()` 方法支持会话指定：
 
 ```python
+# ObjectsManager 的会话管理
 class ObjectsManager:
+    def using(self, db_or_session: str | AsyncSession) -> "ObjectsManager[T]":
+        """指定数据库名或会话对象"""
+        return ObjectsManager(self._model, db_or_session)
+    
     @property
     def _session(self):
-        return SessionContextManager.get_session()  # 自动获取合适的会话
+        if self._db_or_session is None:
+            return SessionContextManager.get_session()
+        elif isinstance(self._db_or_session, str):
+            return SessionContextManager.get_session(self._db_or_session)
+        else:
+            return self._db_or_session
+
+# ModelProxy 的会话管理
+class ModelProxy(ModelMixin):
+    def __init__(self, instance, db_or_session: str | AsyncSession):
+        self._instance = instance
+        self._db_or_session = db_or_session
+    
+    def _get_session(self) -> AsyncSession:
+        if isinstance(self._db_or_session, str):
+            return SessionContextManager.get_session(self._db_or_session)
+        return self._db_or_session
+
+# 模型实例的 using() 方法
+class ModelMixin:
+    def using(self, db_or_session: str | AsyncSession) -> "ModelProxy":
+        """返回绑定到特定数据库/会话的代理对象"""
+        return ModelProxy(self._get_instance(), db_or_session)
 ```
 
 #### 模块职责分离
@@ -154,14 +191,18 @@ users = await User.objects.filter(is_active=True).all()
 ```python
 # 单个操作的事务控制
 async with ctx_session() as session:
-    user = await User.objects.create(username="jane", session=session)
-    await user.posts.create(title="First Post", session=session)
+    user = await User.objects.using(session).create(username="jane")
+    # 使用 ModelProxy 绑定会话
+    post = Post(title="First Post", author_id=user.id)
+    await post.using(session).save()
     # 自动提交或回滚
 
 # 多数据库事务
 async with ctx_sessions("main", "logs") as sessions:
-    user = await User.objects.create(username="bob", session=sessions["main"])
-    await Log.objects.create(message="User created", session=sessions["logs"])
+    user = await User.objects.using(sessions["main"]).create(username="bob")
+    # 使用 ModelProxy 进行跨数据库操作
+    log = Log(message="User created", user_id=user.id)
+    await log.using(sessions["logs"]).save()
 ```
 
 ### 高级用法
@@ -213,12 +254,12 @@ async def process_batch_isolated(batch_data):
     """模式2：创建独立会话"""
     async with ctx_session() as session:
         for item in batch_data:
-            await User.objects.create(**item, session=session)
+            await User.objects.using(session).create(**item)
 
 async def process_batch_explicit(batch_data, session):
     """模式3：使用显式传递的会话"""
     for item in batch_data:
-        await User.objects.create(**item, session=session)  # 使用显式传递的 session
+        await User.objects.using(session).create(**item)  # 使用显式传递的 session
 ```
 
 #### 三种模式的对比
@@ -257,7 +298,7 @@ async def create_users_batch(users_data: list[UserCreate]):
     async with ctx_session() as session:
         created_users = []
         for user_data in users_data:
-            user = await User.objects.create(**user_data.dict(), session=session)
+            user = await User.objects.using(session).create(**user_data.dict())
             created_users.append(user)
         return created_users
 ```
@@ -299,7 +340,7 @@ async def process_batch_with_retry(batch_data, batch_id, max_retries=3):
         try:
             async with ctx_session() as session:
                 for item in batch_data:
-                    await User.objects.create(**item, session=session)
+                    await User.objects.using(session).create(**item)
                 return f"Batch {batch_id} completed successfully"
         except Exception as e:
             if attempt == max_retries - 1:
@@ -338,7 +379,7 @@ async def process_batch_isolated_explicit(batch_data, batch_id):
     """使用独立会话的批次处理"""
     async with ctx_session() as session:
         for item in batch_data:
-            await User.objects.create(**item, session=session)
+            await User.objects.using(session).create(**item)
         return f"Isolated batch {batch_id} completed"
 ```
 
@@ -367,11 +408,11 @@ async def fault_tolerant_bulk_operation():
 async def complex_mixed_operation():
     async with ctx_session() as main_session:
         # 主要操作使用共享会话
-        await User.objects.create(name="admin", session=main_session)
+        await User.objects.using(main_session).create(name="admin")
         
         # 某些操作需要独立事务
         async with ctx_session() as isolated_session:
-            await Log.objects.create(message="Admin created", session=isolated_session)
+            await Log.objects.using(isolated_session).create(message="Admin created")
         
         # 批量操作显式传递会话
         tasks = [

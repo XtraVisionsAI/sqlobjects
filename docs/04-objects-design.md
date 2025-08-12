@@ -113,21 +113,32 @@ class User(ObjectModel):
 class ObjectsManager(Generic[T]):
     """对象管理器，提供 Django ORM 风格接口"""
     
-    def __init__(self, model_class: type[T]):
+    def __init__(self, model_class: type[T], db_or_session: str | AsyncSession | None = None):
         self._model = model_class
+        self._db_or_session = db_or_session
     
     @property
     def _session(self):
-        return SessionContextManager.get_session()
+        if self._db_or_session is None:
+            return SessionContextManager.get_session()
+        elif isinstance(self._db_or_session, str):
+            return SessionContextManager.get_session(self._db_or_session)
+        else:
+            return self._db_or_session
+    
+    # 会话指定方法
+    def using(self, db_or_session: str | AsyncSession) -> "ObjectsManager[T]":
+        """指定数据库名或会话对象"""
+        return ObjectsManager(self._model, db_or_session)
     
     # 基础查询方法
     def filter(self, *args) -> QuerySet[T]:
         """过滤对象"""
-        return QuerySet(self._session, self._model).filter(*args)
+        return QuerySet(self._model, db_or_session=self._db_or_session).filter(*args)
     
-    async def get(self, *args, session: AsyncSession | None = None) -> T:
+    async def get(self, *args) -> T:
         """获取单个对象"""
-        results = await self.filter(*args).limit(2).all(session)
+        results = await self.filter(*args).limit(2).all()
         if not results:
             raise DoesNotExist(f"{self._model.__name__} matching query does not exist")
         if len(results) > 1:
@@ -141,40 +152,40 @@ ObjectsManager 的方法按功能分为几个主要类别：
 
 ```python
 # 基础查询方法
-async def all(self, session=None) -> list[T]
-async def get(self, *args, session=None) -> T
-async def first(self, session=None) -> T | None
-async def last(self, session=None) -> T | None
-async def earliest(self, *fields, session=None) -> T | None
-async def latest(self, *fields, session=None) -> T | None
-def iterator(self, session=None, memory_cleanup_interval=1000)
-async def get_item(self, key, session=None) -> T | list[T]
-async def dates(self, field, kind, order="ASC", session=None) -> list[Any]
-async def datetimes(self, field, kind, order="ASC", session=None) -> list[Any]
-async def in_bulk(self, id_list=None, field_name="pk", session=None) -> dict[Any, T]
+async def all(self) -> list[T]
+async def get(self, *args) -> T
+async def first(self) -> T | None
+async def last(self) -> T | None
+async def earliest(self, *fields) -> T | None
+async def latest(self, *fields) -> T | None
+def iterator(self, memory_cleanup_interval=1000)
+async def get_item(self, key) -> T | list[T]
+async def dates(self, field, kind, order="ASC") -> list[Any]
+async def datetimes(self, field, kind, order="ASC") -> list[Any]
+async def in_bulk(self, id_list=None, field_name="pk") -> dict[Any, T]
 
 # 创建操作
-async def create(self, validate=True, session=None, commit=False, **kwargs) -> T
-async def bulk_create(self, objects, session=None, commit=False) -> None
+async def create(self, validate=True, **kwargs) -> T
+async def bulk_create(self, objects) -> None
 
 # 获取或创建操作
-async def get_or_create(self, *filters, defaults=None, validate=True, session=None, commit=False) -> tuple[T, bool]
-async def update_or_create(self, *filters, defaults=None, validate=True, session=None, commit=False) -> tuple[T, bool]
+async def get_or_create(self, *filters, defaults=None, validate=True) -> tuple[T, bool]
+async def update_or_create(self, *filters, defaults=None, validate=True) -> tuple[T, bool]
 
 # 批量操作
-async def bulk_update(self, mappings, match_fields=None, batch_size=1000, session=None, commit=False) -> int
-async def bulk_delete(self, ids, id_field="id", batch_size=1000, session=None, commit=False) -> int
-async def delete_all(self, session=None, commit=False, fast=False) -> int
-async def update_all(self, values, session=None, commit=False) -> int
+async def bulk_update(self, mappings, match_fields=None, batch_size=1000) -> int
+async def bulk_delete(self, ids, id_field="id", batch_size=1000) -> int
+async def delete_all(self, fast=False) -> int
+async def update_all(self, values) -> int
 
 # 聚合和统计
-async def count(self, session=None) -> int
-async def aggregate(self, session=None, **kwargs) -> dict[str, Any]
-async def values(self, *fields, session=None) -> list[dict[str, Any]]
-async def values_list(self, *fields, flat=False, session=None) -> list
+async def count(self) -> int
+async def aggregate(self, **kwargs) -> dict[str, Any]
+async def values(self, *fields) -> list[dict[str, Any]]
+async def values_list(self, *fields, flat=False) -> list
 
 # 工具方法
-async def random(self, count=1, session=None) -> list[T]
+async def random(self, count=1) -> list[T]
 
 # QuerySet 快捷方法
 def filter(self, *args) -> QuerySet[T]
@@ -206,15 +217,16 @@ def options(self, *options) -> QuerySet[T]
 
 ### 会话管理集成
 
-#### 统一的会话参数模式
+#### 统一的会话管理模式
 
-所有 ObjectsManager 方法都遵循统一的会话参数处理模式：
+所有 ObjectsManager 方法都通过 using() 方法支持会话指定：
 
 ```python
-async def method_name(self, *args, session: AsyncSession | None = None, **kwargs):
-    """统一的会话参数处理模式"""
-    session = session or self._session
-    # ... 方法实现
+# 使用默认会话
+users = await User.objects.all()
+
+# 使用指定会话
+users = await User.objects.using(session).all()
 ```
 
 #### 多数据库支持
@@ -226,12 +238,11 @@ async def method_name(self, *args, session: AsyncSession | None = None, **kwargs
 users = await User.objects.all()
 
 # 使用特定数据库会话
-analytics_session = get_analytics_session()
-users = await User.objects.all(session=analytics_session)
+users = await User.objects.using(analytics_session).all()
 
 # 跨数据库操作
-main_users = await User.objects.filter(User.is_active == True).all(session=main_session)
-archived_users = await User.objects.filter(User.is_active == False).all(session=archive_session)
+main_users = await User.objects.using(main_session).filter(User.is_active == True).all()
+archived_users = await User.objects.using(archive_session).filter(User.is_active == False).all()
 ```
 
 ### 与其他模块的集成
@@ -287,9 +298,9 @@ ObjectsManager 使用 exceptions 模块处理查询和操作错误，并提供�
 from .exceptions import DoesNotExist, MultipleObjectsReturned, ValidationError
 
 class ObjectsManager:
-    async def get(self, *args, session=None) -> T:
+    async def get(self, *args) -> T:
         """获取单个对象，使用标准异常"""
-        results = await self.filter(*args).limit(2).all(session)
+        results = await self.filter(*args).limit(2).all()
         
         if not results:
             raise DoesNotExist(f"{self._model.__name__} matching query does not exist")
@@ -299,11 +310,14 @@ class ObjectsManager:
         
         return results[0]
     
-    async def create(self, validate=True, session=None, commit=False, **kwargs) -> T:
+    async def create(self, validate=True, **kwargs) -> T:
         """创建对象，支持单个和多个验证错误的增强处理"""
         try:
             obj = self._model(**kwargs)
-            await obj.save(session=session, commit=commit, validate=validate)
+            if self._db_or_session:
+                await obj.using(self._db_or_session).save(validate=validate)
+            else:
+                await obj.save(validate=validate)
             return obj
         except ValidationError as e:
             if not e.is_multiple:
@@ -330,7 +344,8 @@ ObjectsManager 的操作方法集成信号系统，支持批量操作和实例�
 
 ```python
 # 批量操作中的信号触发
-async def bulk_create(self, objects, session=None, commit=False):
+async def bulk_create(self, objects):
+    session = self._session
     context = SignalContext(
         operation=Operation.SAVE, 
         session=session, 
@@ -348,11 +363,12 @@ async def bulk_create(self, objects, session=None, commit=False):
     await self._model._emit_class_signal("after", context)
 
 # update_or_create 中的实例信号触发
-async def update_or_create(self, *filters, defaults=None, validate=True, session=None, commit=False):
+async def update_or_create(self, *filters, defaults=None, validate=True):
     try:
-        obj = await queryset.get(session=session)
+        obj = await self.filter(*filters).get()
         if defaults:
             # 为更新操作发送信号
+            session = self._session
             context = SignalContext(
                 operation=Operation.SAVE, 
                 session=session, 
@@ -369,7 +385,7 @@ async def update_or_create(self, *filters, defaults=None, validate=True, session
         return obj, False
     except DoesNotExist:
         # 创建新对象时会通过 create() 方法自动触发信号
-        return await self.create(validate=validate, session=session, commit=commit, **create_kwargs), True
+        return await self.create(validate=validate, **defaults), True
 ```
 
 #### 模块职责分离
@@ -387,7 +403,7 @@ async def update_or_create(self, *filters, defaults=None, validate=True, session
 ```python
 # 获取所有对象
 users = await User.objects.all()
-users = await User.objects.all(session=custom_session)
+users = await User.objects.using(custom_session).all()
 
 # 获取单个对象
 user = await User.objects.get(User.id == 1)
@@ -427,11 +443,10 @@ user = await User.objects.create(
     validate=False
 )
 
-# 创建并提交事务
-user = await User.objects.create(
+# 使用指定会话创建
+user = await User.objects.using(analytics_session).create(
     name="John",
-    email="john@example.com",
-    commit=True
+    email="john@example.com"
 )
 
 # 批量创建
@@ -626,6 +641,9 @@ user, created = await User.objects.get_or_create(
     User.name == "John",
     defaults={"age": 30}
 )  # 获取或创建
+
+# 使用指定会话
+user = await User.objects.using(analytics_session).create(name="Bob", age=30)
 ```
 
 ### 复杂用法
@@ -732,6 +750,11 @@ await User.objects.delete_all(fast=True)
 affected = await User.objects.update_all({
     "status": "migrated",
     "updated_at": datetime.now()
+})
+
+# 使用指定会话更新
+affected = await User.objects.using(analytics_session).update_all({
+    "status": "migrated"
 })
 ```
 

@@ -4,7 +4,7 @@ from sqlalchemy import (
     and_,
     select,
 )
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_object_session
 from sqlalchemy.orm import DeclarativeBase
 
 from .config import ConfigParser, ModelConfig
@@ -18,6 +18,7 @@ from .utils.pattern import pluralize
 
 __all__ = [
     "ObjectModel",
+    "ModelProxy",
 ]
 
 
@@ -27,6 +28,84 @@ M = TypeVar("M", bound="ModelMixin")
 
 class ModelMixin(SignalMixin):
     """Mixin class that adds instance methods and validation capabilities to models."""
+
+    # ========== Private Interface Methods ==========
+
+    def _get_session(self) -> AsyncSession:
+        """Get the effective session for database operations."""
+        raise NotImplementedError("Subclasses must implement _get_session()")
+
+    def _get_model_class(self) -> type:
+        """Get the model class for this instance."""
+        raise NotImplementedError("Subclasses must implement _get_model_class()")
+
+    def _get_instance(self):
+        """Get the actual model instance."""
+        raise NotImplementedError("Subclasses must implement _get_instance()")
+
+    # ========== Unified Signal and Validation Methods ==========
+
+    async def _emit_signal(self, timing: str, context: SignalContext):
+        """Emit signal using the actual instance."""
+        instance = self._get_instance()
+        if hasattr(instance, "_emit_signal") and hasattr(SignalMixin, "_emit_signal"):
+            await SignalMixin._emit_signal(instance, timing, context)
+
+    def _get_field_names(self) -> list[str]:
+        """Get field names from the actual instance."""
+        instance = self._get_instance()
+        if hasattr(instance, "__table__"):
+            return [col.name for col in instance.__table__.columns]
+        return []
+
+    def _get_column_validators(self, field_name: str) -> list:
+        """Get column validators from the actual instance."""
+        model_class = self._get_model_class()
+        column_validators = []
+
+        if hasattr(model_class, field_name):
+            field_attr = getattr(model_class, field_name)
+
+            if hasattr(field_attr, "_sqlobjects_validators"):
+                column_validators = field_attr._sqlobjects_validators or []  # noqa
+            elif hasattr(field_attr, "column") and hasattr(field_attr.column, "info"):
+                if "_validators" in field_attr.column.info:
+                    column_validators = field_attr.column.info["_validators"]
+            elif hasattr(field_attr, "property"):
+                if hasattr(field_attr.property, "columns"):
+                    for col in field_attr.property.columns:
+                        if hasattr(col, "info") and "_validators" in col.info:
+                            column_validators = col.info["_validators"]
+                            break
+                elif hasattr(field_attr.property, "info") and "_validators" in field_attr.property.info:
+                    column_validators = field_attr.property.info["_validators"]
+
+        return column_validators
+
+    def _temporarily_disable_sqlalchemy_validators(self) -> dict[str, Any]:
+        """Temporarily disable SQLAlchemy validators on the model class."""
+        model_class = self._get_model_class()
+        original_validators = {}
+
+        for attr_name in dir(model_class):
+            attr = getattr(model_class, attr_name)
+            if hasattr(attr, "__validates__"):
+                original_validators[attr_name] = attr
+                setattr(model_class, attr_name, lambda _, key, value: value)
+
+        return original_validators
+
+    def _restore_sqlalchemy_validators(self, original_validators: dict[str, Any]) -> None:
+        """Restore SQLAlchemy validators on the model class."""
+        model_class = self._get_model_class()
+        for attr_name, original_method in original_validators.items():
+            setattr(model_class, attr_name, original_method)
+
+    # ========== Using Method ==========
+
+    def using(self, db_or_session: str | AsyncSession) -> "ModelProxy":
+        """Return a proxy bound to specific database/session."""
+        return ModelProxy(self._get_instance(), db_or_session)
 
     # ========== Validation Methods ==========
 
@@ -40,6 +119,8 @@ class ModelMixin(SignalMixin):
             ValidationError: If any field validation fails
         """
         error_collector = ValidationErrorCollector()
+        instance = self._get_instance()
+        model_class = self._get_model_class()
 
         # Determine which fields to validate
         field_names = fields if fields is not None else self._get_field_names()
@@ -47,11 +128,11 @@ class ModelMixin(SignalMixin):
         # Validate each field using its registered validators
         for field_name in field_names:
             # Skip fields that don't exist on the model
-            if not hasattr(self, field_name):
+            if not hasattr(instance, field_name):
                 continue
 
             # Get validators added through add_field_validator class method
-            class_validators = getattr(self.__class__, f"_validators_{field_name}", [])
+            class_validators = getattr(model_class, f"_validators_{field_name}", [])
 
             # Get validators passed through column() function
             column_validators = self._get_column_validators(field_name)
@@ -60,7 +141,7 @@ class ModelMixin(SignalMixin):
             all_validators = class_validators + column_validators
 
             if all_validators:
-                value = getattr(self, field_name, None)
+                value = getattr(instance, field_name, None)
                 for validator in all_validators:
                     try:
                         validator(value)
@@ -73,88 +154,6 @@ class ModelMixin(SignalMixin):
 
         error_collector.raise_if_errors()
 
-    def _get_field_names(self) -> list[str]:
-        """Get all field names defined on the model.
-
-        This method extracts field names from the SQLAlchemy table metadata,
-        providing a list of all columns that can be validated. It's used
-        internally by the validation system to determine which fields to
-        validate when no specific field list is provided.
-
-        The method handles:
-        - Models with __table__ attribute (normal case)
-        - Models without __table__ (abstract models, edge cases)
-        - Empty field lists for models without columns
-
-        Returns:
-            List of field names from the model's table columns, or empty list
-            if the model has no table (e.g., abstract models)
-
-        Examples:
-            >>> class User(ObjectModel):
-            ...     id: Column[int] = int_column(primary_key=True)
-            ...     name: Column[str] = str_column()
-            >>> user = User()
-            >>> user._get_field_names()  # ['id', 'name']
-        """
-        if hasattr(self, "__table__"):
-            return [col.name for col in self.__table__.columns]  # type: ignore
-        return []
-
-    def _get_column_validators(self, field_name: str) -> list:
-        """Get validators that were registered for a field through the column() function.
-
-        This method retrieves validators that were attached to a field during
-        field definition using the validators parameter in column() or shortcut
-        functions like str_column(validators=[...]).
-
-        The method checks multiple locations where validators might be stored:
-        1. Direct attribute storage (_sqlobjects_validators)
-        2. SQLAlchemy column info metadata (_validators key)
-        3. Handles cases where validators are not found
-
-        Args:
-            field_name: Name of the field to get validators for
-
-        Returns:
-            List of validator functions for the field, or empty list if no
-            validators are found for the specified field
-
-        Examples:
-            >>> class User(ObjectModel):
-            ...     email: Column[str] = str_column(validators=[validate_email()])
-            >>> user = User()
-            >>> validators = user._get_column_validators("email")
-            >>> len(validators)  # 1 (the email validator)
-        """
-        column_validators = []
-
-        if hasattr(self.__class__, field_name):
-            field_attr = getattr(self.__class__, field_name)
-
-            # Method 1: Validators stored directly on the field attribute
-            if hasattr(field_attr, "_sqlobjects_validators"):
-                column_validators = field_attr._sqlobjects_validators or []  # noqa
-
-            # Method 2: Validators stored in SQLAlchemy MappedColumn info
-            elif hasattr(field_attr, "column") and hasattr(field_attr.column, "info"):
-                if "_validators" in field_attr.column.info:
-                    column_validators = field_attr.column.info["_validators"]
-
-            # Method 3: Validators stored in SQLAlchemy column info (legacy support)
-            elif hasattr(field_attr, "property"):
-                # For MappedColumn, check the column info directly
-                if hasattr(field_attr.property, "columns"):
-                    for col in field_attr.property.columns:
-                        if hasattr(col, "info") and "_validators" in col.info:
-                            column_validators = col.info["_validators"]
-                            break
-                # For direct column access
-                elif hasattr(field_attr.property, "info") and "_validators" in field_attr.property.info:
-                    column_validators = field_attr.property.info["_validators"]
-
-        return column_validators
-
     def validate(self) -> None:
         """Model-level validation hook that subclasses can override.
 
@@ -165,7 +164,10 @@ class ModelMixin(SignalMixin):
         Raises:
             ValidationError: If model-level validation fails
         """
-        pass
+        # Default implementation - subclasses can override
+        instance = self._get_instance()
+        if hasattr(instance, "validate") and instance.validate is not self.validate:
+            instance.validate()
 
     def validate_all(self, fields: list[str] | None = None) -> None:
         """Execute complete validation including both field-level and model-level checks.
@@ -240,21 +242,14 @@ class ModelMixin(SignalMixin):
         ensure that field validators are properly registered.
         """
         # Only call setup_validators if it's been overridden by the subclass
-        if cls.setup_validators is not ObjectModel.setup_validators:
+        if hasattr(cls, "setup_validators") and cls.setup_validators is not ModelMixin.setup_validators:
             cls.setup_validators()
 
     # ========== Instance Operations ==========
-    async def save(
-        self,
-        session: AsyncSession | None = None,
-        commit: bool = False,
-        validate: bool = True,
-    ):
+    async def save(self, validate: bool = True):
         """Validate and save the model instance to the database.
 
         Args:
-            session: Database session to use
-            commit: Whether to commit the transaction
             validate: Whether to execute all validation (both SQLObjects and SQLAlchemy validators)
 
         Returns:
@@ -266,12 +261,14 @@ class ModelMixin(SignalMixin):
             DatabaseError: If database connection or transaction fails
             AttributeError: If model fields are not properly defined
         """
-        session = session or SessionContextManager.get_session()
+        session = self._get_session()
+        instance = self._get_instance()
+        model_class = self._get_model_class()
 
         if validate:
             self.validate_all()
 
-        context = SignalContext(operation=Operation.SAVE, session=session, model_class=self.__class__, instance=self)
+        context = SignalContext(operation=Operation.SAVE, session=session, model_class=model_class, instance=instance)
         await self._emit_signal("before", context)
 
         original_validators: dict[str, Any] = {}
@@ -279,83 +276,74 @@ class ModelMixin(SignalMixin):
             original_validators = self._temporarily_disable_sqlalchemy_validators()
 
         try:
-            session.add(self)
-            if commit:
-                await session.commit()
-                await session.refresh(self)
-            else:
-                await session.flush()
+            session.add(instance)
+            await session.flush()
         finally:
             if not validate and original_validators:
                 self._restore_sqlalchemy_validators(original_validators)
             await self._emit_signal("after", context)
 
-        return self  # noqa
+        return self
 
-    async def delete(self, session: AsyncSession | None = None, commit: bool = False):
+    async def delete(self):
         """Delete this model instance from the database.
-
-        Args:
-            session: Database session to use
-            commit: Whether to commit the transaction
 
         Raises:
             IntegrityError: If foreign key constraints prevent deletion
             DatabaseError: If database connection or transaction fails
             AttributeError: If the instance is not properly initialized
         """
-        session = session or SessionContextManager.get_session()
+        session = self._get_session()
+        instance = self._get_instance()
+        model_class = self._get_model_class()
 
-        context = SignalContext(operation=Operation.DELETE, session=session, model_class=self.__class__, instance=self)
+        context = SignalContext(operation=Operation.DELETE, session=session, model_class=model_class, instance=instance)
         await self._emit_signal("before", context)
 
-        await session.delete(self)
-        if commit:
-            await session.commit()
-        else:
-            await session.flush()
+        await session.delete(instance)
+        await session.flush()
 
         await self._emit_signal("after", context)
 
-    async def refresh(self, session: AsyncSession | None = None):
+    async def refresh(self):
         """Refresh this instance with the latest data from the database.
-
-        Args:
-            session: Database session to use
 
         Returns:
             The refreshed model instance
         """
-        session = session or SessionContextManager.get_session()
+        session = self._get_session()
+        instance = self._get_instance()
+
         await session.flush()
-        await session.refresh(self)
+        await session.refresh(instance)
         return self
 
-    async def refresh_from_db(self, fields: list[str] | None = None, session: AsyncSession | None = None):
+    async def refresh_from_db(self, fields: list[str] | None = None):
         """Refresh specific fields from the database without affecting other fields.
 
         Args:
             fields: List of specific fields to refresh, if None refreshes all fields
-            session: Database session to use
 
         Returns:
             The refreshed model instance
         """
-        session = session or SessionContextManager.get_session()
+        session = self._get_session()
+        instance = self._get_instance()
+        model_class = self._get_model_class()
 
-        pk_columns = list(self.__table__.primary_key)  # type: ignore
-        pk_conditions = {col.name: getattr(self, col.name) for col in pk_columns}
+        pk_columns = list(model_class.__table__.primary_key)  # noqa
+        pk_conditions = {col.name: getattr(instance, col.name) for col in pk_columns}
 
         # Always select specific columns to avoid identity map issues
         if fields:
             # Select only the specified fields
-            columns_to_select = [getattr(self.__class__, field) for field in fields]
+            columns_to_select = [getattr(model_class, field) for field in fields]
         else:
             # Select all columns
-            columns_to_select = [getattr(self.__class__, col.name) for col in self.__table__.columns]  # type: ignore
+            columns_to_select = [getattr(model_class, col.name) for col in model_class.__table__.columns]  # noqa
 
         query = select(*columns_to_select)
-        conditions = [getattr(self.__class__, k) == v for k, v in pk_conditions.items()]
+        conditions = [getattr(model_class, k) == v for k, v in pk_conditions.items()]
         query = query.where(and_(*conditions))
 
         # Execute query and get fresh data
@@ -366,16 +354,17 @@ class ModelMixin(SignalMixin):
             if fields:
                 # Update only requested fields
                 for i, field in enumerate(fields):
-                    setattr(self, field, fresh_data[i])
+                    setattr(instance, field, fresh_data[i])
             else:
                 # Update all fields
-                all_columns = [col.name for col in self.__table__.columns]  # type: ignore
+                all_columns = [col.name for col in model_class.__table__.columns]  # noqa
                 for i, col_name in enumerate(all_columns):
-                    setattr(self, col_name, fresh_data[i])
+                    setattr(instance, col_name, fresh_data[i])
 
         return self
 
     # ========== Data Conversion ==========
+
     def to_dict(self, include: list[str] | None = None, exclude: list[str] | None = None) -> dict[str, Any]:
         """Convert the model instance to a dictionary, similar to pydantic's model_dump method.
 
@@ -386,10 +375,13 @@ class ModelMixin(SignalMixin):
         Returns:
             Dictionary containing the model data
         """
-        if not hasattr(self, "__table__"):
+        instance = self._get_instance()
+        model_class = self._get_model_class()
+
+        if not hasattr(model_class, "__table__"):
             return {}
 
-        all_fields = {col.name for col in self.__table__.columns}  # type: ignore
+        all_fields = {col.name for col in model_class.__table__.columns}  # noqa
 
         if include is not None:
             fields = set(include) & all_fields
@@ -401,120 +393,74 @@ class ModelMixin(SignalMixin):
 
         result = {}
         for field in fields:
-            value = getattr(self, field, None)
+            value = getattr(instance, field, None)
             result[field] = value
 
         return result
 
-    @classmethod
-    def from_dict(cls: type[M], data: dict[str, Any], validate: bool = True) -> M:
-        """Create a model instance from a dictionary, similar to pydantic's model_validate method.
 
-        Args:
-            data: Dictionary containing model data
-            validate: Whether to execute validation
+class ModelProxy(ModelMixin):
+    """Proxy class that wraps a model instance with specific session binding."""
 
-        Returns:
-            Created model instance
+    def __init__(self, instance, db_or_session: str | AsyncSession):
+        self._instance = instance
+        self._db_or_session = db_or_session
+        self._session_attached = False
 
-        Raises:
-            ValidationError: If validation fails and validate=True
-        """
-        if not hasattr(cls, "__table__"):
-            return cls()
+    # ========== Private Interface Implementation ==========
 
-        all_fields = {col.name for col in cls.__table__.columns}  # type: ignore
-        filtered_data = {k: v for k, v in data.items() if k in all_fields}
+    def _get_session(self) -> AsyncSession:
+        if isinstance(self._db_or_session, str):
+            session = SessionContextManager.get_session(self._db_or_session)
+        else:
+            session = self._db_or_session
 
-        for col in cls.__table__.columns:  # type: ignore
-            if col.name not in filtered_data and col.default is not None:
-                if col.default.is_scalar:
-                    filtered_data[col.name] = col.default.arg
+        self._ensure_session_attachment(session)
+        return session
 
-        instance = cls(**filtered_data)
+    def _get_model_class(self) -> type:
+        return self._instance.__class__
 
-        if validate:
-            instance.validate_all()
+    def _get_instance(self):
+        return self._instance
 
-        return instance
+    # ========== Session Management ==========
 
-    # ========== Private Helper Methods ==========
-    def _temporarily_disable_sqlalchemy_validators(self) -> dict[str, Any]:
-        """Temporarily disable SQLAlchemy validators when validation is disabled.
+    def _ensure_session_attachment(self, session: AsyncSession) -> None:
+        """Ensure instance is properly attached to the specified session."""
+        if self._session_attached:
+            return
 
-        This method finds all @validates decorated methods on the model class
-        and temporarily replaces them with no-op functions. This is used when
-        save(validate=False) is called to bypass all validation including
-        SQLAlchemy's built-in validators.
+        current_session = async_object_session(self._instance)
 
-        The method works by:
-        1. Scanning the class for methods with __validates__ attribute
-        2. Storing references to original validator methods
-        3. Replacing them with lambda functions that return values unchanged
-        4. Returning the original methods for later restoration
+        if current_session is None:
+            session.add(self._instance)
+        elif current_session is not session:
+            self._handle_session_migration(current_session, session)
 
-        Returns:
-            Dictionary mapping validator method names to their original implementations
-            for later restoration via _restore_sqlalchemy_validators()
+        self._session_attached = True
 
-        Note:
-            This is an internal method used by the save() operation and should not
-            be called directly. Always use save(validate=False) instead.
+    def _handle_session_migration(self, old_session: AsyncSession, new_session: AsyncSession) -> None:
+        """Handle instance migration between different sessions."""
+        try:
+            old_session.expunge(self._instance)
+        except Exception:  # noqa
+            pass
 
-        Examples:
-            >>> # Internal usage during save(validate=False)
-            >>> original_validators = instance._temporarily_disable_sqlalchemy_validators()
-            >>> # ... perform database operation ...
-            >>> instance._restore_sqlalchemy_validators(original_validators)
-        """
-        original_validators = {}
+        new_session.add(self._instance)
 
-        # Scan all class attributes for SQLAlchemy validators
-        for attr_name in dir(self.__class__):
-            attr = getattr(self.__class__, attr_name)
-            # Check if attribute has __validates__ (SQLAlchemy validator marker)
-            if hasattr(attr, "__validates__"):
-                # Store original validator for later restoration
-                original_validators[attr_name] = attr
-                # Replace with no-op function that just returns the value unchanged
-                setattr(self.__class__, attr_name, lambda _, key, value: value)
+    # ========== Attribute Proxy ==========
 
-        return original_validators
+    def __getattr__(self, name):
+        """Proxy attribute access to the wrapped instance."""
+        return getattr(self._instance, name)
 
-    def _restore_sqlalchemy_validators(self, original_validators: dict[str, Any]) -> None:
-        """Restore SQLAlchemy validators to their original implementations.
-
-        This method restores SQLAlchemy validator methods that were temporarily
-        disabled by _temporarily_disable_sqlalchemy_validators(). It ensures
-        that the model class returns to its normal validation state after
-        a save(validate=False) operation.
-
-        The restoration process:
-        1. Iterates through the provided original validators dictionary
-        2. Restores each validator method to its original implementation
-        3. Ensures the class validation behavior returns to normal
-
-        Args:
-            original_validators: Dictionary mapping validator method names to their
-                               original implementations, as returned by
-                               _temporarily_disable_sqlalchemy_validators()
-
-        Note:
-            This is an internal method used by the save() operation and should not
-            be called directly. It's automatically called in the finally block
-            of save() operations to ensure validators are always restored.
-
-        Examples:
-            >>> # Internal usage during save(validate=False)
-            >>> original_validators = instance._temporarily_disable_sqlalchemy_validators()
-            >>> try:
-            ...     # ... perform database operation ...
-            ... finally:
-            ...     instance._restore_sqlalchemy_validators(original_validators)
-        """
-        # Restore each validator method to its original implementation
-        for attr_name, original_method in original_validators.items():
-            setattr(self.__class__, attr_name, original_method)
+    def __setattr__(self, name, value):
+        """Proxy attribute setting to the wrapped instance."""
+        if name.startswith("_"):
+            super().__setattr__(name, value)
+        else:
+            setattr(self._instance, name, value)
 
 
 class ObjectModel(DeclarativeBase, ModelMixin):
@@ -522,6 +468,17 @@ class ObjectModel(DeclarativeBase, ModelMixin):
 
     __abstract__ = True
     _config_cache: dict[type, ModelConfig] = {}
+
+    # ========== Private Interface Implementation ==========
+
+    def _get_session(self) -> AsyncSession:
+        return SessionContextManager.get_session()
+
+    def _get_model_class(self) -> type:
+        return self.__class__
+
+    def _get_instance(self):
+        return self
 
     def __init_subclass__(cls, **kwargs):
         """Process subclass initialization with configuration parsing and setup.
@@ -695,3 +652,37 @@ class ObjectModel(DeclarativeBase, ModelMixin):
             "verbose_name_plural": cls.get_verbose_name_plural(),
             "description": cls.get_description(),
         }
+
+    # ========== Data Conversion ==========
+
+    @classmethod
+    def from_dict(cls: type[M], data: dict[str, Any], validate: bool = True) -> M:
+        """Create a model instance from a dictionary, similar to pydantic's model_validate method.
+
+        Args:
+            data: Dictionary containing model data
+            validate: Whether to execute validation
+
+        Returns:
+            Created model instance
+
+        Raises:
+            ValidationError: If validation fails and validate=True
+        """
+        if not hasattr(cls, "__table__"):
+            return cls()
+
+        all_fields = {col.name for col in cls.__table__.columns}  # type: ignore
+        filtered_data = {k: v for k, v in data.items() if k in all_fields}
+
+        for col in cls.__table__.columns:  # type: ignore
+            if col.name not in filtered_data and col.default is not None:
+                if col.default.is_scalar:
+                    filtered_data[col.name] = col.default.arg
+
+        instance = cls(**filtered_data)
+
+        if validate:
+            instance.validate_all()
+
+        return instance
