@@ -1,13 +1,19 @@
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import CheckConstraint, Index, UniqueConstraint
 
+from .utils.naming import to_snake_case
+from .utils.pattern import pluralize
+
 
 __all__ = [
     "ModelConfig",
-    "ConfigParser",
+    "ConfigManager",
+    "get_model_config",
+    "process_model_config",
     "index",
     "constraint",
     "unique",
@@ -26,70 +32,88 @@ __all__ = [
 ]
 
 
+# Constants
+_DB_PREFIX_MAPPING = {
+    "mysql_": ("mysql", 6),
+    "postgresql_": ("postgresql", 11),
+    "sqlite_": ("sqlite", 7),
+}
+
+_GENERIC_DB_NAME = "generic"
+
+_INDEX_PREFIXES = {
+    "unique": "uq",
+    "regular": "idx",
+}
+
+_CONSTRAINT_PREFIXES = {
+    "check": "ck",
+    "unique": "uq",
+}
+
+_SQLALCHEMY_ATTRS = {
+    "abstract": "__abstract__",
+    "tablename": "__tablename__",
+    "table_args": "__table_args__",
+}
+
+_DEFAULT_MYSQL_ENGINE = "InnoDB"
+_DEFAULT_CHARSET = "utf8mb4"
+_DEFAULT_CONSTRAINT_NAME = "ck_constraint"
+
+_FIELD_NAME_PATTERN = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b")
+
+
+@dataclass
+class _RawModelConfig:
+    """Raw model configuration with optional fields for parsing phase."""
+
+    table_name: str | None = None
+    verbose_name: str | None = None
+    verbose_name_plural: str | None = None
+    ordering: list[str] = field(default_factory=list)
+    abstract: bool = False
+    indexes: list[Index] = field(default_factory=list)
+    constraints: list[CheckConstraint | UniqueConstraint] = field(default_factory=list)
+    description: str | None = None
+    db_options: dict[str, dict[str, Any]] = field(default_factory=dict)
+    custom: dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass
 class ModelConfig:
-    """Comprehensive model configuration class for SQLObjects models.
+    """Complete model configuration with all required fields filled.
 
     This dataclass holds all configuration options that can be applied to a model,
     including basic settings, database constraints, metadata, and database-specific
-    optimizations. It supports configuration from both class attributes and
-    Config inner classes.
+    optimizations. All required fields are guaranteed to have values.
 
     Attributes:
-        table_name: Custom database table name (overrides default lowercase class name)
+        table_name: Database table name (never None after processing)
+        verbose_name: Human-readable singular name for the model (never None)
+        verbose_name_plural: Human-readable plural name for the model (never None)
         ordering: Default ordering for queries (e.g., ['-created_at', 'name'])
         abstract: Whether this is an abstract model (no database table created)
         indexes: List of database indexes to create for the table
         constraints: List of database constraints (check, unique) for the table
-        verbose_name: Human-readable singular name for the model
-        verbose_name_plural: Human-readable plural name for the model
-        description: Detailed description of the model's purpose
-        permissions: List of permission tuples for access control
+        description: Detailed description of the model's purpose (can be None)
         db_options: Database-specific configuration options by dialect
         custom: Custom configuration values for application-specific use
-
-    Examples:
-        Basic configuration:
-        >>> config = ModelConfig(
-        ...     table_name="user_accounts", ordering=["-created_at"], verbose_name="User Account"
-        ... )
-
-        With database-specific options:
-        >>> config = ModelConfig(
-        ...     db_options={
-        ...         "mysql": {"engine": "InnoDB", "charset": "utf8mb4"},
-        ...         "postgresql": {"tablespace": "fast_storage"},
-        ...     }
-        ... )
     """
 
-    # Basic configuration
-    table_name: str | None = None
+    table_name: str
+    verbose_name: str
+    verbose_name_plural: str
     ordering: list[str] = field(default_factory=list)
     abstract: bool = False
-
-    # Index configuration
     indexes: list[Index] = field(default_factory=list)
-
-    # Constraint configuration
     constraints: list[CheckConstraint | UniqueConstraint] = field(default_factory=list)
-
-    # Metadata (Config class only)
-    verbose_name: str | None = None
-    verbose_name_plural: str | None = None
     description: str | None = None
-
-    # Permissions (Config class only)
-    permissions: list[tuple[str, str]] = field(default_factory=list)
-
-    # Database-specific configuration
     db_options: dict[str, dict[str, Any]] = field(default_factory=dict)
-
-    # Custom configuration (Config class only)
     custom: dict[str, Any] = field(default_factory=dict)
 
 
-class ConfigParser:
+class _ConfigParser:
     """Parser for extracting model configuration from various sources.
 
     This class handles parsing configuration from multiple sources including
@@ -97,27 +121,26 @@ class ConfigParser:
     Config inner classes, then merges them with proper precedence.
     """
 
-    def parse_config_class(self, config_class: type) -> ModelConfig:  # noqa: method mayby static
+    def parse_config_class(self, config_class: type) -> _RawModelConfig:  # noqa: method mayby static
         """Parse configuration from a Config inner class.
 
         Extracts all configuration attributes from a Config inner class and
-        returns a ModelConfig instance with the parsed values.
+        returns a _RawModelConfig instance with the parsed values.
 
         Args:
             config_class: The Config inner class to parse
 
         Returns:
-            ModelConfig instance with parsed configuration
+            _RawModelConfig instance with parsed configuration
 
         Examples:
             >>> class MyModelConfig:
             ...     table_name = "custom_table"
             ...     ordering = ["-created_at"]
             ...     verbose_name = "My Model"
-            >>> parser = ConfigParser()
-            >>> config = parser.parse_config_class(MyModelConfig)
+            # This method is used internally by ConfigManager
         """
-        config = ModelConfig()
+        config = _RawModelConfig()
 
         # Basic configuration
         config.table_name = getattr(config_class, "table_name", None)
@@ -135,9 +158,6 @@ class ConfigParser:
         config.verbose_name_plural = getattr(config_class, "verbose_name_plural", None)
         config.description = getattr(config_class, "description", None)
 
-        # Permissions
-        config.permissions = getattr(config_class, "permissions", [])
-
         # Database-specific configuration
         config.db_options = getattr(config_class, "db_options", {})
 
@@ -146,7 +166,7 @@ class ConfigParser:
 
         return config
 
-    def parse_class_attributes(self, model_class: type) -> ModelConfig:
+    def parse_class_attributes(self, model_class: type) -> _RawModelConfig:
         """Parse configuration from SQLAlchemy built-in class attributes.
 
         Extracts configuration from standard SQLAlchemy attributes like
@@ -156,54 +176,56 @@ class ConfigParser:
             model_class: The model class to parse attributes from
 
         Returns:
-            ModelConfig instance with parsed SQLAlchemy configuration
+            _RawModelConfig instance with parsed SQLAlchemy configuration
 
         Examples:
             >>> class MyModel:
             ...     __tablename__ = "my_table"
             ...     __abstract__ = True
             ...     __table_args__ = (Index("idx_name", "name"),)
-            >>> parser = ConfigParser()
-            >>> config = parser.parse_class_attributes(MyModel)
+            # This method is used internally by ConfigManager
         """
-        config = ModelConfig()
+        config = _RawModelConfig()
 
         # Only parse SQLAlchemy built-in attributes
-        config.table_name = getattr(model_class, "__tablename__", None)
-        config.abstract = "__abstract__" in model_class.__dict__ and model_class.__dict__["__abstract__"]
+        config.table_name = getattr(model_class, _SQLALCHEMY_ATTRS["tablename"], None)
+        config.abstract = (
+            _SQLALCHEMY_ATTRS["abstract"] in model_class.__dict__
+            and model_class.__dict__[_SQLALCHEMY_ATTRS["abstract"]]
+        )
 
         # Parse __table_args__ if present
-        table_args = getattr(model_class, "__table_args__", None)
+        table_args = getattr(model_class, _SQLALCHEMY_ATTRS["table_args"], None)
         if table_args:
             self._parse_table_args(table_args, config)
 
         return config
 
-    def merge_configs(self, *configs: ModelConfig) -> ModelConfig:  # noqa: method mayby static
-        """Merge multiple ModelConfig instances with proper precedence.
+    @staticmethod
+    def merge_configs(*configs: _RawModelConfig) -> _RawModelConfig:
+        """Merge multiple _RawModelConfig instances with proper precedence.
 
         Combines multiple configuration sources using the following rules:
         - Basic settings: Later configs override earlier ones
-        - Lists (indexes, constraints, permissions): All items are combined
+        - Lists (indexes, constraints): All items are combined
         - Metadata: Later configs override earlier ones
         - Database options: Dictionaries are merged, later values override
         - Custom settings: Dictionaries are merged, later values override
 
         Args:
-            *configs: ModelConfig instances to merge, in order of precedence
+            *configs: _RawModelConfig instances to merge, in order of precedence
 
         Returns:
-            Single merged ModelConfig instance
+            Single merged _RawModelConfig instance
 
         Examples:
-            >>> config1 = ModelConfig(table_name="table1", ordering=["-id"])
-            >>> config2 = ModelConfig(table_name="table2", verbose_name="Model")
-            >>> parser = ConfigParser()
-            >>> merged = parser.merge_configs(config1, config2)
-            >>> merged.table_name  # "table2" (later wins)
-            >>> merged.ordering  # ["-id"] (from config1)
+            >>> config1 = _RawModelConfig(table_name="table1", ordering=["-id"])
+            >>> config2 = _RawModelConfig(table_name="table2", verbose_name="Model")
+            # This method is used internally by ConfigManager
+            # merged.table_name would be "table2" (later wins)
+            # merged.ordering would be ["-id"] (from config1)
         """
-        merged = ModelConfig()
+        merged = _RawModelConfig()
 
         for config in configs:
             # Basic configuration (last wins)
@@ -217,7 +239,6 @@ class ConfigParser:
             # Lists are extended
             merged.indexes.extend(config.indexes)
             merged.constraints.extend(config.constraints)
-            merged.permissions.extend(config.permissions)
 
             # Metadata (last wins)
             if config.verbose_name is not None:
@@ -238,7 +259,74 @@ class ConfigParser:
 
         return merged
 
-    def _parse_table_args(self, table_args: Any, config: ModelConfig) -> None:  # noqa: method mayby static
+    @staticmethod
+    def fill_defaults(config: _RawModelConfig, model_class: type) -> ModelConfig:
+        """Fill default values for configuration fields that are None.
+
+        Args:
+            config: _RawModelConfig instance to fill defaults for
+            model_class: Model class to generate defaults from
+
+        Returns:
+            ModelConfig instance with defaults filled
+        """
+
+        # Fill table_name if not set
+        table_name = config.table_name
+        if table_name is None:
+            snake_case_name = to_snake_case(model_class.__name__)
+            table_name = pluralize(snake_case_name)
+
+        # Fill verbose_name if not set
+        verbose_name = config.verbose_name
+        if verbose_name is None:
+            verbose_name = model_class.__name__
+
+        # Fill verbose_name_plural if not set
+        verbose_name_plural = config.verbose_name_plural
+        if verbose_name_plural is None:
+            verbose_name_plural = pluralize(verbose_name)
+
+        # Create complete config with required fields
+        return ModelConfig(
+            table_name=table_name,
+            verbose_name=verbose_name,
+            verbose_name_plural=verbose_name_plural,
+            ordering=config.ordering,
+            abstract=config.abstract,
+            indexes=config.indexes,
+            constraints=config.constraints,
+            description=config.description,
+            db_options=config.db_options,
+            custom=config.custom,
+        )
+
+    def process_complete_config(self, model_class: type) -> ModelConfig:
+        """Process complete configuration for a model class.
+
+        This is the main entry point that handles all configuration processing:
+        1. Parse class attributes
+        2. Parse Config inner class
+        3. Merge configurations
+        4. Fill default values
+
+        Args:
+            model_class: Model class to process configuration for
+
+        Returns:
+            Complete ModelConfig with all defaults filled
+        """
+        configs = [self.parse_class_attributes(model_class)]
+
+        config_class = getattr(model_class, "Config", None)
+        if config_class:
+            configs.append(self.parse_config_class(config_class))
+
+        merged_config = _ConfigParser.merge_configs(*configs)
+        return _ConfigParser.fill_defaults(merged_config, model_class)
+
+    @staticmethod
+    def _parse_table_args(table_args: Any, config: _RawModelConfig) -> None:
         """Parse SQLAlchemy __table_args__ tuple for indexes, constraints, and options.
 
         Extracts indexes, constraints, and database-specific options from the
@@ -246,7 +334,7 @@ class ConfigParser:
 
         Args:
             table_args: The __table_args__ tuple from a model class
-            config: ModelConfig instance to populate with parsed values
+            config: RawModelConfig instance to populate with parsed values
 
         Note:
             Database-specific options are identified by prefixes:
@@ -270,25 +358,156 @@ class ConfigParser:
                 # Process database-specific options dictionary
                 for key, value in arg.items():
                     # Determine database type from option key prefix
-                    if key.startswith("mysql_"):
-                        db_name = "mysql"
-                        option_name = key[6:]  # Remove 'mysql_' prefix
-                    elif key.startswith("postgresql_"):
-                        db_name = "postgresql"
-                        option_name = key[11:]  # Remove 'postgresql_' prefix
-                    elif key.startswith("sqlite_"):
-                        db_name = "sqlite"
-                        option_name = key[7:]  # Remove 'sqlite_' prefix
-                    else:
-                        # Generic option applies to all databases
-                        db_name = "generic"
-                        option_name = key
+                    db_name = _GENERIC_DB_NAME
+                    option_name = key
+
+                    for prefix, (name, offset) in _DB_PREFIX_MAPPING.items():
+                        if key.startswith(prefix):
+                            db_name = name
+                            option_name = key[offset:]
+                            break
 
                     # Initialize database options if not exists
                     if db_name not in config.db_options:
                         config.db_options[db_name] = {}
                     # Store the option value
                     config.db_options[db_name][option_name] = value
+
+
+class ConfigManager:
+    """Unified configuration manager for handling complete model configuration lifecycle."""
+
+    def __init__(self):
+        self.parser = _ConfigParser()
+        self._config_cache: dict[type, ModelConfig] = {}
+
+    def get_config(self, model_class: type) -> ModelConfig:
+        """Get model configuration, process and cache if not exists.
+
+        Args:
+            model_class: Model class to get configuration for
+
+        Returns:
+            ModelConfig object containing all configuration settings
+        """
+        if model_class not in self._config_cache:
+            self.process_model_config(model_class)
+        return self._config_cache[model_class]
+
+    def process_model_config(self, model_class: type) -> tuple[ModelConfig, bool]:
+        """Process model configuration and cache the result.
+
+        Args:
+            model_class: Model class to process configuration for
+
+        Returns:
+            Tuple of (complete model configuration, is abstract model)
+        """
+        # Check cache first
+        if model_class in self._config_cache:
+            config = self._config_cache[model_class]
+            is_abstract = self._is_abstract_model(model_class, config)
+            return config, is_abstract
+
+        # Process configuration
+        config = self.parser.process_complete_config(model_class)
+
+        # Apply configuration to model class (non-abstract classes)
+        is_abstract = self._is_abstract_model(model_class, config)
+        if not is_abstract:
+            self._apply_config_to_model(model_class, config)
+
+        # Cache configuration
+        self._config_cache[model_class] = config
+        return config, is_abstract
+
+    def _is_abstract_model(self, model_class: type, config: ModelConfig) -> bool:  # noqa
+        """Determine if the model is abstract."""
+        return (
+            _SQLALCHEMY_ATTRS["abstract"] in model_class.__dict__
+            and model_class.__dict__[_SQLALCHEMY_ATTRS["abstract"]]
+        ) or config.abstract
+
+    def _apply_config_to_model(self, model_class: type, config: ModelConfig) -> None:
+        """Apply configuration to model class."""
+        # Set table name
+        if config.table_name:
+            setattr(model_class, _SQLALCHEMY_ATTRS["tablename"], config.table_name)
+
+        # Set abstract flag
+        if config.abstract:
+            setattr(model_class, _SQLALCHEMY_ATTRS["abstract"], True)
+
+        # Set default ordering
+        if config.ordering:
+            model_class._default_ordering = config.ordering
+
+        # Build __table_args__
+        self._build_table_args(model_class, config)
+
+    def _build_table_args(self, model_class: type, config: ModelConfig) -> None:  # noqa
+        """Build __table_args__ for the model class."""
+        table_args = []
+
+        # Preserve existing __table_args__
+        existing_args = getattr(model_class, _SQLALCHEMY_ATTRS["table_args"], ())
+        if existing_args:
+            for arg in existing_args:
+                if not isinstance(arg, dict):
+                    table_args.append(arg)
+
+        # Add indexes and constraints
+        table_args.extend(config.indexes)
+        table_args.extend(config.constraints)
+
+        # Add database options
+        if config.db_options:
+            db_dict = {}
+            for db_name, options in config.db_options.items():
+                if db_name == _GENERIC_DB_NAME:
+                    db_dict.update(options)
+                else:
+                    for key, value in options.items():
+                        db_dict[f"{db_name}_{key}"] = value
+            if db_dict:
+                table_args.append(db_dict)
+
+        if table_args:
+            setattr(model_class, _SQLALCHEMY_ATTRS["table_args"], tuple(table_args))
+
+
+# Global configuration manager instance
+_config_manager = ConfigManager()
+
+
+# Factory functions for configuration management
+def get_model_config(model_class: type) -> ModelConfig:
+    """Get model configuration using the global configuration manager.
+
+    This is the recommended way to access model configuration throughout
+    the application, as it uses a single global ConfigManager instance.
+
+    Args:
+        model_class: Model class to get configuration for
+
+    Returns:
+        ModelConfig object containing all configuration settings
+    """
+    return _config_manager.get_config(model_class)
+
+
+def process_model_config(model_class: type) -> tuple[ModelConfig, bool]:
+    """Process model configuration using the global configuration manager.
+
+    This function is primarily used during model class initialization.
+
+    Args:
+        model_class: Model class to process configuration for
+
+    Returns:
+        Tuple of (complete model configuration, is abstract model)
+    """
+    return _config_manager.process_model_config(model_class)
 
 
 # Convenience functions for creating indexes and constraints
@@ -326,7 +545,7 @@ def index(
     # Auto-generate index name if not provided
     if name is None:
         field_part = "_".join(fields)
-        prefix = "uq" if unique else "idx"
+        prefix = _INDEX_PREFIXES["unique"] if unique else _INDEX_PREFIXES["regular"]
         name = f"{prefix}_{field_part}"
 
     # Build dialect-specific kwargs
@@ -366,16 +585,13 @@ def constraint(
     """
     # Auto-generate constraint name if not provided
     if name is None:
-        # Simple name generation based on condition
-        import re
-
         # Extract field names from condition
-        field_matches = re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b", condition)
+        field_matches = _FIELD_NAME_PATTERN.findall(condition)
         if field_matches:
             field_part = "_".join(field_matches[:2])  # Use first 2 fields
-            name = f"ck_{field_part}"
+            name = f"{_CONSTRAINT_PREFIXES['check']}_{field_part}"
         else:
-            name = "ck_constraint"
+            name = _DEFAULT_CONSTRAINT_NAME
 
     return CheckConstraint(condition, name=name, **kwargs)
 
@@ -402,7 +618,7 @@ def unique(
     # Auto-generate constraint name if not provided
     if name is None:
         field_part = "_".join(fields)
-        name = f"uq_{field_part}"
+        name = f"{_CONSTRAINT_PREFIXES['unique']}_{field_part}"
 
     return UniqueConstraint(*fields, name=name, **kwargs)
 
@@ -452,8 +668,8 @@ def database_specific(**configs: dict[str, Any]) -> Callable[[str], dict[str, An
 
 
 def mysql_config(
-    engine: str = "InnoDB",
-    charset: str = "utf8mb4",
+    engine: str = _DEFAULT_MYSQL_ENGINE,
+    charset: str = _DEFAULT_CHARSET,
     collate: str | None = None,
     row_format: str | None = None,
     key_block_size: int | None = None,
@@ -715,7 +931,7 @@ def multi_db_config(
 
 
 def high_performance_mysql(
-    charset: str = "utf8mb4",
+    charset: str = _DEFAULT_CHARSET,
     row_format: str = "DYNAMIC",
     stats_persistent: bool = True,
     stats_auto_recalc: bool = True,
@@ -748,7 +964,7 @@ def high_performance_mysql(
 
 
 def compressed_mysql(
-    charset: str = "utf8mb4",
+    charset: str = _DEFAULT_CHARSET,
     row_format: str = "COMPRESSED",
     key_block_size: int = 8,
     **kwargs: Any,
@@ -769,12 +985,12 @@ def compressed_mysql(
         >>> compressed_mysql(key_block_size=4)
     """
     return mysql_config(
-        engine="InnoDB", charset=charset, row_format=row_format, key_block_size=key_block_size, **kwargs
+        engine=_DEFAULT_MYSQL_ENGINE, charset=charset, row_format=row_format, key_block_size=key_block_size, **kwargs
     )
 
 
 def read_only_mysql(
-    charset: str = "utf8mb4",
+    charset: str = _DEFAULT_CHARSET,
     **kwargs: Any,
 ) -> dict[str, dict[str, Any]]:
     """MySQL configuration optimized for read-only tables.
@@ -794,7 +1010,7 @@ def read_only_mysql(
 
 
 def memory_mysql(
-    charset: str = "utf8mb4",
+    charset: str = _DEFAULT_CHARSET,
     max_rows: int = 1000000,
     **kwargs: Any,
 ) -> dict[str, dict[str, Any]]:

@@ -1,19 +1,14 @@
 from typing import Any, TypeVar
 
-from sqlalchemy import (
-    and_,
-    select,
-)
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_object_session
 from sqlalchemy.orm import DeclarativeBase
 
-from .config import ConfigParser, ModelConfig
+from .config import ModelConfig, get_model_config, process_model_config
 from .exceptions import ValidationError, ValidationErrorCollector
 from .objects import ObjectsDescriptor
 from .session import SessionContextManager
 from .signals import Operation, SignalContext, SignalMixin, emit_signals
-from .utils.naming import to_snake_case
-from .utils.pattern import pluralize
 
 
 __all__ = [
@@ -458,7 +453,6 @@ class ObjectModel(DeclarativeBase, ModelMixin):
     """Base model class with configuration support and common functionality."""
 
     __abstract__ = True
-    _config_cache: dict[type, ModelConfig] = {}
 
     # ========== Private Interface Implementation ==========
 
@@ -491,86 +485,15 @@ class ObjectModel(DeclarativeBase, ModelMixin):
 
     @classmethod
     def _process_config(cls):
-        """Process and apply model configuration from class attributes and Config inner class.
+        """Process and apply model configuration using the global configuration manager."""
+        _, is_abstract = process_model_config(cls)
 
-        This method:
-        1. Parses configuration from class attributes
-        2. Parses configuration from Config inner class (higher priority)
-        3. Merges configurations with proper precedence
-        4. Applies configuration to the model class
-        5. Sets up objects manager for non-abstract models
-        """
-        parser = ConfigParser()
-        configs = [parser.parse_class_attributes(cls)]
-
-        config_class = getattr(cls, "Config", None)
-        if config_class:
-            configs.append(parser.parse_config_class(config_class))
-
-        merged_config = parser.merge_configs(*configs) if configs else ModelConfig()
-        is_abstract = ("__abstract__" in cls.__dict__ and cls.__dict__["__abstract__"]) or merged_config.abstract
-
-        if is_abstract:
-            cls._config_cache[cls] = merged_config
-            return
-
-        cls._config_cache[cls] = merged_config
-        cls._apply_config(merged_config)
-
+        # Setup objects manager for non-abstract models
         if not is_abstract and not hasattr(cls, "objects"):
             cls.objects = ObjectsDescriptor(cls)
 
-    @classmethod
-    def _apply_config(cls, config: ModelConfig):
-        """Apply parsed configuration to the model class.
-
-        This method takes a ModelConfig object and applies its settings to the class:
-        - Sets table name if specified
-        - Configures abstract flag
-        - Sets default ordering
-        - Builds __table_args__ with indexes, constraints, and database options
-
-        Args:
-            config: Parsed model configuration to apply
-        """
-        # Set table name - use config, existing __tablename__, or Rails-style pluralized class name
-        if config.table_name:
-            cls.__tablename__ = config.table_name
-        elif not hasattr(cls, "__tablename__"):
-            snake_case = to_snake_case(cls.__name__)
-            cls.__tablename__ = pluralize(snake_case)
-
-        if config.abstract:
-            cls.__abstract__ = True
-
-        if config.ordering:
-            cls._default_ordering = config.ordering
-
-        table_args = []
-        existing_args = getattr(cls, "__table_args__", ())
-        if existing_args:
-            for arg in existing_args:
-                if not isinstance(arg, dict):
-                    table_args.append(arg)
-
-        table_args.extend(config.indexes)
-        table_args.extend(config.constraints)
-
-        if config.db_options:
-            db_dict = {}
-            for db_name, options in config.db_options.items():
-                if db_name == "generic":
-                    db_dict.update(options)
-                else:
-                    for key, value in options.items():
-                        db_dict[f"{db_name}_{key}"] = value
-            if db_dict:
-                table_args.append(db_dict)
-
-        if table_args:
-            cls.__table_args__ = tuple(table_args)
-
     # ========== Metadata Access ==========
+
     @classmethod
     def get_config(cls) -> ModelConfig:
         """Get the cached configuration for this model class.
@@ -578,48 +501,37 @@ class ObjectModel(DeclarativeBase, ModelMixin):
         Returns:
             ModelConfig object containing all configuration settings
         """
-        return cls._config_cache.get(cls, ModelConfig())
+        return get_model_config(cls)
 
     @classmethod
     def get_table_name(cls) -> str:
         """Get the database table name for this model.
 
         Returns:
-            Table name from configuration, __tablename__ attribute, or Rails-style pluralized class name
+            Table name from configuration
         """
         config = cls.get_config()
-
-        # 1. 优先使用配置中的 table_name
-        if config.table_name:
-            return config.table_name
-
-        # 2. 其次使用 __tablename__ 属性
-        if hasattr(cls, "__tablename__"):
-            return cls.__tablename__
-
-        # 3. 使用Rails风格的复数化类名作为默认值
-        snake_case = to_snake_case(cls.__name__)
-        return pluralize(snake_case)
+        return config.table_name
 
     @classmethod
     def get_verbose_name(cls) -> str:
         """Get the human-readable name for this model.
 
         Returns:
-            Verbose name from configuration or class name
+            Verbose name from configuration
         """
         config = cls.get_config()
-        return config.verbose_name or cls.__name__
+        return config.verbose_name
 
     @classmethod
     def get_verbose_name_plural(cls) -> str:
         """Get the human-readable plural name for this model.
 
         Returns:
-            Plural verbose name from configuration or verbose name with 's' suffix
+            Plural verbose name from configuration
         """
         config = cls.get_config()
-        return config.verbose_name_plural or f"{cls.get_verbose_name()}s"
+        return config.verbose_name_plural
 
     @classmethod
     def get_description(cls) -> str | None:
@@ -638,10 +550,11 @@ class ObjectModel(DeclarativeBase, ModelMixin):
         Returns:
             Dictionary containing verbose_name, verbose_name_plural, and description
         """
+        config = cls.get_config()
         return {
-            "verbose_name": cls.get_verbose_name(),
-            "verbose_name_plural": cls.get_verbose_name_plural(),
-            "description": cls.get_description(),
+            "verbose_name": config.verbose_name,
+            "verbose_name_plural": config.verbose_name_plural,
+            "description": config.description,
         }
 
     # ========== Data Conversion ==========
