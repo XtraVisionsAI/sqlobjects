@@ -257,7 +257,7 @@ from sqlobjects.exceptions import DoesNotExist, MultipleObjectsReturned, Validat
 
 # Use descriptive English error messages
 try:
-    user = await User.objects.get(email=email)
+    user = await User.objects.get(User.email == email)
 except DoesNotExist:
     raise DoesNotExist(f"User with email '{email}' does not exist")
 except MultipleObjectsReturned:
@@ -265,7 +265,7 @@ except MultipleObjectsReturned:
 
 # Using specific session for exception handling
 try:
-    user = await User.objects.using(analytics_session).get(email=email)
+    user = await User.objects.using(analytics_session).get(User.email == email)
 except DoesNotExist:
     raise DoesNotExist(f"User with email '{email}' does not exist")
 ```
@@ -520,7 +520,7 @@ class User(ObjectModel):
     # 6. Query methods using expressions
     @classmethod
     async def get_active_users_with_stats(cls):
-        return await cls.objects.filter(is_active=True).annotate(
+        return await cls.objects.filter(User.is_active == True).annotate(
             post_count=func.count(cls.posts),
             latest_post=func.max(cls.posts.created_at)
         ).all()

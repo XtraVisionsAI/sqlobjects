@@ -266,8 +266,8 @@ class User(ObjectModel):
     async def after_save(self, context: SignalContext) -> None:
         # 使用 Q 对象构建复杂查询
         related_users = await User.objects.using(context.session).filter(
-            Q(department_id=self.department_id) & Q(is_active=True)
-        ).exclude(id=self.id).all()
+            Q(User.department_id == self.department_id) & Q(User.is_active == True)
+        ).exclude(User.id == self.id).all()
         
         # 批量更新相关数据
         await User.objects.using(context.session).filter(

@@ -65,7 +65,7 @@ uv run ruff check --fix sqlobjects/ tests/
 ```python
 # Correct
 async def get_user_posts(user_id: int) -> list[Post]:
-    user = await User.objects.get(id=user_id)
+    user = await User.objects.get(User.id == user_id)
     return await user.posts.all()
 ```
 

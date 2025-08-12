@@ -732,7 +732,7 @@ await User.objects.update(
         "display_name": User.first_name.concat(" ", User.last_name),
         "age_years": User.birth_date.age_in_years()
     },
-    filter=Q(is_active=True)
+    filter=Q(User.is_active=True)
 )
 
 # 自定义类型注册

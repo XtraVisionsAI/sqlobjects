@@ -841,7 +841,7 @@ nowait_locked = User.objects.select_for_update(nowait=True)
 # 注解
 users_with_post_count = User.objects.annotate(
     post_count=func.count(Post.id)
-).filter(post_count__gt=5)
+).filter(User.post_count > 5)
 
 # 分组
 user_stats = User.objects.values("department").annotate(

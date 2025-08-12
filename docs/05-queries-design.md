@@ -277,7 +277,7 @@ User.objects.options(joinedload(User.profile))
 ```python
 # 基础执行
 await User.objects.all()                    # 获取所有结果
-await User.objects.get(id=1)                # 获取单个对象
+await User.objects.get(User.id == 1)                # 获取单个对象
 await User.objects.first()                  # 获取第一个对象
 await User.objects.last()                   # 获取最后一个对象
 await User.objects.earliest('created_at')   # 获取最早的对象
@@ -318,8 +318,8 @@ async for user in User.objects.iterator():
     process_user(user)
 
 # 集合操作（在内存中处理，适用于中小型数据集）
-active_users = User.objects.filter(is_active=True)
-staff_users = User.objects.filter(is_staff=True)
+active_users = User.objects.filter(User.is_active == True)
+staff_users = User.objects.filter(User.is_staff == True)
 
 # 并集：合并两个查询结果，去除重复
 union_result = await active_users.union(staff_users)  # UNION 去重
@@ -332,14 +332,14 @@ intersection_result = await active_users.intersection(staff_users)
 difference_result = await active_users.difference(staff_users)
 
 # 多个 QuerySet 的集合操作
-admin_users = User.objects.filter(role="admin")
-manager_users = User.objects.filter(role="manager")
+admin_users = User.objects.filter(User.role == "admin")
+manager_users = User.objects.filter(User.role == "manager")
 all_privileged = await active_users.union(admin_users, manager_users)  # 多个并集
 common_users = await active_users.intersection(staff_users, admin_users)  # 多个交集
 
 # 批量操作
-updated_count = await User.objects.filter(is_active=False).update(values={"status": "inactive"})
-deleted_count = await User.objects.filter(is_deleted=True).delete()
+updated_count = await User.objects.filter(User.is_active == False).update(values={"status": "inactive"})
+deleted_count = await User.objects.filter(User.is_deleted == True).delete()
 
 # 子查询
 avg_age_subq = User.objects.aggregate(avg_age=func.avg(User.age)).subquery()

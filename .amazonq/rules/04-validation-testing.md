@@ -287,7 +287,7 @@ class TestUserModel:
         users = await User.objects.using(test_session).filter(User.age >= 25).all()
         assert len(users) == 2
         
-        user = await User.objects.using(test_session).get(username="alice")
+        user = await User.objects.using(test_session).get(User.username == "alice")
         assert user.age == 25
 ```
 
@@ -366,7 +366,7 @@ class TestUserDatabase:
         assert user.id is not None
         
         # Read
-        retrieved = await User.objects.using(test_session).get(id=user.id)
+        retrieved = await User.objects.using(test_session).get(User.id == user.id)
         assert retrieved.username == "testuser"
         
         # Update
@@ -377,7 +377,7 @@ class TestUserDatabase:
         await retrieved.using(test_session).delete()
         
         with pytest.raises(DoesNotExist):
-            await User.objects.using(test_session).get(id=user.id)
+            await User.objects.using(test_session).get(User.id == user.id)
 ```
 
 #### Performance Tests
@@ -494,7 +494,7 @@ class TestErrorHandling:
     async def test_does_not_exist_exception(self, test_session):
         """Test DoesNotExist exception handling"""
         with pytest.raises(DoesNotExist) as exc_info:
-            await User.objects.using(test_session).get(username="nonexistent")
+            await User.objects.using(test_session).get(User.username == "nonexistent")
         
         # Verify localized error message
         assert "does not exist" in str(exc_info.value).lower()

@@ -52,15 +52,15 @@ Methods are organized into clear functional categories:
 
 ```python
 # Query building (chainable)
-query = User.objects.filter(is_active=True).order_by("-created_at").limit(10)
+query = User.objects.filter(User.is_active == True).order_by("-created_at").limit(10)
 
 # Query execution
 users = await query.all()
-user = await User.objects.get(username="john")
-count = await User.objects.filter(is_active=True).count()
+user = await User.objects.get(User.username == "john")
+count = await User.objects.filter(User.is_active == True).count()
 
 # With specific session
-users = await User.objects.using(analytics_session).filter(is_active=True).all()
+users = await User.objects.using(analytics_session).filter(User.is_active == True).all()
 ```
 
 ## Field Parameter Guidelines
@@ -435,8 +435,8 @@ from sqlalchemy.orm import joinedload
 optimized_users = User.objects.options(joinedload(User.profile))  # Returns QuerySet
 
 # Set operations (return QuerySet for chaining)
-active_users = User.objects.filter(is_active=True)
-inactive_users = User.objects.filter(is_active=False)
+active_users = User.objects.filter(User.is_active == True)
+inactive_users = User.objects.filter(User.is_active == False)
 reversed_users = User.objects.reverse()  # Returns QuerySet
 empty_users = User.objects.none()  # Returns QuerySet
 ```
@@ -446,13 +446,13 @@ empty_users = User.objects.none()  # Returns QuerySet
 ```python
 # Basic execution methods
 users = await User.objects.filter(User.age >= 18).all()  # Returns list[User]
-user = await User.objects.get(id=1)  # Returns User or raises exception
+user = await User.objects.get(User.id == 1)  # Returns User or raises exception
 first_user = await User.objects.first()  # Returns User | None
 last_user = await User.objects.last()  # Returns User | None
 
 # Using specific database session
-user = await User.objects.using(analytics_session).get(username="john")
-users = await User.objects.using(main_session).filter(is_active=True).all()
+user = await User.objects.using(analytics_session).get(User.username == "john")
+users = await User.objects.using(main_session).filter(User.is_active == True).all()
 
 # Ordering-based retrieval
 earliest = await User.objects.earliest('created_at')  # Returns User | None
@@ -518,7 +518,7 @@ explain_result = await User.objects.filter(User.age >= 18).explain(analyze=True)
 raw_users = await User.objects.raw("SELECT * FROM users WHERE age > :age", {"age": 18})  # Returns list[User]
 
 # Iterator for large datasets
-async for user in User.objects.filter(is_active=True).iterator():
+async for user in User.objects.filter(User.is_active == True).iterator():
     print(user.username)  # Async generator
 
 # Index/slice access
@@ -532,9 +532,9 @@ fifth_user = await User.objects.get_item(4)  # Returns User
 from sqlobjects.expressions import SubqueryExpression
 
 # Subquery creation (returns SubqueryExpression, not QuerySet)
-active_users_subq = User.objects.filter(is_active=True).subquery("active_users")
+active_users_subq = User.objects.filter(User.is_active == True).subquery("active_users")
 avg_age_subq = User.objects.aggregate(avg_age=func.avg("age")).subquery(query_type="scalar")
-exists_subq = Post.objects.filter(author_id=User.id).subquery(query_type="exists")
+exists_subq = Post.objects.filter(Post.author_id == User.id).subquery(query_type="exists")
 
 # Using subqueries in queries
 results = await Post.objects.join(active_users_subq, Post.author_id == active_users_subq.c.id).all()

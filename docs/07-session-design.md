@@ -15,7 +15,7 @@ SQLObjects Session 模块提供了基于 SQLAlchemy `async_scoped_session`
 
 ```python
 # 自动会话管理 - 零配置使用
-user = await User.objects.get(username="john")  # 自动创建和管理会话
+user = await User.objects.get(User.username == "john")  # 自动创建和管理会话
 
 # 显式会话管理 - 事务控制
 async with ctx_session() as session:
@@ -180,8 +180,8 @@ async with ctx_sessions(*db_names) as sessions:
 SessionContextManager.set_session_factory(session_factory, "main", is_default=True)
 
 # 直接使用，会话自动管理
-user = await User.objects.get(username="john")
-users = await User.objects.filter(is_active=True).all()
+user = await User.objects.get(User.username == "john")
+users = await User.objects.filter(User.is_active == True).all()
 ```
 
 #### 显式会话管理

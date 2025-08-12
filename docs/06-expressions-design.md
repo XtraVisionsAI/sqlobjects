@@ -34,7 +34,7 @@ User.score.round(2).abs()            # 数值处理链
 ```python
 # 自动类型推断
 avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).subquery()  # 推断为 scalar
-active_users = User.objects.filter(is_active=True).subquery()            # 推断为 table
+active_users = User.objects.filter(User.is_active == True).subquery()            # 推断为 table
 ```
 
 ## 模块架构
@@ -266,13 +266,13 @@ User.salary.round(2)                               # 数值格式化
 ```python
 # 自动类型推断（推荐使用）
 avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).subquery()  # 自动推断为 scalar
-active_users = User.objects.filter(is_active=True).subquery()            # 自动推断为 table
+active_users = User.objects.filter(User.is_active == True).subquery()            # 自动推断为 table
 user_count = User.objects.aggregate(count=func.count()).subquery()       # 自动推断为 scalar
 
 # 显式类型指定（高级用法）
 scalar_subq = User.objects.aggregate(count=func.count()).subquery(query_type="scalar")
-table_subq = User.objects.filter(is_active=True).subquery(query_type="table")
-exists_subq = Post.objects.filter(author_id=User.id).subquery(query_type="exists")
+table_subq = User.objects.filter(User.is_active == True).subquery(query_type="table")
+exists_subq = Post.objects.filter(Post.author_id == User.id).subquery(query_type="exists")
 
 # 类型转换（灵活切换）
 scalar_as_table = scalar_subq.as_table()    # 标量子查询转为表子查询
@@ -343,11 +343,11 @@ func.extract('year', User.created_at)              # 日期提取
 ```python
 # 智能子查询
 avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).subquery()  # 自动推断为 scalar
-active_users = User.objects.filter(is_active=True).subquery()            # 自动推断为 table
+active_users = User.objects.filter(User.is_active == True).subquery()            # 自动推断为 table
 
 # 显式类型指定
 scalar_subq = User.objects.aggregate(count=func.count()).subquery(query_type="scalar")
-exists_subq = Post.objects.filter(author_id=User.id).subquery(query_type="exists")
+exists_subq = Post.objects.filter(Post.author_id == User.id).subquery(query_type="exists")
 
 # 类型转换
 table_as_scalar = active_users.as_scalar()

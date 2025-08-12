@@ -10,15 +10,15 @@ SQLObjects provides an intelligent subquery system with automatic type inference
 from sqlobjects.expressions import SubqueryExpression
 
 # Automatic type inference (recommended)
-subq = User.objects.filter(is_active=True).subquery()  # Auto-inferred type
+subq = User.objects.filter(User.is_active == True).subquery()  # Auto-inferred type
 
 # Explicit type specification
 table_subq = User.objects.filter(User.age >= 18).subquery(query_type="table")
 scalar_subq = User.objects.aggregate(count=func.count()).subquery(query_type="scalar")
-exists_subq = Post.objects.filter(author_id=User.id).subquery(query_type="exists")
+exists_subq = Post.objects.filter(Post.author_id == User.id).subquery(query_type="exists")
 
 # Named subqueries for complex queries
-active_users = User.objects.filter(is_active=True).subquery("active_users")
+active_users = User.objects.filter(User.is_active == True).subquery("active_users")
 ```
 
 ### 2. Subquery Type Inference Rules
@@ -38,7 +38,7 @@ max_salary = Employee.objects.aggregate(max_sal=func.max(Employee.salary)).subqu
 user_profiles = User.objects.values("id", "username", "email").subquery()  # → table
 
 # Rule 4: Single column non-aggregate (for IN conditions)
-user_ids = User.objects.filter(is_active=True).values_list("id").subquery()  # → table
+user_ids = User.objects.filter(User.is_active == True).values_list("id").subquery()  # → table
 
 # Default: Table subquery when inference is uncertain
 general_query = User.objects.filter(User.created_at >= date.today()).subquery()  # → table
@@ -48,7 +48,7 @@ general_query = User.objects.filter(User.created_at >= date.today()).subquery() 
 
 ```python
 # Table subqueries for JOIN operations
-active_users_subq = User.objects.filter(is_active=True).subquery("active_users")
+active_users_subq = User.objects.filter(User.is_active == True).subquery("active_users")
 posts_with_active_authors = await Post.objects.join(
     active_users_subq, 
     Post.author_id == active_users_subq.c.id
@@ -80,7 +80,7 @@ high_performers = await Employee.objects.filter(
 
 ```python
 # Convert between subquery types
-base_query = User.objects.filter(is_active=True)
+base_query = User.objects.filter(User.is_active == True)
 
 # Create different subquery types from same base
 table_subq = base_query.subquery().as_table()  # For JOINs
@@ -139,7 +139,7 @@ from sqlobjects.exceptions import ValidationError
 
 # Subquery validation errors use English messages
 try:
-    invalid_subq = User.objects.filter(invalid_field=True).subquery(query_type="invalid")
+    invalid_subq = User.objects.filter(User.invalid_field == True).subquery(query_type="invalid")
 except ValidationError as e:
     print(e.message)  # English error message
 
@@ -148,7 +148,7 @@ try:
     problematic_subq = ComplexQuery.objects.complex_filter().subquery()
 except ValidationError as e:
     # Log error and fallback to simpler query
-    fallback_query = User.objects.filter(is_active=True)
+    fallback_query = User.objects.filter(User.is_active == True)
 ```
 
 ## Type System Architecture
@@ -289,9 +289,9 @@ users_page = await User.objects.get_item(slice(0, 10))  # First 10 users
 users_offset = await User.objects.get_item(slice(20, 30))  # Users 20-30
 
 # Row-level locking
-user = await User.objects.select_for_update().get(id=1)
-user = await User.objects.select_for_update(nowait=True).get(id=1)
-user = await User.objects.select_for_update(skip_locked=True).get(id=1)
+user = await User.objects.select_for_update().get(User.id == 1)
+user = await User.objects.select_for_update(nowait=True).get(User.id == 1)
+user = await User.objects.select_for_update(skip_locked=True).get(User.id == 1)
 
 # Query optimization with options
 # Using SQLObjects relationship loading (recommended)
@@ -340,10 +340,10 @@ Methods use the `using()` method pattern to specify which database session to us
 
 ```python
 # Basic usage with default session
-user = await User.objects.get(username="john")
+user = await User.objects.get(User.username == "john")
 
 # Using specific database session
-user = await User.objects.using(analytics_session).get(username="john")
+user = await User.objects.using(analytics_session).get(User.username == "john")
 
 # Complex query with session
 user = await User.objects.using(main_session).get(
@@ -352,7 +352,7 @@ user = await User.objects.using(main_session).get(
 )
 
 # Chain methods with session
-users = await User.objects.using(db_session).filter(is_active=True).all()
+users = await User.objects.using(db_session).filter(User.is_active == True).all()
 ```
 
 #### Create Operations
@@ -403,7 +403,7 @@ users = await User.objects.using(db_session).filter(is_active=True).all()
 ```python
 # Chain methods for complex queries
 users = await (User.objects
-    .filter(is_active=True)
+    .filter(User.is_active == True)
     .select_related('profile')
     .prefetch_related('posts')
     .order_by('-created_at')
@@ -636,11 +636,11 @@ avg_salary = Employee.objects.aggregate(avg_sal=func.avg(Employee.salary)).subqu
 high_earners = await Employee.objects.filter(Employee.salary > avg_salary).all()
 
 # Use table subqueries for complex JOINs
-active_users = User.objects.filter(is_active=True).select_related("profile").subquery("active")
+active_users = User.objects.filter(User.is_active == True).select_related("profile").subquery("active")
 results = await Post.objects.join(active_users, Post.author_id == active_users.c.id).all()
 
 # Use EXISTS for boolean conditions (often more efficient than IN)
-has_orders = Order.objects.filter(customer_id=Customer.id).subquery(query_type="exists")
+has_orders = Order.objects.filter(Order.customer_id == Customer.id).subquery(query_type="exists")
 active_customers = await Customer.objects.filter(has_orders).all()
 
 # Avoid deeply nested subqueries when possible
@@ -667,7 +667,7 @@ sample_users = await User.objects.sample(10)
 
 ```python
 # Use iterator for large datasets to avoid loading everything into memory
-async for user in User.objects.filter(is_active=True).iterator():
+async for user in User.objects.filter(User.is_active == True).iterator():
     process_user(user)
 
 # Custom memory cleanup interval
