@@ -160,9 +160,8 @@ class ModelMixin(SignalMixin):
             ValidationError: If model-level validation fails
         """
         # Default implementation - subclasses can override
-        instance = self._get_instance()
-        if hasattr(instance, "validate") and instance.validate is not self.validate:
-            instance.validate()
+        # This method should be overridden by subclasses to provide custom validation
+        pass
 
     def validate_all(self, fields: list[str] | None = None) -> None:
         """Execute complete validation including both field-level and model-level checks.
