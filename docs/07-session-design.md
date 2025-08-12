@@ -95,15 +95,15 @@ def get_session(db_name: str | None = None) -> AsyncSession:
 
 ### 与其他模块的集成
 
-#### 与 ObjectsManager 和 ModelProxy 的集成
+#### Integration with ObjectsManager and ModelProxy
 
-ObjectsManager 和 ModelProxy 都通过 `using()` 方法支持会话指定：
+Both ObjectsManager and ModelProxy support session specification through `using()` method:
 
 ```python
-# ObjectsManager 的会话管理
+# ObjectsManager session management
 class ObjectsManager:
     def using(self, db_or_session: str | AsyncSession) -> "ObjectsManager[T]":
-        """指定数据库名或会话对象"""
+        """Specify database name or session object"""
         return ObjectsManager(self._model, db_or_session)
     
     @property
@@ -115,21 +115,59 @@ class ObjectsManager:
         else:
             return self._db_or_session
 
-# ModelProxy 的会话管理
+# ModelProxy session management with automatic attachment
 class ModelProxy(ModelMixin):
     def __init__(self, instance, db_or_session: str | AsyncSession):
         self._instance = instance
         self._db_or_session = db_or_session
+        self._session_attached = False
     
     def _get_session(self) -> AsyncSession:
         if isinstance(self._db_or_session, str):
-            return SessionContextManager.get_session(self._db_or_session)
-        return self._db_or_session
+            session = SessionContextManager.get_session(self._db_or_session)
+        else:
+            session = self._db_or_session
+        
+        self._ensure_session_attachment(session)
+        return session
+    
+    def _ensure_session_attachment(self, session: AsyncSession) -> None:
+        """Ensure instance is properly attached to the specified session."""
+        if self._session_attached:
+            return
+        
+        current_session = async_object_session(self._instance)
+        if current_session is None:
+            session.add(self._instance)
+        elif current_session is not session:
+            self._handle_session_migration(current_session, session)
+        
+        self._session_attached = True
+    
+    def _handle_session_migration(self, old_session: AsyncSession, new_session: AsyncSession) -> None:
+        """Handle instance migration between different sessions."""
+        try:
+            old_session.expunge(self._instance)
+        except Exception:
+            pass
+        
+        new_session.add(self._instance)
+    
+    def __getattr__(self, name):
+        """Proxy attribute access to the wrapped instance."""
+        return getattr(self._instance, name)
+    
+    def __setattr__(self, name, value):
+        """Proxy attribute setting to the wrapped instance."""
+        if name.startswith("_"):
+            super().__setattr__(name, value)
+        else:
+            setattr(self._instance, name, value)
 
-# 模型实例的 using() 方法
+# Model instance using() method
 class ModelMixin:
     def using(self, db_or_session: str | AsyncSession) -> "ModelProxy":
-        """返回绑定到特定数据库/会话的代理对象"""
+        """Return a proxy bound to specific database/session."""
         return ModelProxy(self._get_instance(), db_or_session)
 ```
 

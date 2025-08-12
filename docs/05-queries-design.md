@@ -1,19 +1,19 @@
-# SQLObjects Queries 设计说明文档
+# SQLObjects 查询系统设计文档
 
 ## 概述
 
-SQLObjects Queries 模块提供查询构建系统，专注于核心查询功能和表达式组合。通过 Q 对象和统一的表达式支持，提供类型安全、高性能的查询构建体验。
+SQLObjects 查询模块提供查询构建系统，专注于核心查询功能和表达式组合。通过 Q 对象和统一表达式支持，提供类型安全、高性能的查询构建体验。
 
-## 核心特性
+## 核心功能
 
 ### 1. 统一表达式系统
 
 支持多种表达式类型的统一处理：
 
 ```python
-# Q 对象：包装 SQLAlchemy 表达式进行逻辑组合简化代码
-(User.age >= 18) & (User.name.like('%admin%')
-Q(User.age >= 18, User.name.like('%admin%')     # 等价 SQLAlchemy 的 & 表达式
+# Q 对象：包装 SQLAlchemy 表达式进行逻辑组合
+(User.age >= 18) & (User.name.like('%admin%'))
+Q(User.age >= 18, User.name.like('%admin%'))     # 等价于 SQLAlchemy & 表达式
 
 # SQLAlchemy 表达式：直接字段操作
 User.age >= 18
@@ -27,10 +27,10 @@ Q(User.age >= 18, User.is_active == True)
 
 ### 2. 链式查询构建
 
-支持延迟执行的链式查询构建：
+支持惰性求值的链式查询构建：
 
 ```python
-# 链式构建，延迟执行
+# 链式构建，惰性执行
 query = User.objects.filter(User.is_active == True)
 query = query.filter(User.age >= 18)
 query = query.order_by(User.name)
@@ -42,9 +42,32 @@ users = await User.objects.filter(
 ).select_related('profile').prefetch_related('posts').limit(10).all()
 ```
 
-### 3. 智能会话管理
+### 3. 默认排序支持
 
-统一的会话参数支持，适应多数据库场景：
+智能默认排序应用，具有优先级系统：
+
+```python
+class User(ObjectModel):
+    name: Column[str] = str_column()
+    created_at: Column[datetime] = datetime_column()
+    
+    class Config:
+        ordering = ["-created_at", "name"]  # 默认排序
+
+# 自动应用默认排序
+users = await User.objects.all()        # 使用默认排序
+first_user = await User.objects.first() # 使用默认排序
+
+# 覆盖默认排序
+users = await User.objects.order_by("name").all()  # 自定义排序优先
+
+# 跳过默认排序以提升性能
+count = await User.objects.skip_default_ordering().count()
+```
+
+### 4. 智能会话管理
+
+统一会话参数支持，适用于多数据库场景：
 
 ```python
 # 使用默认会话
@@ -65,9 +88,10 @@ user = await User.objects.using(main_session).filter(
 
 - **Q 对象**：SQLAlchemy 表达式的逻辑组合器
 - **QuerySet**：链式查询构建器和执行器
-- **表达式处理器**：统一的表达式类型处理
+- **表达式处理器**：统一表达式类型处理
 - **会话管理器**：多数据库会话支持
-- **子查询集成**：与 expressions 模块的子查询系统集成
+- **默认排序系统**：智能排序应用
+- **子查询集成**：与 expressions 模块子查询系统集成
 
 ### Q 对象系统
 
@@ -75,13 +99,13 @@ user = await User.objects.using(main_session).filter(
 
 ```python
 class Q:
-    """Q 对象，专注于 SQLAlchemy 表达式的逻辑组合"""
+    """用于 SQLAlchemy 表达式逻辑组合的 Q 对象。"""
     
     def __init__(self, *expressions: Any):
-        self.expressions = expressions     # SQLAlchemy 表达式列表
-        self.connector = "AND"             # 逻辑连接符
-        self.negated = False               # 是否取反
-        self.children: list[Q] = []        # 子 Q 对象
+        self.expressions = list(expressions)  # SQLAlchemy 表达式列表
+        self.connector = "AND"                # 逻辑连接符
+        self.negated = False                  # 是否取反
+        self.children: list[Q] = []           # 子 Q 对象
     
     def __and__(self, other) -> "Q":
         # AND 逻辑组合
@@ -99,12 +123,23 @@ class Q:
 
 ```python
 class QuerySet(Generic[T]):
-    """查询集合，提供链式查询接口"""
+    """提供链式查询接口的查询集类。"""
     
-    def __init__(self, model: type[T], query: Select | None = None, db_or_session: str | AsyncSession | None = None):
+    def __init__(
+        self,
+        model: type[T],
+        query: Select | None = None,
+        db_or_session: str | AsyncSession | None = None,
+        default_ordering: bool = True,
+    ) -> None:
         self._db_or_session = db_or_session
         self._model = model
         self._query = query if query is not None else select(model)
+        self._default_ordering = default_ordering
+        
+        # 如果没有提供查询且模型有默认排序，则应用默认排序
+        if query is None and default_ordering and self._has_default_ordering():
+            self._query = self._apply_default_ordering(self._query)
     
     @property
     def _session(self) -> AsyncSession:
@@ -115,78 +150,66 @@ class QuerySet(Generic[T]):
             return SessionContextManager.get_session(self._db_or_session)
         else:
             return self._db_or_session
+```
+
+### 默认排序系统
+
+QuerySet 集成智能默认排序支持：
+
+```python
+class QuerySet(Generic[T]):
+    # 默认排序内部方法
+    def _has_default_ordering(self) -> bool:
+        """检查模型是否配置了默认排序。"""
+        return hasattr(self._model, "_default_ordering") and bool(self._model._default_ordering)
     
-    # 查询构建方法（返回新的 QuerySet）
-    def filter(self, *conditions) -> "QuerySet[T]"
-    def exclude(self, *conditions) -> "QuerySet[T]"
-    def order_by(self, *fields) -> "QuerySet[T]"
-    def limit(self, count: int) -> "QuerySet[T]"
-    def offset(self, count: int) -> "QuerySet[T]"
-    def select_related(self, *relations) -> "QuerySet[T]"
-    def prefetch_related(self, *relations) -> "QuerySet[T]"
-    def distinct(self, *fields) -> "QuerySet[T]"
-    def only(self, *fields) -> "QuerySet[T]"
-    def defer(self, *fields) -> "QuerySet[T]"
-    def annotate(self, **kwargs) -> "QuerySet[T]"
-    def group_by(self, *fields) -> "QuerySet[T]"
-    def having(self, *conditions) -> "QuerySet[T]"
-    def options(self, *options) -> "QuerySet[T]"
-    def join(self, target_model, on_condition=None, join_type="inner", isouter=False) -> "QuerySet[T]"
-    def select_for_update(self, nowait=False, skip_locked=False) -> "QuerySet[T]"
-    def none(self) -> "QuerySet[T]"
-    def reverse(self) -> "QuerySet[T]"
+    def _apply_default_ordering(self, query: Select) -> Select:
+        """从模型配置应用默认排序。"""
+        if not self._has_default_ordering():
+            return query
+        
+        order_clauses = self._build_order_clauses(self._model._default_ordering)
+        if order_clauses:
+            query = query.order_by(*order_clauses)
+        return query
     
-    # 查询执行方法（执行数据库查询）
-    async def all(self) -> list[T]
-    async def get(self, *conditions) -> T
-    async def first(self) -> T | None
-    async def last(self) -> T | None
-    async def earliest(self, *fields) -> T | None
-    async def latest(self, *fields) -> T | None
-    async def count(self) -> int
-    async def exists(self) -> bool
-    async def values(self, *fields) -> list[dict[str, Any]]
-    async def values_list(self, *fields, flat=False) -> list[Any] | list[tuple[Any, ...]]
-    async def aggregate(self, **kwargs) -> dict[str, Any]
-    async def iterator(self, memory_cleanup_interval=1000) -> AsyncGenerator[T, None]
-    async def get_item(self, key) -> T | list[T]
-    async def dates(self, field: str, kind: str, order="ASC") -> list[Any]
-    async def datetimes(self, field: str, kind: str, order="ASC") -> list[Any]
-    async def explain(self, output=None, analyze=False, **options) -> dict[str, Any]  # 查询执行计划分析
-    async def raw(self, sql: str, params=None) -> list[T]
+    def _ensure_ordering(self, query: Select) -> Select:
+        """确保查询有排序，优先使用现有排序而非默认排序。"""
+        # 优先级：显式排序 > 默认排序
+        if not self._default_ordering:
+            return query
+        
+        # 如果查询已有排序，保持现有排序
+        if hasattr(query, "_order_by") and query._order_by:
+            return query
+        
+        # 应用默认排序
+        return self._apply_default_ordering(query)
     
-    # 集合操作方法（Set Operations）
-    async def union(self, *other_qs, all_=False) -> list[T]
-    async def intersection(self, *other_qs) -> list[T]
-    async def difference(self, *other_qs) -> list[T]
-    
-    # 数据操作方法（Data Operations）
-    async def update(self, values: dict) -> int
-    async def delete(self) -> int
-    
-    # 子查询方法（Subquery Methods）
-    def subquery(self, name=None, query_type="auto") -> SubqueryExpression
+    def skip_default_ordering(self) -> "QuerySet[T]":
+        """返回跳过应用默认排序的 QuerySet。"""
+        return QuerySet(self._model, self._query, self._db_or_session, default_ordering=False)
 ```
 
 ### 与其他模块的集成
 
-#### 与 expressions 模块的集成
+#### 与 expressions 模块集成
 
 ```python
 # 与 expressions 模块集成
 from sqlobjects.expressions import func, and_, or_, not_
 from sqlobjects.fields import FunctionResult
 
-# 完整的查询生态系统
+# 完整查询生态系统
 User.objects.filter(
-    Q(User.is_active == True),            # queries 模块的 Q 对象
+    Q(User.is_active == True),            # 来自 queries 模块的 Q 对象
     User.age >= 18,                       # SQLAlchemy 表达式
-    User.name.upper() == "ADMIN",         # fields 模块的链式调用
-    func.length(User.bio) > 100           # expressions 模块的函数
+    User.name.upper() == "ADMIN",         # 来自 fields 模块的链式调用
+    func.length(User.bio) > 100           # 来自 expressions 模块的函数
 )
 ```
 
-#### 与 fields 模块的集成
+#### 与 fields 模块集成
 
 ```python
 # 支持字段链式操作
@@ -200,22 +223,22 @@ def filter(self, *conditions):
         elif isinstance(condition, FunctionResult):
             # 字段链式操作结果处理
         else:
-            # 直接的 SQLAlchemy 表达式
+            # 直接 SQLAlchemy 表达式
 ```
 
 #### 模块职责分离
 
-- **queries.py**: 负责查询构建、Q 对象逻辑组合、QuerySet 链式操作
-- **expressions.py**: 负责函数系统、子查询支持、表达式处理
-- **fields.py**: 负责字段定义、链式调用、类型系统
-- **集成点**: 通过统一的表达式接口实现模块协作
+- **queries.py**：负责查询构建、Q 对象逻辑组合、QuerySet 链式操作
+- **expressions.py**：负责函数系统、子查询支持、表达式处理
+- **fields.py**：负责字段定义、链式调用、类型系统
+- **集成点**：通过统一表达式接口进行模块协作
 
 ## API 参考
 
 ### Q 对象
 
 ```python
-# 基础用法
+# 基本用法
 q1 = Q(User.name == "John")
 q2 = Q(User.age >= 25)
 
@@ -254,7 +277,7 @@ User.objects.only('id', 'username')         # 仅加载指定字段
 User.objects.defer('large_field')           # 延迟加载字段
 User.objects.distinct('department')         # 去重
 
-# 注释和分组
+# 注解和分组
 User.objects.annotate(post_count=func.count(User.posts))
 User.objects.group_by('department').having(func.count() > 5)
 
@@ -263,26 +286,30 @@ User.objects.join(Profile, User.id == Profile.user_id)
 User.objects.join(Profile, join_type="left")  # 左连接
 
 # 锁定和特殊查询
-User.objects.select_for_update()            # 行级锁
-User.objects.select_for_update(nowait=True) # 不等待锁
+User.objects.select_for_update()            # 行级锁定
+User.objects.select_for_update(nowait=True) # 无等待锁定
 User.objects.none()                         # 空结果集
 
 # SQLAlchemy 选项
 from sqlalchemy.orm import joinedload
 User.objects.options(joinedload(User.profile))
+
+# 默认排序控制
+User.objects.skip_default_ordering()        # 跳过默认排序
+User.objects.reverse()                      # 反向默认排序
 ```
 
 #### 查询执行方法
 
 ```python
-# 基础执行
+# 基本执行
 await User.objects.all()                    # 获取所有结果
-await User.objects.get(User.id == 1)                # 获取单个对象
+await User.objects.get(User.id == 1)        # 获取单个对象
 await User.objects.first()                  # 获取第一个对象
 await User.objects.last()                   # 获取最后一个对象
-await User.objects.earliest('created_at')   # 获取最早的对象
-await User.objects.latest('created_at')     # 获取最新的对象
-await User.objects.count()                  # 统计数量
+await User.objects.earliest('created_at')   # 获取最早对象
+await User.objects.latest('created_at')     # 获取最新对象
+await User.objects.count()                  # 计数
 await User.objects.exists()                 # 检查存在性
 
 # 数据提取
@@ -296,20 +323,14 @@ users = await User.objects.get_item(slice(0, 10))  # 获取前10个对象
 
 # 日期时间查询
 dates = await User.objects.dates('created_at', 'month')  # 按月分组的日期
-datetimes = await User.objects.datetimes('created_at', 'day')  # 按天分组的时间
+datetimes = await User.objects.datetimes('created_at', 'day')  # 按天分组的日期时间
 
 # 查询执行计划分析
 plan = await User.objects.explain()  # 基本执行计划
-plan = await User.objects.explain(analyze=True)  # 实际执行并分析
+plan = await User.objects.explain(analyze=True)  # 实际执行和分析
 plan = await User.objects.explain(output="json")  # JSON 格式输出
-# PostgreSQL 高级选项
-plan = await User.objects.explain(analyze=True, verbose=True, buffers=True)
-# MySQL JSON 格式
-plan = await User.objects.explain(output="json")
-# SQLite 查询计划
-plan = await User.objects.explain()  # 自动适配 SQLite 语法
 
-# 原生SQL查询
+# 原生 SQL 查询
 users = await User.objects.raw("SELECT * FROM users WHERE age > :age", {"age": 18})
 
 # 异步迭代器（大数据集处理）
@@ -325,20 +346,14 @@ staff_users = User.objects.filter(User.is_staff == True)
 union_result = await active_users.union(staff_users)  # UNION 去重
 union_all_result = await active_users.union(staff_users, all_=True)  # UNION ALL 保留重复
 
-# 交集：获取同时存在于两个查询结果中的记录
+# 交集：获取两个查询结果中都存在的记录
 intersection_result = await active_users.intersection(staff_users)
 
-# 差集：获取在第一个查询中但不在第二个查询中的记录
+# 差集：获取第一个查询中存在但第二个查询中不存在的记录
 difference_result = await active_users.difference(staff_users)
 
-# 多个 QuerySet 的集合操作
-admin_users = User.objects.filter(User.role == "admin")
-manager_users = User.objects.filter(User.role == "manager")
-all_privileged = await active_users.union(admin_users, manager_users)  # 多个并集
-common_users = await active_users.intersection(staff_users, admin_users)  # 多个交集
-
 # 批量操作
-updated_count = await User.objects.filter(User.is_active == False).update(values={"status": "inactive"})
+updated_count = await User.objects.filter(User.is_active == False).update({"status": "inactive"})
 deleted_count = await User.objects.filter(User.is_deleted == True).delete()
 
 # 子查询
@@ -351,7 +366,7 @@ users = await User.objects.using(analytics_session).filter(User.age >= 18).all()
 
 ## 使用指南
 
-### 基础用法
+### 基本用法
 
 ```python
 # 简单查询
@@ -372,6 +387,37 @@ recent_users = await User.objects.order_by('-created_at').limit(10).all()
 
 # 字段选择
 user_names = await User.objects.values_list('username', flat=True)
+```
+
+### 默认排序用法
+
+```python
+# 带默认排序的模型
+class User(ObjectModel):
+    name: Column[str] = str_column()
+    created_at: Column[datetime] = datetime_column()
+    
+    class Config:
+        ordering = ["-created_at", "name"]  # 默认排序
+
+# 自动应用默认排序
+users = await User.objects.all()        # 按 -created_at, name 排序
+first_user = await User.objects.first() # 使用默认排序
+last_user = await User.objects.last()   # 使用默认排序
+
+# 覆盖默认排序
+users = await User.objects.order_by("name").all()  # 自定义排序覆盖默认
+
+# 跳过默认排序以提升性能
+count = await User.objects.skip_default_ordering().count()  # 计数时无排序
+users = await User.objects.skip_default_ordering().order_by("id").all()  # 仅自定义排序
+
+# 反向默认排序
+users = await User.objects.reverse().all()  # 反向默认排序
+
+# 与默认排序链式调用
+users = await User.objects.filter(User.is_active == True).all()  # 包含默认排序
+users = await User.objects.filter(User.is_active == True).skip_default_ordering().all()  # 无默认排序
 ```
 
 ### 高级用法
@@ -402,7 +448,7 @@ complex_users_sqlalchemy = await User.objects.filter(
     )
 ).all()
 
-# 混合使用 Q 对象和 SQLAlchemy 语法
+# 混合 Q 对象和 SQLAlchemy 语法
 mixed_query = await User.objects.filter(
     Q(User.is_active == True),
     or_(
@@ -444,7 +490,7 @@ analytics_users = await User.objects.using(analytics_session).filter(User.create
 # 批量操作
 updated_count = await User.objects.filter(
     User.last_login < inactive_threshold
-).update(values={"is_active": False, "status": "inactive"})
+).update({"is_active": False, "status": "inactive"})
 
 deleted_count = await User.objects.filter(
     Q(User.is_deleted == True),
@@ -455,6 +501,27 @@ deleted_count = await User.objects.filter(
 async with ctx_session() as session:
     users = await User.objects.using(session).filter(User.is_active == True).all()
     await User.objects.using(session).filter(User.id.in_([u.id for u in users])).update(
-        values={"last_seen": datetime.now()}
+        {"last_seen": datetime.now()}
     )
+```
+
+### 性能优化
+
+```python
+# 计数操作跳过默认排序
+total_users = await User.objects.skip_default_ordering().count()
+
+# 高效使用默认排序
+recent_users = await User.objects.limit(10).all()  # 高效使用默认排序
+
+# 需要时覆盖默认排序
+alphabetical_users = await User.objects.order_by("name").all()  # 覆盖默认
+
+# 与过滤结合
+active_recent = await User.objects.filter(User.is_active == True).limit(5).all()  # 默认排序 + 过滤
+
+# 带排序控制的复杂查询
+complex_query = await User.objects.filter(
+    Q(User.department == "IT") | Q(User.role == "admin")
+).skip_default_ordering().order_by("salary", "-hire_date").all()
 ```

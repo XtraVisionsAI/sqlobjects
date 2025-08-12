@@ -248,28 +248,55 @@ class EmailValidator(BaseValidator):
             raise create_validation_error("invalid_email")
 ```
 
-#### 与 model 模块的集成
+#### Integration with model Module
 
-Validators 模块与 model 模块的 ModelMixin 紧密集成：
+Validators module integrates closely with ModelMixin in model module:
 
 ```python
-# model 模块中使用验证器
+# Using validators in model module
 class ModelMixin:
     def _get_column_validators(self, field_name: str) -> list:
-        """获取字段的列验证器"""
-        validators = []
-        
-        if hasattr(self.__class__, field_name):
-            field_attr = getattr(self.__class__, field_name)
-            
-            # 从字段定义中获取验证器
+        """Get column validators from the actual instance."""
+        model_class = self._get_model_class()
+        column_validators = []
+
+        if hasattr(model_class, field_name):
+            field_attr = getattr(model_class, field_name)
+
             if hasattr(field_attr, "_sqlobjects_validators"):
-                validators = field_attr._sqlobjects_validators or []
+                column_validators = field_attr._sqlobjects_validators or []
             elif hasattr(field_attr, "column") and hasattr(field_attr.column, "info"):
                 if "_validators" in field_attr.column.info:
-                    validators = field_attr.column.info["_validators"]
-        
-        return validators
+                    column_validators = field_attr.column.info["_validators"]
+            elif hasattr(field_attr, "property"):
+                if hasattr(field_attr.property, "columns"):
+                    for col in field_attr.property.columns:
+                        if hasattr(col, "info") and "_validators" in col.info:
+                            column_validators = col.info["_validators"]
+                            break
+                elif hasattr(field_attr.property, "info") and "_validators" in field_attr.property.info:
+                    column_validators = field_attr.property.info["_validators"]
+
+        return column_validators
+    
+    def _temporarily_disable_sqlalchemy_validators(self) -> dict[str, Any]:
+        """Temporarily disable SQLAlchemy validators on the model class."""
+        model_class = self._get_model_class()
+        original_validators = {}
+
+        for attr_name in dir(model_class):
+            attr = getattr(model_class, attr_name)
+            if hasattr(attr, "__validates__"):
+                original_validators[attr_name] = attr
+                setattr(model_class, attr_name, lambda _, key, value: value)
+
+        return original_validators
+    
+    def _restore_sqlalchemy_validators(self, original_validators: dict[str, Any]) -> None:
+        """Restore SQLAlchemy validators on the model class."""
+        model_class = self._get_model_class()
+        for attr_name, original_method in original_validators.items():
+            setattr(model_class, attr_name, original_method)
 ```
 
 #### 模块职责分离
