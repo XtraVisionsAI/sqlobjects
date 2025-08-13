@@ -177,7 +177,7 @@ class SignalMixin:
             >>> # This is called internally by the ORM
             >>> await instance._emit_signal("before", context)
         """
-        await _emit_signal_handlers(self, timing, context)
+        await _emit_signal(self, timing, context)
 
     @classmethod
     async def _emit_bulk_signal(cls, timing: str, context: SignalContext) -> None:
@@ -199,7 +199,7 @@ class SignalMixin:
             >>> # This is called internally by the ORM
             >>> await User._emit_bulk_signal("before", context)
         """
-        await _emit_signal_handlers(cls, timing, context)
+        await _emit_signal(cls, timing, context)
 
 
 def emit_signals(operation: Operation, is_bulk: bool = False):
@@ -364,7 +364,7 @@ def _extract_affected_count(kwargs: dict) -> int | None:
     return None
 
 
-async def _emit_signal_handlers(target, timing: str, context: SignalContext) -> None:
+async def _emit_signal(target, timing: str, context: SignalContext) -> None:
     """Common logic for emitting signal handlers."""
     # Determine if this is a bulk operation
     is_bulk = context.is_bulk

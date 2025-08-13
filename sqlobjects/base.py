@@ -38,6 +38,11 @@ class ModelMixin(SignalMixin):
         """Get the actual model instance."""
         raise NotImplementedError("Subclasses must implement _get_instance()")
 
+    def _update_instance(self, new_instance):
+        """Update the internal instance reference (for ModelProxy)."""
+        # Default implementation for ObjectModel - no-op
+        pass
+
     # ========== Unified Signal and Validation Methods ==========
 
     async def _emit_signal(self, timing: str, context: SignalContext):
@@ -241,9 +246,20 @@ class ModelMixin(SignalMixin):
 
     # ========== Instance Operations ==========
 
+    def _has_primary_key_values(self) -> bool:
+        """Check if instance has primary key values set."""
+        instance = self._get_instance()
+        model_class = self._get_model_class()
+
+        if not hasattr(model_class, "__table__"):
+            return False
+
+        pk_columns = model_class.__table__.primary_key.columns  # noqa
+        return all(getattr(instance, col.name, None) is not None for col in pk_columns)
+
     @emit_signals(Operation.SAVE)
     async def save(self, validate: bool = True):
-        """Validate and save the model instance to the database.
+        """Smart save operation that automatically detects CREATE vs UPDATE.
 
         Args:
             validate: Whether to execute all validation (both SQLObjects and SQLAlchemy validators)
@@ -257,7 +273,7 @@ class ModelMixin(SignalMixin):
             DatabaseError: If database connection or transaction fails
             AttributeError: If model fields are not properly defined
         """
-        session = self._get_session()
+        session = self._get_session()  # ModelProxy already handles session attachment
         instance = self._get_instance()
 
         if validate:
@@ -268,7 +284,23 @@ class ModelMixin(SignalMixin):
             original_validators = self._temporarily_disable_sqlalchemy_validators()
 
         try:
-            session.add(instance)
+            current_session = async_object_session(instance)
+
+            if current_session is None:
+                # Instance not in any session
+                if self._has_primary_key_values():
+                    # Has PK values - use merge for UPDATE behavior
+                    merged_instance = await session.merge(instance)
+                    self._update_instance(merged_instance)
+                else:
+                    # No PK values - use add for INSERT behavior
+                    session.add(instance)
+            elif current_session is not session:
+                # Instance from different session - merge
+                merged_instance = await session.merge(instance)
+                self._update_instance(merged_instance)
+            # If already in same session, SQLAlchemy handles UPDATE automatically
+
             await session.flush()
         finally:
             if not validate and original_validators:
@@ -288,34 +320,38 @@ class ModelMixin(SignalMixin):
         session = self._get_session()
         instance = self._get_instance()
 
+        current_session = async_object_session(instance)
+        if current_session is None and self._has_primary_key_values():
+            # Instance not in session but has PK - merge first
+            instance = await session.merge(instance)
+            self._update_instance(instance)
+        elif current_session is not None and current_session is not session:
+            # Instance from different session - merge
+            instance = await session.merge(instance)
+            self._update_instance(instance)
+
         await session.delete(instance)
         await session.flush()
 
-    async def refresh(self):
+    async def refresh(self, fields: list[str] | None = None):
         """Refresh this instance with the latest data from the database.
-
-        Returns:
-            The refreshed model instance
-        """
-        session = self._get_session()
-        instance = self._get_instance()
-
-        await session.flush()
-        await session.refresh(instance)
-        return self
-
-    async def refresh_from_db(self, fields: list[str] | None = None):
-        """Refresh specific fields from the database without affecting other fields.
 
         Args:
             fields: List of specific fields to refresh, if None refreshes all fields
 
         Returns:
             The refreshed model instance
+
+        Raises:
+            ValueError: If instance doesn't have primary key values set
         """
         session = self._get_session()
         instance = self._get_instance()
         model_class = self._get_model_class()
+
+        # Ensure instance has primary key values
+        if not self._has_primary_key_values():
+            raise ValueError("Cannot refresh instance without primary key values")
 
         pk_columns = list(model_class.__table__.primary_key)  # noqa
         pk_conditions = {col.name: getattr(instance, col.name) for col in pk_columns}
@@ -410,6 +446,11 @@ class ModelProxy(ModelMixin):
     def _get_instance(self):
         return self._instance
 
+    def _update_instance(self, new_instance):
+        """Update the internal instance reference after merge."""
+        self._instance = new_instance
+        # Note: merged instance is already attached to session, keep _session_attached = True
+
     # ========== Session Management ==========
 
     def _ensure_session_attachment(self, session: AsyncSession) -> None:
@@ -420,7 +461,9 @@ class ModelProxy(ModelMixin):
         current_session = async_object_session(self._instance)
 
         if current_session is None:
-            session.add(self._instance)
+            # Don't add here if instance has PK values - let save() handle merge
+            if not self._has_primary_key_values():
+                session.add(self._instance)
         elif current_session is not session:
             self._handle_session_migration(current_session, session)
 
