@@ -8,7 +8,6 @@ chainable query operations.
 from collections.abc import AsyncGenerator, Sequence
 from typing import Any, Generic, TypeVar, Union
 
-from session import SessionContextManager
 from sqlalchemy import and_, asc, delete, desc, func, literal, not_, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, defer, joinedload, selectinload
@@ -17,6 +16,7 @@ from sqlalchemy.sql.elements import BinaryExpression, ClauseElement
 
 from .exceptions import DoesNotExist, MultipleObjectsReturned
 from .expressions import SubqueryExpression
+from .session import SessionContextManager
 from .signals import Operation, emit_signals
 
 
@@ -328,7 +328,9 @@ class QuerySet(Generic[T]):
         Returns:
             New QuerySet instance
         """
-        return QuerySet(self._model, query or self._query, self._db_or_session, self._default_ordering)
+        return QuerySet(
+            self._model, query if query is not None else self._query, self._db_or_session, self._default_ordering
+        )
 
     def skip_default_ordering(self) -> "QuerySet[T]":
         """Return a QuerySet that skips applying default ordering.
@@ -1222,7 +1224,7 @@ class QuerySet(Generic[T]):
     # Data Operations Methods
     # ========================================
 
-    @emit_signals(Operation.UPDATE)
+    @emit_signals(Operation.SAVE, is_bulk=True)
     async def update(self, **values) -> int:
         """Perform bulk update on objects matching the query conditions.
 
@@ -1250,7 +1252,7 @@ class QuerySet(Generic[T]):
         await self._session.flush()
         return affected_count
 
-    @emit_signals(Operation.DELETE)
+    @emit_signals(Operation.DELETE, is_bulk=True)
     async def delete(self) -> int:
         """Perform bulk delete on objects matching the query conditions.
 
