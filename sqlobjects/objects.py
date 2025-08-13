@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .exceptions import DoesNotExist, MultipleObjectsReturned, ValidationError
 from .queries import QuerySet, T
 from .session import SessionContextManager
-from .signals import Operation, SignalContext, emit_signals
+from .signals import Operation, emit_signals
 
 
 class ObjectsDescriptor(Generic[T]):
@@ -225,121 +225,145 @@ class ObjectsManager(Generic[T]):
         """
         return await self.filter().datetimes(field, kind, order=order)
 
+    def _validate_field_names(self, **kwargs) -> None:
+        """Validate that all field names exist on the model."""
+        model_fields = set(self._model.__table__.columns.keys())
+        for field_name in kwargs.keys():
+            if field_name not in model_fields:
+                raise AttributeError(f"'{self._model.__name__}' has no field '{field_name}'")
+
     async def get_or_create(
-        self, *filters, defaults: dict[str, Any] | None = None, validate: bool = True
+        self, defaults: dict[str, Any] | None = None, validate: bool = True, **lookup
     ) -> tuple[T, bool]:
         """Get an existing object or create a new one if it doesn't exist.
 
         Args:
-            *filters: Q objects or SQLAlchemy expressions for lookup conditions
-            defaults: Default values to use when creating a new object
+            defaults: Additional values to use when creating a new object
             validate: Whether to validate when creating
+            **lookup: Field lookup conditions (only equality supported)
 
         Returns:
             Tuple of (object, created) where created is True if object was created
 
+        Raises:
+            AttributeError: If specified field names don't exist on the model
+            ValidationError: If validation fails during creation
+            IntegrityError: If database constraints are violated
+
         Examples:
             # Simple field lookup
             user, created = await User.objects.get_or_create(
-                User.username == "john",
+                username="john",
                 defaults={"email": "john@example.com"}
             )
 
             # Multiple conditions
             user, created = await User.objects.get_or_create(
-                User.username == "john",
-                User.is_active == True,
+                username="john",
+                is_active=True,
                 defaults={"email": "john@example.com"}
             )
 
-            # Complex conditions with Q objects
-            user, created = await User.objects.get_or_create(
-                Q(User.username == "john") | Q(User.email == "john@example.com"),
-                defaults={"is_active": True}
+            # Using specific session
+            user, created = await User.objects.using(session).get_or_create(
+                username="john",
+                defaults={"email": "john@example.com"}
             )
         """
+        if not lookup:
+            raise ValueError("get_or_create requires at least one lookup field")
+
+        # Validate field names
+        self._validate_field_names(**lookup)
+        if defaults:
+            self._validate_field_names(**defaults)
+
         try:
-            # Build queryset with conditions
-            queryset = self.filter()
-
-            # Apply filter conditions
-            if filters:
-                queryset = queryset.filter(*filters)
-
-            obj = await queryset.get()
+            # Try to get existing object
+            conditions = [getattr(self._model, field) == value for field, value in lookup.items()]
+            obj = await self.filter(*conditions).get()
             return obj, False
         except DoesNotExist:
-            pass
+            # Create new object with lookup fields + defaults
+            create_data = lookup.copy()
+            if defaults:
+                # defaults override lookup values if there's conflict
+                create_data.update(defaults)
 
-        create_kwargs = {}
-        if defaults:
-            create_kwargs.update(defaults)
-        return await self.create(validate=validate, **create_kwargs), True
+            # Create instance and use save() method to trigger signals
+            obj = self._model(**create_data)
+            await obj.using(self._session).save(validate=validate)  # type: ignore[attr-defined]
+            return obj, True
 
     async def update_or_create(
-        self, *filters, defaults: dict[str, Any] | None = None, validate: bool = True
+        self, defaults: dict[str, Any] | None = None, validate: bool = True, **lookup
     ) -> tuple[T, bool]:
         """Update an existing object or create a new one if it doesn't exist.
 
         Args:
-            *filters: Q objects or SQLAlchemy expressions for lookup conditions
             defaults: Values to update/set when object exists or is created
             validate: Whether to validate when updating/creating
+            **lookup: Field lookup conditions (only equality supported)
 
         Returns:
             Tuple of (object, created) where created is True if object was created
 
+        Raises:
+            AttributeError: If specified field names don't exist on the model
+            ValidationError: If validation fails during update/creation
+            IntegrityError: If database constraints are violated
+
         Examples:
             # Simple field lookup
             user, created = await User.objects.update_or_create(
-                User.username == "john",
+                username="john",
                 defaults={"last_login": datetime.now()}
             )
 
             # Multiple conditions
             user, created = await User.objects.update_or_create(
-                User.username == "john",
-                User.is_active == True,
+                username="john",
+                is_active=True,
                 defaults={"last_login": datetime.now()}
             )
 
-            # Complex conditions with Q objects
-            user, created = await User.objects.update_or_create(
-                Q(User.username == "john") | Q(User.email == "john@example.com"),
+            # Using specific session
+            user, created = await User.objects.using(session).update_or_create(
+                username="john",
                 defaults={"last_login": datetime.now()}
             )
         """
+        if not lookup:
+            raise ValueError("update_or_create requires at least one lookup field")
+
+        # Validate field names
+        self._validate_field_names(**lookup)
+        if defaults:
+            self._validate_field_names(**defaults)
+
         try:
-            # Build queryset with conditions
-            queryset = self.filter()
+            # Try to get existing object
+            conditions = [getattr(self._model, field) == value for field, value in lookup.items()]
+            obj = await self.filter(*conditions).get()
 
-            # Apply filter conditions
-            if filters:
-                queryset = queryset.filter(*filters)
-
-            obj = await queryset.get()
+            # Update existing object with defaults using save() method
             if defaults:
-                context = SignalContext(
-                    operation=Operation.SAVE, session=self._session, model_class=obj.__class__, instance=obj
-                )
-                await obj._emit_signal("before", context)  # type: ignore[attr-defined] # noqa
-
                 for key, value in defaults.items():
                     setattr(obj, key, value)
-                if validate:
-                    obj.validate_all()  # type: ignore[attr-defined]
+                await obj.using(self._session).save(validate=validate)  # type: ignore[attr-defined]
 
-                await self._session.flush()
-
-                await obj._emit_signal("after", context)  # type: ignore[attr-defined] # noqa
             return obj, False
         except DoesNotExist:
-            pass
+            # Create new object with lookup fields + defaults
+            create_data = lookup.copy()
+            if defaults:
+                # defaults override lookup values if there's conflict
+                create_data.update(defaults)
 
-        create_kwargs = {}
-        if defaults:
-            create_kwargs.update(defaults)
-        return await self.create(validate=validate, **create_kwargs), True
+            # Create instance and use save() method to trigger signals
+            obj = self._model(**create_data)
+            await obj.using(self._session).save(validate=validate)  # type: ignore[attr-defined]
+            return obj, True
 
     async def in_bulk(self, id_list: list[Any] | None = None, field_name: str = "pk") -> dict[Any, T]:
         """Get multiple objects as a dictionary mapping field values to objects.
@@ -432,7 +456,7 @@ class ObjectsManager(Generic[T]):
 
     # ========== Update & Delete Operations ==========
 
-    @emit_signals(Operation.UPDATE, is_bulk=True)
+    @emit_signals(Operation.SAVE, is_bulk=True)
     async def bulk_update(
         self, mappings: list[dict[str, Any]], match_fields: list[str] | None = None, batch_size: int = 1000
     ) -> int:
