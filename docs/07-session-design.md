@@ -49,7 +49,53 @@ async with ctx_session() as session:
     await asyncio.gather(*tasks)  # 显式共享同一会话
 ```
 
-### 3. 多数据库环境支持
+### 3. 分离实例的智能会话管理
+
+针对未附加到 SQLAlchemy 会话的实例（分离实例），提供智能的会话管理策略：
+
+```python
+# 分离实例的创建和操作
+detached_user = User(id=1, name="Alice", email="alice@example.com")
+
+# save() 方法智能处理：有主键使用 merge()，无主键使用 add()
+await detached_user.save()  # 自动检测为 UPDATE 操作
+
+# delete() 方法智能附加到会话
+detached_user = User(id=1)
+await detached_user.delete()  # 自动 merge() 后删除
+
+# refresh() 方法通过直接查询处理
+detached_user = User(id=1, name="Old Data")
+await detached_user.refresh()  # 从数据库重新加载
+```
+
+#### 分离实例处理策略
+
+不同操作采用不同的处理策略：
+
+```python
+# save() 方法：根据主键状态选择策略
+if self._has_primary_key_values():
+    # 有主键：使用 merge() 实现 UPDATE 语义
+    merged_instance = await session.merge(instance)
+    self._update_instance(merged_instance)  # 更新 ModelProxy 引用
+else:
+    # 无主键：使用 add() 实现 CREATE 语义
+    session.add(instance)
+
+# delete() 方法：使用 merge() 附加到会话
+if async_object_session(instance) is None:
+    merged_instance = await session.merge(instance)
+    await session.delete(merged_instance)
+
+# refresh() 方法：直接数据库查询，避免数据覆盖
+if async_object_session(instance) is None:
+    # 通过主键直接查询数据库
+    fresh_data = await session.execute(select(model_class).where(pk_condition))
+    # 更新实例属性
+```
+
+### 4. 多数据库环境支持
 
 原生支持多数据库环境，每个数据库独立管理会话工厂和作用域：
 
@@ -138,11 +184,18 @@ class ModelProxy(ModelMixin):
         
         current_session = async_object_session(self._instance)
         if current_session is None:
-            session.add(self._instance)
+            # 对于带主键的分离实例，避免与 merge() 操作冲突
+            if not self._has_primary_key_values():
+                session.add(self._instance)
         elif current_session is not session:
             self._handle_session_migration(current_session, session)
         
         self._session_attached = True
+    
+    def _update_instance(self, new_instance):
+        """更新内部实例引用（处理 merge() 返回的新实例）"""
+        self._instance = new_instance
+        self._session_attached = True  # 新实例已附加到会话
     
     def _handle_session_migration(self, old_session: AsyncSession, new_session: AsyncSession) -> None:
         """Handle instance migration between different sessions."""
@@ -163,6 +216,16 @@ class ModelProxy(ModelMixin):
             super().__setattr__(name, value)
         else:
             setattr(self._instance, name, value)
+    
+    def _has_primary_key_values(self) -> bool:
+        """检测实例是否具有主键值"""
+        if hasattr(self._instance, "__table__"):
+            for pk_col in self._instance.__table__.primary_key.columns:
+                value = getattr(self._instance, pk_col.name, None)
+                if value is None:
+                    return False
+            return len(self._instance.__table__.primary_key.columns) > 0
+        return False
 
 # Model instance using() method
 class ModelMixin:
@@ -419,6 +482,79 @@ async def process_batch_isolated_explicit(batch_data, batch_id):
         for item in batch_data:
             await User.objects.using(session).create(**item)
         return f"Isolated batch {batch_id} completed"
+```
+
+#### 分离实例的高级操作
+
+在实际应用中，分离实例常用于 API 更新、数据同步等场景：
+
+```python
+# API 更新场景：客户端传递完整对象数据
+@app.put("/users/{user_id}")
+async def update_user(user_id: int, user_data: UserUpdate):
+    # 创建分离实例，包含主键
+    user = User(id=user_id, **user_data.dict())
+    
+    # save() 自动检测为 UPDATE 操作
+    await user.save()
+    return user
+
+# 数据同步场景：从外部系统同步数据
+async def sync_users_from_external_api():
+    external_users = await fetch_users_from_external_api()
+    
+    async with ctx_session() as session:
+        for user_data in external_users:
+            # 创建带主键的分离实例
+            user = User(id=user_data['id'], **user_data)
+            
+            # 使用 merge() 策略，存在则更新，不存在则创建
+            await user.using(session).save()
+
+# 批量操作中的分离实例处理
+async def batch_update_with_detached_instances():
+    updates = [
+        {"id": 1, "name": "Alice Updated", "email": "alice.new@example.com"},
+        {"id": 2, "name": "Bob Updated", "email": "bob.new@example.com"},
+        {"id": 3, "name": "Charlie Updated", "email": "charlie.new@example.com"},
+    ]
+    
+    async with ctx_session() as session:
+        tasks = []
+        for update_data in updates:
+            # 创建分离实例
+            user = User(**update_data)
+            
+            # 使用 ModelProxy 绑定会话
+            task = asyncio.create_task(user.using(session).save())
+            tasks.append(task)
+        
+        await asyncio.gather(*tasks)
+
+# 跨数据库的分离实例操作
+async def cross_database_detached_operations():
+    # 从主数据库获取用户数据
+    user_data = {"id": 1, "name": "John", "email": "john@example.com"}
+    
+    async with ctx_sessions("main", "analytics") as sessions:
+        # 创建分离实例
+        main_user = User(**user_data)
+        analytics_user = User(**user_data)
+        
+        # 同时更新两个数据库
+        await main_user.using(sessions["main"]).save()
+        await analytics_user.using(sessions["analytics"]).save()
+
+# 分离实例的选择性刷新
+async def selective_refresh_detached():
+    # 创建分离实例，包含部分数据
+    user = User(id=1, name="Local Name", email="local@example.com")
+    
+    # 仅刷新 name 字段，保持 email 的本地值
+    await user.refresh(fields=["name"])
+    
+    print(f"Name from DB: {user.name}")      # 数据库中的最新值
+    print(f"Email (local): {user.email}")    # 保持本地值
 ```
 
 #### 选择合适的事务模式

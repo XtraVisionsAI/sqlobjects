@@ -10,7 +10,7 @@
             <option name="closes" value="" />
             <option name="scope" value="" />
             <option name="skipCi" value="" />
-            <option name="subject" value="" />
+            <option name="subject" value="style: standardize lines between and alignment" />
             <option name="type" value="feat" />
           </CommitTemplate>
         </option>

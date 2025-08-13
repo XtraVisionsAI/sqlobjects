@@ -193,6 +193,13 @@ class User(ObjectModel, SignalMixin):
 async def save(self):
     # 实现保存逻辑
     pass
+
+# get_or_create 和 update_or_create 也会触发信号
+user, created = await User.objects.get_or_create(
+    username="john",
+    defaults={"email": "john@example.com"}
+)
+# 会自动触发相应的 save/create/update 信号
 ```
 
 ### 高级用法
@@ -271,3 +278,33 @@ class User(ObjectModel, SignalMixin):
         # 更新后特定处理
         await self.notify_changes()
 ```
+
+### get_or_create 和 update_or_create 信号集成
+
+从 v1.1 开始，`get_or_create` 和 `update_or_create` 方法已集成信号机制，通过调用模型实例的 `save()` 方法来触发相应信号：
+
+```python
+# get_or_create 信号触发
+user, created = await User.objects.get_or_create(
+    username="john",
+    defaults={"email": "john@example.com"}
+)
+# 如果创建新用户，会触发：
+# before_save → before_create → 数据库操作 → after_save → after_create
+
+# update_or_create 信号触发
+user, created = await User.objects.update_or_create(
+    username="john",
+    defaults={"last_login": datetime.now()}
+)
+# 如果更新现有用户，会触发：
+# before_save → before_update → 数据库操作 → after_save → after_update
+# 如果创建新用户，会触发：
+# before_save → before_create → 数据库操作 → after_save → after_create
+```
+
+**实现原理：**
+- 这两个方法现在通过 `obj.using(session).save(validate=validate)` 来执行实际的数据库操作
+- `save()` 方法会自动检测是创建还是更新操作，并触发相应的信号
+- 保持了与直接调用 `save()` 方法相同的信号行为和验证流程
+- 确保了操作的一致性和信号系统的完整性

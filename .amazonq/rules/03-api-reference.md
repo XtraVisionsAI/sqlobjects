@@ -103,6 +103,168 @@ keyword_only: Column[str] = str_column(kw_only=True)  # Keyword-only parameter
 existing_col: Column[str] = str_column(use_existing_column=True)  # Reuse column definition
 ```
 
+## Model Instance Operation API
+
+### 1. Smart save() Method API
+
+```python
+# Smart save() method with automatic CREATE/UPDATE detection
+async def save(self, validate: bool = True) -> None:
+    """Save instance with intelligent operation detection.
+    
+    Automatically detects whether to perform CREATE or UPDATE based on
+    primary key values. Supports detached instances through merge() strategy.
+    
+    Args:
+        validate: Whether to execute validation before saving
+    
+    Raises:
+        ValidationError: If validation fails
+        IntegrityError: If database constraints are violated
+    """
+
+# Usage examples
+# New instance - automatically detected as CREATE
+user = User(name="John", email="john@example.com")
+await user.save()  # Executes INSERT operation
+
+# Existing instance - automatically detected as UPDATE  
+user.name = "Jane"
+await user.save()  # Executes UPDATE operation
+
+# Detached instance with primary key - intelligently handled as UPDATE
+detached_user = User(id=1, name="Alice", email="alice@example.com")
+await detached_user.save()  # Uses merge() for UPDATE semantics
+
+# With specific session using ModelProxy
+await user.using(session).save()
+await detached_user.using("analytics").save()
+```
+
+### 2. Detached Instance Operations API
+
+```python
+# delete() method supports detached instances
+async def delete(self) -> None:
+    """Delete instance, supporting both attached and detached instances.
+    
+    For detached instances, automatically attaches to session using merge()
+    before deletion.
+    
+    Raises:
+        DoesNotExist: If instance doesn't exist in database
+    """
+
+# Usage examples
+# Delete attached instance
+user = await User.objects.get(User.id == 1)
+await user.delete()
+
+# Delete detached instance
+detached_user = User(id=1)
+await detached_user.delete()  # Automatically attaches to session
+
+# With specific session
+await detached_user.using(session).delete()
+```
+
+### 3. Unified refresh() Method API
+
+```python
+# Unified refresh() method replacing both refresh() and refresh_from_db()
+async def refresh(self, fields: list[str] = None) -> None:
+    """Refresh instance data from database.
+    
+    Supports both full refresh and selective field refresh.
+    Handles both attached and detached instances.
+    
+    Args:
+        fields: List of field names to refresh. If None, refreshes all fields.
+    
+    Raises:
+        DoesNotExist: If instance doesn't exist in database
+        ValueError: If instance has no primary key values
+    """
+
+# Usage examples
+# Full refresh (replaces original refresh_from_db())
+user = await User.objects.get(User.id == 1)
+user.name = "Modified"
+await user.refresh()  # Resets all fields to database state
+
+# Selective field refresh
+await user.refresh(fields=["name", "updated_at"])  # Only refresh specified fields
+
+# Detached instance refresh
+detached_user = User(id=1)
+await detached_user.refresh()  # Loads data via direct query
+
+# With specific session
+await user.using(session).refresh()
+await detached_user.using("analytics").refresh(fields=["name"])
+```
+
+### 4. ModelProxy Session Binding API
+
+```python
+# using() method returns ModelProxy for session binding
+def using(self, db_or_session: str | AsyncSession) -> "ModelProxy":
+    """Return a proxy bound to specific database/session.
+    
+    Args:
+        db_or_session: Database name string or AsyncSession instance
+    
+    Returns:
+        ModelProxy instance bound to the specified session
+    """
+
+# Usage examples
+# Bind to specific session
+user = User(name="John")
+proxy = user.using(session)
+await proxy.save()
+
+# Bind to database by name
+proxy = user.using("analytics")
+await proxy.save()
+
+# Chain operations with session binding
+user = User(name="Alice")
+await user.using(session).save()
+user.name = "Alice Updated"
+await user.using(session).save()
+await user.using(session).delete()
+
+# ModelProxy preserves all model functionality
+proxy = user.using(session)
+proxy.name = "New Name"  # Attribute access
+user_dict = proxy.to_dict()  # Method access
+await proxy.refresh(fields=["name"])  # Enhanced methods
+```
+
+### 5. Primary Key Detection API
+
+```python
+# Internal method for primary key detection (used by smart save())
+def _has_primary_key_values(self) -> bool:
+    """Check if instance has primary key values.
+    
+    Supports both single and composite primary keys.
+    
+    Returns:
+        True if all primary key fields have non-None values
+    """
+
+# Usage in smart save() logic
+if self._has_primary_key_values():
+    # Has primary key: use merge() for UPDATE semantics
+    merged_instance = await session.merge(instance)
+    self._update_instance(merged_instance)
+else:
+    # No primary key: use add() for CREATE semantics
+    session.add(instance)
+```
+
 ## Model Definition Standards
 
 ### 1. Basic Model Structure
@@ -623,6 +785,148 @@ postgres_array = sa_func.array_agg(User.tags)
 mysql_group_concat = sa_func.group_concat(User.names)
 ```
 
+## Advanced Instance Operations
+
+### 1. Composite Primary Key Support
+
+```python
+# Smart save() works with composite primary keys
+class OrderItem(ObjectModel):
+    order_id: Column[int] = int_column(primary_key=True)
+    product_id: Column[int] = int_column(primary_key=True)
+    quantity: Column[int] = int_column()
+    
+# Detached instance with composite primary key
+order_item = OrderItem(order_id=1, product_id=2, quantity=5)
+await order_item.save()  # Intelligently detects composite primary key
+
+# Primary key detection logic handles composite keys
+def _has_primary_key_values(self) -> bool:
+    """Supports both single and composite primary keys"""
+    for pk_col in self.__table__.primary_key.columns:
+        if getattr(self, pk_col.name, None) is None:
+            return False
+    return len(self.__table__.primary_key.columns) > 0
+```
+
+### 2. Error Handling for Instance Operations
+
+```python
+# Proper error handling for enhanced instance operations
+
+try:
+    # Smart save with validation
+    detached_user = User(id=1, email="invalid-email")
+    await detached_user.save(validate=True)
+except ValidationError as e:
+    print(f"Validation failed: {e.message}")
+except IntegrityError as e:
+    print(f"Database constraint violation: {e}")
+
+try:
+    # Delete detached instance
+    user_to_delete = User(id=999)  # Non-existent ID
+    await user_to_delete.delete()
+except DoesNotExist as e:
+    print(f"User not found: {e}")
+
+try:
+    # Refresh detached instance without primary key
+    invalid_user = User(name="No ID")
+    await invalid_user.refresh()
+except ValueError as e:
+    print(f"Cannot refresh without primary key: {e}")
+
+# Graceful handling of detached instance operations
+async def safe_detached_operation(user_id: int, user_data: dict):
+    try:
+        detached_user = User(id=user_id, **user_data)
+        await detached_user.save()
+        return detached_user
+    except DoesNotExist:
+        # Handle case where user doesn't exist for UPDATE
+        new_user = User(**user_data)
+        await new_user.save()  # CREATE instead
+        return new_user
+    except ValidationError as e:
+        # Handle validation errors
+        logger.error(f"Validation failed for user {user_id}: {e.message}")
+        raise
+```
+
+## get_or_create 和 update_or_create 信号集成
+
+从 v1.1 开始，`get_or_create` 和 `update_or_create` 方法已集成信号机制，通过调用模型实例的 `save()` 方法来触发相应信号：
+
+### 1. get_or_create 信号集成
+
+```python
+# get_or_create 现在会触发信号
+user, created = await User.objects.get_or_create(
+    username="john",  # 查找条件
+    defaults={"email": "john@example.com"}  # 创建时的默认值
+)
+# 如果创建新用户，会触发：
+# before_save → before_create → 数据库操作 → after_save → after_create
+
+# 使用特定会话
+user, created = await User.objects.using(session).get_or_create(
+    username="john",
+    defaults={"email": "john@example.com"}
+)
+```
+
+### 2. update_or_create 信号集成
+
+```python
+# update_or_create 现在会触发信号
+user, created = await User.objects.update_or_create(
+    username="john",  # 查找条件
+    defaults={"last_login": datetime.now()}  # 更新/创建时的值
+)
+# 如果更新现有用户，会触发：
+# before_save → before_update → 数据库操作 → after_save → after_update
+# 如果创建新用户，会触发：
+# before_save → before_create → 数据库操作 → after_save → after_create
+
+# 复杂条件查找
+user, created = await User.objects.update_or_create(
+    username="john",
+    is_active=True,  # 多个查找条件
+    defaults={"last_login": datetime.now()}
+)
+```
+
+### 3. 实现原理
+
+**修改前的实现：**
+```python
+# get_or_create 直接调用 create() 方法
+obj = await self.create(validate=validate, **create_data)
+
+# update_or_create 手动处理信号
+context = SignalContext(...)
+await obj._emit_signal("before", context)
+# ... 手动设置属性和验证
+await self._session.flush()
+await obj._emit_signal("after", context)
+```
+
+**修改后的实现：**
+```python
+# 两个方法都使用实例的 save() 方法
+obj = self._model(**create_data)
+await obj.using(self._session).save(validate=validate)
+```
+
+### 4. 信号触发优势
+
+- **一致性**：与直接调用 `save()` 方法具有相同的信号行为
+- **智能检测**：`save()` 方法自动检测创建或更新操作
+- **完整验证**：执行完整的验证流程（字段级和模型级）
+- **代码复用**：消除重复的信号处理代码
+- **向后兼容**：API 接口保持不变，现有代码无需修改
+
 ## Batch Operations Best Practices
 
 ### 1. Update Operations
@@ -745,4 +1049,114 @@ async with ctx_session() as session:
         await session.commit()
     else:
         await session.rollback()
+```
+
+## Instance Operation Best Practices
+
+### 1. Smart save() Usage Patterns
+
+```python
+# Recommended patterns for different scenarios
+
+# API update endpoints - detached instances
+@app.put("/users/{user_id}")
+async def update_user(user_id: int, user_data: UserUpdate):
+    # Create detached instance with primary key
+    user = User(id=user_id, **user_data.dict())
+    # save() automatically detects as UPDATE
+    await user.save()
+    return user
+
+# Data synchronization - batch detached instances
+async def sync_users_from_external_api():
+    external_users = await fetch_users_from_external_api()
+    
+    async with ctx_session() as session:
+        for user_data in external_users:
+            # Create detached instance with primary key
+            user = User(id=user_data['id'], **user_data)
+            # Uses merge() strategy for upsert behavior
+            await user.using(session).save()
+
+# New record creation - standard pattern
+async def create_new_user(user_data: dict):
+    user = User(**user_data)  # No primary key
+    await user.save()  # Automatically detected as CREATE
+    return user
+```
+
+### 2. Detached Instance Best Practices
+
+```python
+# Working with detached instances effectively
+
+# Partial updates with selective refresh
+detached_user = User(id=1, name="Updated Name")
+await detached_user.save()  # Update only changed fields
+# Refresh only specific fields to get latest data
+await detached_user.refresh(fields=["updated_at", "version"])
+
+# Cross-database operations
+user_data = {"id": 1, "name": "John", "email": "john@example.com"}
+async with ctx_sessions("main", "analytics") as sessions:
+    # Same data to multiple databases
+    main_user = User(**user_data)
+    analytics_user = User(**user_data)
+    
+    await main_user.using(sessions["main"]).save()
+    await analytics_user.using(sessions["analytics"]).save()
+
+# Batch operations with detached instances
+async def batch_update_detached():
+    updates = [
+        {"id": 1, "name": "Alice Updated"},
+        {"id": 2, "name": "Bob Updated"},
+        {"id": 3, "name": "Charlie Updated"},
+    ]
+    
+    async with ctx_session() as session:
+        tasks = []
+        for update_data in updates:
+            user = User(**update_data)
+            task = asyncio.create_task(user.using(session).save())
+            tasks.append(task)
+        
+        await asyncio.gather(*tasks)
+```
+
+### 3. Session Management Best Practices
+
+```python
+# Effective session management with instance operations
+
+# Long-running operations with session control
+async def process_user_batch(user_ids: list[int]):
+    async with ctx_session() as session:
+        for user_id in user_ids:
+            # Load user
+            user = await User.objects.using(session).get(User.id == user_id)
+            
+            # Process user
+            await process_user_logic(user)
+            
+            # Save changes
+            await user.using(session).save()
+            
+            # Refresh to get latest state
+            await user.using(session).refresh(fields=["status", "updated_at"])
+
+# Mixed attached/detached operations
+async def mixed_operations_example():
+    async with ctx_session() as session:
+        # Work with attached instance
+        user = await User.objects.using(session).get(User.id == 1)
+        user.name = "Updated via attached"
+        await user.save()  # Uses existing session
+        
+        # Work with detached instance
+        detached_user = User(id=2, name="Updated via detached")
+        await detached_user.using(session).save()  # Explicit session binding
+        
+        # Both operations in same transaction
+        await session.commit()
 ```

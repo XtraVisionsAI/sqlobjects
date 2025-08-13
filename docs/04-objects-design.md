@@ -57,27 +57,34 @@ await User.objects.bulk_delete([1, 2, 3], id_field="id")
 
 ### 3. 智能获取或创建操作
 
-提供 get_or_create 和 update_or_create 方法，简化常见数据操作模式：
+提供 get_or_create 和 update_or_create 方法，简化常见数据操作模式。这些方法通过调用模型实例的 `save()` 方法来触发信号机制并复用验证逻辑：
 
 ```python
-# 获取或创建用户
+# 获取或创建用户 - 自动触发信号和验证
 user, created = await User.objects.get_or_create(
-    User.name == "John",
-    defaults={"age": 25, "email": "john@example.com"}
+    username="john",  # 查找条件
+    defaults={"age": 25, "email": "john@example.com"}  # 创建时的默认值
 )
 
-# 更新或创建用户
+# 更新或创建用户 - 使用 save() 方法触发信号
 user, created = await User.objects.update_or_create(
-    User.name == "John",
-    defaults={"last_login": datetime.now()}
+    username="john",  # 查找条件
+    defaults={"last_login": datetime.now()}  # 更新/创建时的值
 )
 
-# 复杂条件
+# 复杂条件查找
 user, created = await User.objects.get_or_create(
-    Q(User.name == "John") | Q(User.email == "john@example.com"),
-    defaults={"is_active": True}
+    username="john",
+    is_active=True,  # 多个查找条件
+    defaults={"email": "john@example.com"}
 )
 ```
+
+**信号集成特性：**
+- `get_or_create` 创建新对象时会触发 `before_save`、`after_save`、`before_create`、`after_create` 信号
+- `update_or_create` 更新现有对象时会触发 `before_save`、`after_save`、`before_update`、`after_update` 信号
+- 创建新对象时会触发相应的创建信号
+- 所有操作都会执行完整的验证流程（如果 `validate=True`）
 
 ### 4. 默认排序支持
 
@@ -181,9 +188,9 @@ async def in_bulk(self, id_list=None, field_name="pk") -> dict[Any, T]  # 批量
 async def create(self, validate=True, **kwargs) -> T  # 创建单个对象
 async def bulk_create(self, objects) -> None          # 批量创建
 
-# 获取或创建操作
-async def get_or_create(self, *filters, defaults=None, validate=True) -> tuple[T, bool]
-async def update_or_create(self, *filters, defaults=None, validate=True) -> tuple[T, bool]
+# 获取或创建操作（集成信号机制）
+async def get_or_create(self, defaults=None, validate=True, **lookup) -> tuple[T, bool]
+async def update_or_create(self, defaults=None, validate=True, **lookup) -> tuple[T, bool]
 
 # 批量操作
 async def bulk_update(self, mappings, match_fields=None, batch_size=1000) -> int
@@ -371,16 +378,16 @@ users_data = [
 ]
 await User.objects.bulk_create(users_data)
 
-# 获取或创建
+# 获取或创建（使用 save() 方法触发信号）
 user, created = await User.objects.get_or_create(
-    User.username == "john",
-    defaults={"email": "john@example.com"}
+    username="john",  # 查找条件
+    defaults={"email": "john@example.com"}  # 创建时的默认值
 )
 
-# 更新或创建
+# 更新或创建（使用 save() 方法触发信号）
 user, created = await User.objects.update_or_create(
-    User.username == "john",
-    defaults={"last_login": datetime.now()}
+    username="john",  # 查找条件
+    defaults={"last_login": datetime.now()}  # 更新/创建时的值
 )
 ```
 

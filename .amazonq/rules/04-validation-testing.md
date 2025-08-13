@@ -180,38 +180,107 @@ user_data = {"username": "john", "email": "john@example.com"}
 user = User.from_dict(user_data, validate=True)
 ```
 
-## Instance Operations Rules
+## Enhanced Instance Operations Rules
 
-### 1. Model Instance Lifecycle
+### 1. Smart save() Method Operations
 
 ```python
-# Create instances using ObjectsManager
-user = await User.objects.create(username="john", email="john@example.com")
+# Smart save() with automatic CREATE/UPDATE detection
 
-# Instance-level operations
+# New instance - automatically detected as CREATE
 user = User(username="john", email="john@example.com")
+await user.save()  # Executes INSERT operation
 
-# Save instance to database
-await user.save()  # With validation
+# Existing instance - automatically detected as UPDATE
+user.username = "jane"
+await user.save()  # Executes UPDATE operation
+
+# Detached instance with primary key - intelligently handled as UPDATE
+detached_user = User(id=1, username="alice", email="alice@example.com")
+await detached_user.save()  # Uses merge() for UPDATE semantics
+
+# Validation control with smart save
+await user.save(validate=True)   # Full validation (default)
 await user.save(validate=False)  # Skip validation
-# Save operations now handle transactions through session context
 
-# Delete instance from database
-await user.delete()  # Delete this instance
-await user.using(session).delete()  # With specific session
+# Session binding with smart save
+await user.using(session).save()  # With specific session
+await detached_user.using("analytics").save()  # With database name
+```
 
-# Refresh instance from database
-await user.refresh()  # Refresh all fields
-await user.refresh_from_db(["username", "email"])  # Refresh specific fields
+### 2. Detached Instance Operations
 
-# Data conversion
-user_dict = user.to_dict()  # Convert to dictionary
-user_dict = user.to_dict(include=["id", "username"])  # Include specific fields
-user_dict = user.to_dict(exclude=["password"])  # Exclude specific fields
+```python
+# Detached instance creation and operations
+detached_user = User(id=1, username="alice", email="alice@example.com")
 
-# Create from dictionary
-user_data = {"username": "john", "email": "john@example.com"}
-user = User.from_dict(user_data, validate=True)
+# save() method intelligently handles detached instances
+await detached_user.save()  # Automatically uses merge() for UPDATE
+
+# delete() method supports detached instances
+detached_user = User(id=1)
+await detached_user.delete()  # Automatically attaches to session then deletes
+
+# refresh() method handles detached instances via direct query
+detached_user = User(id=1, username="Old Data")
+await detached_user.refresh()  # Reloads data from database
+print(detached_user.username)  # Shows latest data
+
+# Selective field refresh for detached instances
+await detached_user.refresh(fields=["username", "email"])
+
+# Session binding with detached instances
+await detached_user.using(session).save()
+await detached_user.using(session).delete()
+await detached_user.using(session).refresh()
+```
+
+### 3. Unified refresh() Method
+
+```python
+# Unified refresh() method replacing both refresh() and refresh_from_db()
+
+# Full refresh (replaces original refresh_from_db())
+user = await User.objects.get(User.id == 1)
+user.username = "Modified"
+await user.refresh()  # Resets all fields to database state
+
+# Selective field refresh
+await user.refresh(fields=["username", "updated_at"])  # Only refresh specified fields
+
+# Detached instance refresh
+detached_user = User(id=1)
+await detached_user.refresh()  # Loads data via direct query
+
+# Session binding with refresh
+await user.using(session).refresh()
+await detached_user.using("analytics").refresh(fields=["username"])
+```
+
+### 4. ModelProxy Session Management
+
+```python
+# ModelProxy provides transparent session binding
+
+# Create proxy with session binding
+user = User(username="john", email="john@example.com")
+proxy = user.using(session)
+
+# All operations work through proxy
+await proxy.save()  # Uses bound session
+proxy.username = "jane"  # Attribute access
+user_dict = proxy.to_dict()  # Method access
+await proxy.refresh(fields=["username"])  # Enhanced methods
+
+# Detached instance with proxy
+detached_user = User(id=1, username="alice")
+proxy = detached_user.using(session)
+await proxy.save()  # Automatic session attachment and reference update
+
+# Cross-session operations
+user = User(username="bob")
+await user.using(session1).save()
+await user.using(session2).save()  # Automatic session migration
 ```
 
 ### 2. Model Configuration Access
@@ -399,6 +468,153 @@ class TestUserDatabase:
             await User.objects.using(test_session).get(User.id == user.id)
 ```
 
+#### Smart Instance Operation Tests
+
+```python
+class TestSmartInstanceOperations:
+    @pytest.mark.asyncio
+    async def test_smart_save_create_vs_update(self, test_session):
+        """Test smart save() CREATE vs UPDATE detection"""
+        # Test CREATE detection
+        new_user = User(username="newuser", email="new@example.com")
+        await new_user.using(test_session).save()
+        assert new_user.id is not None  # Should have ID after CREATE
+        
+        # Test UPDATE detection
+        original_id = new_user.id
+        new_user.email = "updated@example.com"
+        await new_user.using(test_session).save()
+        assert new_user.id == original_id  # ID should remain same after UPDATE
+        
+        # Verify update in database
+        retrieved = await User.objects.using(test_session).get(User.id == original_id)
+        assert retrieved.email == "updated@example.com"
+    
+    @pytest.mark.asyncio
+    async def test_detached_instance_save(self, test_session):
+        """Test detached instance save() with merge() strategy"""
+        # Create initial user
+        user = await User.objects.using(test_session).create(
+            username="original", email="original@example.com"
+        )
+        user_id = user.id
+        
+        # Create detached instance with same ID
+        detached_user = User(id=user_id, username="updated", email="updated@example.com")
+        await detached_user.using(test_session).save()
+        
+        # Verify update worked
+        retrieved = await User.objects.using(test_session).get(User.id == user_id)
+        assert retrieved.username == "updated"
+        assert retrieved.email == "updated@example.com"
+    
+    @pytest.mark.asyncio
+    async def test_detached_instance_delete(self, test_session):
+        """Test detached instance delete() operation"""
+        # Create user
+        user = await User.objects.using(test_session).create(
+            username="todelete", email="delete@example.com"
+        )
+        user_id = user.id
+        
+        # Create detached instance and delete
+        detached_user = User(id=user_id)
+        await detached_user.using(test_session).delete()
+        
+        # Verify deletion
+        with pytest.raises(DoesNotExist):
+            await User.objects.using(test_session).get(User.id == user_id)
+    
+    @pytest.mark.asyncio
+    async def test_unified_refresh_method(self, test_session):
+        """Test unified refresh() method functionality"""
+        # Create user
+        user = await User.objects.using(test_session).create(
+            username="refresh_test", email="refresh@example.com"
+        )
+        user_id = user.id
+        
+        # Modify locally
+        user.username = "modified_locally"
+        user.email = "modified@local.com"
+        
+        # Full refresh
+        await user.using(test_session).refresh()
+        assert user.username == "refresh_test"  # Should be reset
+        assert user.email == "refresh@example.com"  # Should be reset
+        
+        # Modify again for selective refresh test
+        user.username = "modified_again"
+        user.email = "modified_again@local.com"
+        
+        # Selective refresh
+        await user.using(test_session).refresh(fields=["username"])
+        assert user.username == "refresh_test"  # Should be reset
+        assert user.email == "modified_again@local.com"  # Should remain modified
+    
+    @pytest.mark.asyncio
+    async def test_detached_instance_refresh(self, test_session):
+        """Test refresh() with detached instances"""
+        # Create user
+        user = await User.objects.using(test_session).create(
+            username="detached_refresh", email="detached@example.com"
+        )
+        user_id = user.id
+        
+        # Create detached instance with old data
+        detached_user = User(id=user_id, username="old_data", email="old@example.com")
+        
+        # Refresh should load current data
+        await detached_user.using(test_session).refresh()
+        assert detached_user.username == "detached_refresh"
+        assert detached_user.email == "detached@example.com"
+    
+    @pytest.mark.asyncio
+    async def test_composite_primary_key_detection(self, test_session):
+        """Test smart save() with composite primary keys"""
+        # Assuming OrderItem has composite primary key (order_id, product_id)
+        class OrderItem(ObjectModel):
+            order_id: Column[int] = int_column(primary_key=True)
+            product_id: Column[int] = int_column(primary_key=True)
+            quantity: Column[int] = int_column()
+        
+        # Test CREATE detection (no primary key values)
+        new_item = OrderItem(quantity=5)
+        # This would be CREATE if we had proper setup
+        
+        # Test UPDATE detection (has primary key values)
+        detached_item = OrderItem(order_id=1, product_id=2, quantity=10)
+        # This would be UPDATE if we had proper setup
+        
+        # Note: Actual test would require proper table setup
+    
+    @pytest.mark.asyncio
+    async def test_model_proxy_session_binding(self, test_session):
+        """Test ModelProxy session binding functionality"""
+        user = User(username="proxy_test", email="proxy@example.com")
+        
+        # Create proxy with session binding
+        proxy = user.using(test_session)
+        
+        # Test attribute access through proxy
+        assert proxy.username == "proxy_test"
+        proxy.email = "updated_proxy@example.com"
+        assert user.email == "updated_proxy@example.com"  # Should update original
+        
+        # Test method access through proxy
+        await proxy.save()
+        assert user.id is not None  # Should have ID after save
+        
+        # Test proxy with detached instance
+        detached_user = User(id=user.id, username="detached_proxy")
+        detached_proxy = detached_user.using(test_session)
+        await detached_proxy.save()  # Should handle merge() correctly
+        
+        # Verify update
+        retrieved = await User.objects.using(test_session).get(User.id == user.id)
+        assert retrieved.username == "detached_proxy"
+```
+
 #### Performance Tests
 
 ```python
@@ -544,4 +760,128 @@ class TestErrorHandling:
         # Verify rollback occurred
         count = await User.objects.using(test_session).count()
         assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_detached_instance_error_handling(self, test_session):
+        """Test error handling for detached instance operations"""
+        # Test delete non-existent detached instance
+        with pytest.raises(DoesNotExist):
+            detached_user = User(id=999)  # Non-existent ID
+            await detached_user.using(test_session).delete()
+        
+        # Test refresh detached instance without primary key
+        with pytest.raises(ValueError, match="Cannot refresh instance without primary key"):
+            invalid_user = User(username="no_id")
+            await invalid_user.using(test_session).refresh()
+        
+        # Test validation with detached instance
+        with pytest.raises(ValidationError):
+            detached_user = User(id=1, email="invalid-email")
+            await detached_user.using(test_session).save(validate=True)
+    
+    @pytest.mark.asyncio
+    async def test_smart_save_error_scenarios(self, test_session):
+        """Test error scenarios in smart save() operations"""
+        # Test validation failure in CREATE
+        with pytest.raises(ValidationError):
+            user = User(username="ab")  # Too short
+            await user.using(test_session).save(validate=True)
+        
+        # Test validation failure in UPDATE
+        user = await User.objects.using(test_session).create(
+            username="valid", email="valid@example.com"
+        )
+        user.email = "invalid-email"
+        with pytest.raises(ValidationError):
+            await user.using(test_session).save(validate=True)
+        
+        # Test integrity constraint violation
+        user1 = await User.objects.using(test_session).create(
+            username="unique1", email="unique1@example.com"
+        )
+        
+        # Try to create another user with same username (assuming unique constraint)
+        with pytest.raises(IntegrityError):
+            user2 = User(username="unique1", email="different@example.com")
+            await user2.using(test_session).save()
+```
+
+### 7. Performance Testing for Enhanced Operations
+
+```python
+class TestEnhancedOperationPerformance:
+    @pytest.mark.asyncio
+    async def test_detached_instance_batch_performance(self, test_session):
+        """Test performance of batch operations with detached instances"""
+        import time
+        
+        # Create initial users
+        initial_users = [
+            {"username": f"user{i}", "email": f"user{i}@example.com"}
+            for i in range(100)
+        ]
+        created_users = []
+        for user_data in initial_users:
+            user = await User.objects.using(test_session).create(**user_data)
+            created_users.append(user)
+        
+        # Test batch update with detached instances
+        detached_updates = [
+            User(id=user.id, username=f"updated_{user.username}", email=user.email)
+            for user in created_users
+        ]
+        
+        start_time = time.time()
+        tasks = []
+        for detached_user in detached_updates:
+            task = asyncio.create_task(detached_user.using(test_session).save())
+            tasks.append(task)
+        await asyncio.gather(*tasks)
+        update_time = time.time() - start_time
+        
+        # Should complete within reasonable time
+        assert update_time < 10.0  # 100 updates should complete within 10 seconds
+        
+        # Verify updates
+        updated_users = await User.objects.using(test_session).all()
+        for user in updated_users:
+            assert user.username.startswith("updated_")
+    
+    @pytest.mark.asyncio
+    async def test_refresh_performance(self, test_session):
+        """Test performance of refresh operations"""
+        import time
+        
+        # Create test users
+        users = []
+        for i in range(50):
+            user = await User.objects.using(test_session).create(
+                username=f"refresh_user{i}", email=f"refresh{i}@example.com"
+            )
+            users.append(user)
+        
+        # Test full refresh performance
+        start_time = time.time()
+        tasks = []
+        for user in users:
+            task = asyncio.create_task(user.using(test_session).refresh())
+            tasks.append(task)
+        await asyncio.gather(*tasks)
+        full_refresh_time = time.time() - start_time
+        
+        # Test selective refresh performance
+        start_time = time.time()
+        tasks = []
+        for user in users:
+            task = asyncio.create_task(user.using(test_session).refresh(fields=["username"]))
+            tasks.append(task)
+        await asyncio.gather(*tasks)
+        selective_refresh_time = time.time() - start_time
+        
+        # Selective refresh should be faster or similar
+        assert selective_refresh_time <= full_refresh_time * 1.2  # Allow 20% margin
+        
+        # Both should complete within reasonable time
+        assert full_refresh_time < 5.0
+        assert selective_refresh_time < 5.0
 ```

@@ -111,7 +111,67 @@ class Product(ObjectModel):
         )
 ```
 
-### 4. 会话绑定和多数据库支持
+### 4. 增强的实例操作功能
+
+#### 智能 save() 方法
+
+自动检测 CREATE vs UPDATE 操作，支持分离实例处理：
+
+```python
+# 新实例自动检测为 CREATE
+user = User(name="John", email="john@example.com")
+await user.save()  # 执行 INSERT 操作
+
+# 现有实例自动检测为 UPDATE
+user.name = "Jane"
+await user.save()  # 执行 UPDATE 操作
+
+# 分离实例（带主键）智能处理
+detached_user = User(id=1, name="Alice", email="alice@example.com")
+await detached_user.save()  # 使用 merge() 执行 UPDATE 操作
+
+# 支持复合主键
+composite_model = CompositeModel(key1="a", key2="b", data="value")
+await composite_model.save()  # 智能检测主键状态
+```
+
+#### 分离实例操作支持
+
+处理未附加到 SQLAlchemy 会话的实例：
+
+```python
+# 分离实例删除
+detached_user = User(id=1)  # 仅有主键的实例
+await detached_user.delete()  # 自动附加到会话后删除
+
+# 分离实例刷新
+detached_user = User(id=1, name="Old Name")
+await detached_user.refresh()  # 从数据库重新加载数据
+print(detached_user.name)  # 显示最新数据
+
+# 选择性字段刷新
+await detached_user.refresh(fields=["name", "email"])
+```
+
+#### 统一的 refresh() 方法
+
+合并原有的 refresh() 和 refresh_from_db() 功能：
+
+```python
+# 完整刷新（替代原 refresh_from_db()）
+user = await User.objects.get(User.id == 1)
+user.name = "Modified"
+await user.refresh()  # 重置所有字段到数据库状态
+
+# 选择性字段刷新
+await user.refresh(fields=["name", "updated_at"])  # 仅刷新指定字段
+
+# 分离实例刷新
+detached_user = User(id=1)
+await detached_user.refresh()  # 通过直接查询加载数据
+```
+
+### 5. 会话绑定和多数据库支持
 
 通过 ModelProxy 提供灵活的会话管理，支持多数据库操作：
 
@@ -168,6 +228,22 @@ class ModelMixin(SignalMixin):
         """获取实际的模型实例"""
         raise NotImplementedError("Subclasses must implement _get_instance()")
     
+    def _update_instance(self, new_instance):
+        """更新内部实例引用（用于 ModelProxy）"""
+        # ObjectModel 的默认实现 - 无操作
+        pass
+    
+    def _has_primary_key_values(self) -> bool:
+        """检测实例是否具有主键值"""
+        instance = self._get_instance()
+        if hasattr(instance, "__table__"):
+            for pk_col in instance.__table__.primary_key.columns:
+                value = getattr(instance, pk_col.name, None)
+                if value is None:
+                    return False
+            return len(instance.__table__.primary_key.columns) > 0
+        return False
+    
     # 会话绑定方法
     def using(self, db_or_session: str | AsyncSession) -> "ModelProxy":
         """返回绑定到特定数据库/会话的代理"""
@@ -194,15 +270,29 @@ class ModelProxy(ModelMixin):
         
         current_session = async_object_session(self._instance)
         if current_session is None:
-            session.add(self._instance)
+            # 对于带主键的分离实例，避免与 merge() 操作冲突
+            if not self._has_primary_key_values():
+                session.add(self._instance)
         elif current_session is not session:
             self._handle_session_migration(current_session, session)
         
         self._session_attached = True
     
+    def _update_instance(self, new_instance):
+        """更新内部实例引用（处理 merge() 返回的新实例）"""
+        self._instance = new_instance
+        self._session_attached = True  # 新实例已附加到会话
+    
     def __getattr__(self, name):
         """将属性访问代理到包装的实例"""
         return getattr(self._instance, name)
+    
+    def __setattr__(self, name, value):
+        """将属性设置代理到包装的实例"""
+        if name.startswith('_'):
+            super().__setattr__(name, value)
+        else:
+            setattr(self._instance, name, value)
 ```
 
 ##### 3. ObjectModel - 主要基类
@@ -311,7 +401,35 @@ await proxy.save()         # 所有方法都可用
 proxy.name = "New Name"    # 属性访问透明
 ```
 
-#### 3. 配置系统集成
+#### 3. 智能实例操作设计
+
+实例操作的智能化设计原则：
+
+- **自动操作检测**：save() 方法根据主键状态自动选择 CREATE 或 UPDATE
+- **分离实例支持**：处理未附加到会话的实例，使用 merge() 策略
+- **会话状态管理**：智能处理实例在不同会话间的迁移
+- **引用一致性**：ModelProxy 自动更新内部引用以保持一致性
+
+```python
+# 智能操作检测示例
+def _has_primary_key_values(self) -> bool:
+    """CREATE vs UPDATE 的关键判断逻辑"""
+    for pk_col in self.__table__.primary_key.columns:
+        if getattr(self, pk_col.name, None) is None:
+            return False
+    return True
+
+# 分离实例处理策略
+if self._has_primary_key_values():
+    # 使用 merge() 实现 UPDATE 语义
+    merged_instance = await session.merge(instance)
+    self._update_instance(merged_instance)  # 更新引用
+else:
+    # 使用 add() 实现 CREATE 语义
+    session.add(instance)
+```
+
+#### 4. 配置系统集成
 
 模型配置通过多个层次进行处理：
 
@@ -350,8 +468,7 @@ class ObjectModel(DeclarativeBase, ModelMixin):
     # 实例操作方法
     async def save(self, validate: bool = True) -> None
     async def delete(self) -> None
-    async def refresh(self) -> None
-    async def refresh_from_db(self, fields: list[str] = None) -> None
+    async def refresh(self, fields: list[str] = None) -> None
     
     # 数据转换方法
     def to_dict(self, include: list[str] = None, exclude: list[str] = None) -> dict
@@ -474,19 +591,24 @@ users = await User.objects.all()
 #### 基本实例操作
 
 ```python
-# 创建实例
+# 创建新实例
 user = User(name="John", age=25)
-await user.save()
+await user.save()  # 自动检测为 CREATE 操作
 
-# 更新实例
+# 更新现有实例
 user.name = "Jane"
-await user.save()
+await user.save()  # 自动检测为 UPDATE 操作
 
-# 删除实例
+# 处理分离实例（带主键的实例）
+detached_user = User(id=1, name="Alice", age=30)
+await detached_user.save()  # 智能处理为 UPDATE 操作
+
+# 删除实例（支持分离实例）
 await user.delete()
 
-# 刷新实例
-await user.refresh()
+# 刷新实例（统一方法）
+await user.refresh()                    # 完整刷新
+await user.refresh(fields=["name"])     # 选择性字段刷新
 ```
 
 #### 数据转换
@@ -538,6 +660,33 @@ class Product(ObjectModel):
         )
 ```
 
+#### 智能实例操作高级用法
+
+```python
+# 分离实例的智能处理
+detached_user = User(id=1, name="Alice", email="alice@example.com")
+# save() 方法自动检测为 UPDATE 操作
+await detached_user.save()
+
+# 处理复合主键的分离实例
+order_item = OrderItem(order_id=1, product_id=2, quantity=5)
+await order_item.save()  # 智能检测复合主键
+
+# 分离实例的删除和刷新
+user_to_delete = User(id=1)
+await user_to_delete.delete()  # 自动附加到会话后删除
+
+user_to_refresh = User(id=2, name="Old Data")
+await user_to_refresh.refresh()  # 从数据库重新加载
+
+# 选择性字段刷新的高级用法
+user = await User.objects.get(User.id == 1)
+user.name = "Modified Locally"
+user.email = "modified@example.com"
+# 仅刷新 name 字段，保持 email 的本地修改
+await user.refresh(fields=["name"])
+```
+
 #### 多数据库会话管理
 
 ```python
@@ -548,15 +697,15 @@ await main_user.using(main_session).save()
 analytics_user = User(name="Analytics User")
 await analytics_user.using("analytics").save()
 
-# 会话迁移
-user = User(name="Migrated User")
-await user.using(main_session).save()
-await user.using(analytics_session).save()  # 自动处理会话迁移
+# 会话迁移和分离实例处理
+detached_user = User(id=1, name="Migrated User")
+await detached_user.using(main_session).save()      # merge() 到主数据库
+await detached_user.using(analytics_session).save()  # merge() 到分析数据库
 
-# 代理功能保持
-proxy = user.using(analytics_session)
+# 代理功能保持（包括分离实例）
+proxy = detached_user.using(analytics_session)
 proxy.name = "Updated Name"
-await proxy.save()
+await proxy.save()  # ModelProxy 自动处理引用更新
 user_data = proxy.to_dict()
 ```
 

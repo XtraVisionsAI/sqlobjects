@@ -212,6 +212,174 @@ if auto_default and self._default_db == db_name:
         SessionContextManager.set_session_factory(default_db.session_factory, self._default_db, is_default=True)
 ```
 
+## Model Instance Operation Rules
+
+### 1. Smart save() Method with Automatic Operation Detection
+
+```python
+# Smart save() method automatically detects CREATE vs UPDATE operations
+from sqlobjects.base import ObjectModel
+from sqlobjects.signals import Operation, emit_signals
+
+# New instance - automatically detected as CREATE
+user = User(name="John", email="john@example.com")
+await user.save()  # Executes INSERT operation
+
+# Existing instance - automatically detected as UPDATE
+user.name = "Jane"
+await user.save()  # Executes UPDATE operation
+
+# Detached instance with primary key - intelligently handled as UPDATE
+detached_user = User(id=1, name="Alice", email="alice@example.com")
+await detached_user.save()  # Uses merge() for UPDATE semantics
+
+# Composite primary key support
+composite_model = CompositeModel(key1="a", key2="b", data="value")
+await composite_model.save()  # Intelligently detects primary key state
+```
+
+#### Primary Key Detection Logic
+
+```python
+def _has_primary_key_values(self) -> bool:
+    """Detect if instance has primary key values"""
+    instance = self._get_instance()
+    if hasattr(instance, "__table__"):
+        for pk_col in instance.__table__.primary_key.columns:
+            value = getattr(instance, pk_col.name, None)
+            if value is None:
+                return False
+        return len(instance.__table__.primary_key.columns) > 0
+    return False
+
+# Smart save implementation
+async def save(self, validate: bool = True) -> None:
+    """Smart save with automatic CREATE/UPDATE detection"""
+    session = self._get_session()
+    instance = self._get_instance()
+    
+    if self._has_primary_key_values():
+        # UPDATE operation: use merge() for detached instances
+        merged_instance = await session.merge(instance)
+        self._update_instance(merged_instance)  # Update ModelProxy reference
+    else:
+        # CREATE operation: use add()
+        session.add(instance)
+```
+
+### 2. Detached Instance Operations Support
+
+```python
+# Detached instance creation and operations
+detached_user = User(id=1, name="Alice", email="alice@example.com")
+
+# save() method intelligently handles detached instances
+await detached_user.save()  # Automatically uses merge() for UPDATE
+
+# delete() method supports detached instances
+detached_user = User(id=1)
+await detached_user.delete()  # Automatically attaches to session then deletes
+
+# refresh() method handles detached instances via direct query
+detached_user = User(id=1, name="Old Data")
+await detached_user.refresh()  # Reloads data from database
+print(detached_user.name)  # Shows latest data
+
+# Selective field refresh
+await detached_user.refresh(fields=["name", "email"])
+```
+
+#### Detached Instance Handling Strategies
+
+```python
+# Different operations use different strategies for detached instances
+
+# save() method: Based on primary key state
+if self._has_primary_key_values():
+    # Has primary key: use merge() for UPDATE semantics
+    merged_instance = await session.merge(instance)
+    self._update_instance(merged_instance)  # Update ModelProxy reference
+else:
+    # No primary key: use add() for CREATE semantics
+    session.add(instance)
+
+# delete() method: Use merge() to attach to session
+if async_object_session(instance) is None:
+    merged_instance = await session.merge(instance)
+    await session.delete(merged_instance)
+
+# refresh() method: Direct database query to avoid data overwrite
+if async_object_session(instance) is None:
+    # Query database directly using primary key
+    fresh_data = await session.execute(select(model_class).where(pk_condition))
+    # Update instance attributes
+```
+
+### 3. Unified refresh() Method
+
+```python
+# Unified refresh() method replaces both refresh() and refresh_from_db()
+
+# Full refresh (replaces original refresh_from_db())
+user = await User.objects.get(User.id == 1)
+user.name = "Modified"
+await user.refresh()  # Resets all fields to database state
+
+# Selective field refresh
+await user.refresh(fields=["name", "updated_at"])  # Only refresh specified fields
+
+# Detached instance refresh
+detached_user = User(id=1)
+await detached_user.refresh()  # Loads data via direct query
+
+# Implementation supports both attached and detached instances
+async def refresh(self, fields: list[str] = None) -> None:
+    """Unified refresh method supporting full and selective refresh"""
+    session = self._get_session()
+    instance = self._get_instance()
+    
+    current_session = async_object_session(instance)
+    if current_session is None:
+        # Detached instance: use direct query
+        await self._refresh_detached_instance(session, fields)
+    else:
+        # Attached instance: use standard refresh
+        await self._refresh_attached_instance(session, fields)
+```
+
+### 4. ModelProxy Session Management Optimization
+
+```python
+# Enhanced ModelProxy with optimized session attachment
+class ModelProxy(ModelMixin):
+    def _ensure_session_attachment(self, session: AsyncSession) -> None:
+        """Ensure instance is properly attached to specified session"""
+        if self._session_attached:
+            return
+        
+        current_session = async_object_session(self._instance)
+        if current_session is None:
+            # For detached instances with primary keys, avoid conflicts with merge()
+            if not self._has_primary_key_values():
+                session.add(self._instance)
+        elif current_session is not session:
+            self._handle_session_migration(current_session, session)
+        
+        self._session_attached = True
+    
+    def _update_instance(self, new_instance):
+        """Update internal instance reference (handles merge() returned instance)"""
+        self._instance = new_instance
+        self._session_attached = True  # New instance is already attached
+    
+    def __setattr__(self, name, value):
+        """Proxy attribute setting to wrapped instance"""
+        if name.startswith("_"):
+            super().__setattr__(name, value)
+        else:
+            setattr(self._instance, name, value)
+```
+
 ## Signal and Event System Rules
 
 ### 1. Enhanced Signal System with Smart SAVE Operation
@@ -240,11 +408,12 @@ class User(ObjectModel, SignalMixin):
     async def before_bulk_update(cls, context: SignalContext):
         print(f"Bulk update operation affecting {context.affected_count} records")
 
-# Smart SAVE operation with dual signal emission
+# Smart SAVE operation with dual signal emission and detached instance support
 @emit_signals(Operation.SAVE)  # Automatically detects CREATE vs UPDATE
 async def save(self):
     # New instance: triggers before_save → before_create → DB operation → after_save → after_create
     # Existing instance: triggers before_save → before_update → DB operation → after_save → after_update
+    # Detached instance with PK: triggers before_save → before_update → merge() → after_save → after_update
     pass
 ```
 
@@ -381,6 +550,36 @@ def _determine_save_operation(self_or_cls) -> Operation:
     else:
         return Operation.CREATE  # Class methods default to CREATE
 ```
+
+### 6. get_or_create 和 update_or_create 信号集成
+
+从 v1.1 开始，`get_or_create` 和 `update_or_create` 方法已集成信号机制，通过调用模型实例的 `save()` 方法来触发相应信号：
+
+```python
+# get_or_create 信号触发
+user, created = await User.objects.get_or_create(
+    username="john",
+    defaults={"email": "john@example.com"}
+)
+# 如果创建新用户，会触发：
+# before_save → before_create → 数据库操作 → after_save → after_create
+
+# update_or_create 信号触发
+user, created = await User.objects.update_or_create(
+    username="john",
+    defaults={"last_login": datetime.now()}
+)
+# 如果更新现有用户，会触发：
+# before_save → before_update → 数据库操作 → after_save → after_update
+# 如果创建新用户，会触发：
+# before_save → before_create → 数据库操作 → after_save → after_create
+```
+
+**实现原理：**
+- 这两个方法现在通过 `obj.using(session).save(validate=validate)` 来执行实际的数据库操作
+- `save()` 方法会自动检测是创建还是更新操作，并触发相应的信号
+- 保持了与直接调用 `save()` 方法相同的信号行为和验证流程
+- 确保了操作的一致性和信号系统的完整性
 
 ## Exception Handling Rules
 
