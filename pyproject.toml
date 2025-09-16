@@ -1,0 +1,123 @@
+[project]
+name = "sqlobjects"
+version = "1.0.0"
+description = "Django-style async ORM library based on SQLAlchemy with chainable queries, Q objects, and relationship loading"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "XtraVisions", email = "gitadmin@xtravisions.com" },
+    { name = "Chen Hao", email = "chenhao@xtravisions.com" }
+]
+maintainers = [
+    { name = "XtraVisions", email = "gitadmin@xtravisions.com" },
+    { name = "Chen Hao", email = "chenhao@xtravisions.com" }
+]
+keywords = [
+    "python",
+    "orm",
+    "async",
+    "django-style",
+    "database",
+    "query"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Framework :: AsyncIO",
+    "Typing :: Typed"
+]
+requires-python = ">=3.12"
+dependencies = [
+    "sqlalchemy[asyncio]>=2.0.43",
+]
+
+[project.urls]
+Homepage = "https://github.com/XtraVisionsAI/sqlobjects"
+Repository = "https://github.com/XtraVisionsAI/sqlobjects.git"
+Documentation = "https://github.com/XtraVisionsAI/sqlobjects#readme"
+"Bug Tracker" = "https://github.com/XtraVisionsAI/sqlobjects/issues"
+Changelog = "https://github.com/XtraVisionsAI/sqlobjects/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.3.0",
+    "pyright>=1.1.405",
+    "ruff>=0.12.12",
+    "setuptools>=80.9.0",
+]
+test = [
+    "aiomysql>=0.2.0",
+    "aiosqlite>=0.20.0",
+    "asyncpg>=0.30.0",
+    "pytest>=8.4.2",
+    "pytest-asyncio>=0.24.0",
+    "psutil>=7.0.0", # For memory monitoring in performance tests
+]
+
+[[tool.uv.index]]
+name = "tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple/"
+default = true
+
+[tool.pyright]
+include = ["sqlobjects", "tests"]
+exclude = ["**/__pycache__"]
+pythonVersion = "3.12"
+reportMissingImports = "error"
+reportUnnecessaryTypeIgnoreComment = "warning"
+reportMissingTypeStubs = false
+lang = "en"
+
+[tool.ruff]
+line-length = 120
+fix = true
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", # pycodestyle errors
+    "W", # pycodestyle warnings
+    "F", # pyflakes
+    "I", # isort
+    "B", # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = [
+    "UP046", # disable none pep695 generic class
+    "UP035", # disable using `type` instead `types.Type`
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = [
+    "E712",
+]
+
+[tool.ruff.lint.pyupgrade]
+# Preserve types, even if a file imports `from __future__ import annotations`.
+keep-runtime-typing = true
+
+[tool.ruff.lint.isort]
+#force-single-line = true
+lines-after-imports = 2
+
+[tool.ruff.format]
+docstring-code-format = true
+docstring-code-line-length = 100
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = [
+    "--strict-markers",
+    "-v"
+]
+markers = []
