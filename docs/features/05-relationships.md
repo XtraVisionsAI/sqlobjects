@@ -351,11 +351,11 @@ for post in posts:
 ### Relationship Caching
 
 ```python
-# Cache relationship queries
-users = await User.objects.prefetch_related("posts").all()  # Cached
+# Optimize relationship queries
+users = await User.objects.prefetch_related("posts").all()
 
-# Skip cache for real-time relationship data
-live_posts = await Post.objects.no_cache().select_related("author").filter(
+# Load relationships with filtering
+live_posts = await Post.objects.select_related("author").filter(
     Post.created_at > datetime.now() - timedelta(minutes=5)
 ).all()
 ```

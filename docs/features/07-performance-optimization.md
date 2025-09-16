@@ -114,43 +114,37 @@ small_records = [...]  # Records with few fields
 await User.objects.bulk_create(small_records, batch_size=2000)
 ```
 
-## Caching Strategies
+## Field and Relationship Caching
 
-### Query Result Caching
+### Field Metadata Caching
 
 ```python
-# Cache is used by default for repeated queries
-users = await User.objects.filter(User.is_active == True).all()  # Cached
+# Field information is automatically cached at the class level
+class User(ObjectModel):
+    username: Column[str] = StringColumn(length=50)
+    bio: Column[str] = StringColumn(type="text", deferred=True)
+    
+    # Field cache is built automatically during model creation
+    # and includes categorization of regular, deferred, and relationship fields
 
-# Skip cache for real-time data
-live_users = await User.objects.no_cache().filter(User.status == "online").all()
-
-# Cache control for different scenarios
-# Reference data - use cache
-categories = await Category.objects.all()
-
-# User-specific data - skip cache
-user_posts = await Post.objects.no_cache().filter(
-    Post.author_id == current_user.id
-).all()
-
-# Time-sensitive data - skip cache
-recent_orders = await Order.objects.no_cache().filter(
-    Order.created_at > datetime.now() - timedelta(minutes=5)
-).all()
+# Access cached field information
+field_cache = User._get_field_cache()
+deferred_fields = field_cache.get("deferred_fields", set())
+relationship_fields = field_cache.get("relationship_fields", set())
 ```
 
-### Cache Performance Monitoring
+### Relationship Object Caching
 
 ```python
-# Basic cache statistics (implementation varies)
-stats = User.objects.get_cache_stats()
-print(f"Cache hits: {stats.get('hits', 0)}")
-print(f"Cache misses: {stats.get('misses', 0)}")
-print(f"Hit rate: {stats.get('hit_rate', 0):.2%}")
+# Related objects are cached after first access
+user = await User.objects.get(User.id == 1)
+posts = await user.posts  # Loads and caches related posts
+posts_again = await user.posts  # Returns cached posts
 
-# Clear cache when needed
-User.objects.clear_cache()
+# Single relationship caching
+post = await Post.objects.get(Post.id == 1)
+author = await post.author  # Loads and caches author
+author_again = await post.author  # Returns cached author
 ```
 
 ## Memory Management
@@ -328,7 +322,7 @@ await init_db(
         "pragma": {
             "journal_mode": "WAL",      # Write-Ahead Logging
             "synchronous": "NORMAL",    # Balance safety and speed
-            "cache_size": -64000,       # 64MB cache
+            "temp_store": "MEMORY"      # Temporary tables in memory
             "temp_store": "MEMORY"      # Temporary tables in memory
         }
     }

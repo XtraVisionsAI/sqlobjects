@@ -1,25 +1,25 @@
 # Query and Operation Implementation Rules
 
-## Cache Control Architecture
+## Field Selection Architecture
 
-### Cache Control Principle
-**Provide flexible caching with basic performance monitoring**
-- Cache read operations for improved performance
-- Allow cache bypass for real-time data requirements
-- Provide basic cache performance monitoring
-- Support basic cache management operations
+### Field Selection Principle
+**Provide flexible field loading with metadata caching**
+- Load only necessary fields for improved performance
+- Defer heavy fields until accessed
+- Provide field metadata caching at class level
+- Support deferred field loading strategies
 
 ```python
-# Cache control examples
-users = await User.objects.filter(User.is_active == True).all()  # Uses cache
-live_data = await User.objects.no_cache().filter(User.status == "online").all()  # Skip cache
+# Field selection examples
+users = await User.objects.only("id", "username", "email").all()  # Load only needed fields
+live_data = await User.objects.defer("bio", "profile_image").all()  # Defer heavy fields
 ```
 
-### Cache Strategy Guidelines
-- **Cache appropriate data**: Reference data, expensive aggregations, stable results
-- **Skip cache when needed**: Real-time data, user-specific queries, one-time operations
-- **Monitor and optimize**: Track performance metrics, identify optimization opportunities
-- **Manage cache lifecycle**: Implement appropriate eviction and cleanup strategies
+### Field Selection Guidelines
+- **Select appropriate fields**: Load only what's needed for the operation
+- **Defer when appropriate**: Heavy fields, rarely accessed data, large binary content
+- **Use field caching**: Leverage automatic field metadata caching
+- **Optimize memory usage**: Use deferred loading for memory-intensive operations
 
 ## Query Method Classification System
 
@@ -40,7 +40,8 @@ User.objects.group_by("department")              # Grouping
 User.objects.having(func.count() > 5)            # Group filtering
 User.objects.join(Post.__table__, condition)     # Manual joins
 User.objects.select_for_update(nowait=True)      # Row locking
-User.objects.no_cache()                          # Cache control
+User.objects.only("field1", "field2")            # Field selection
+User.objects.defer("heavy_field")                # Field deferring
 User.objects.skip_default_ordering()             # Performance optimization
 ```
 
@@ -282,18 +283,18 @@ new_builder = builder.add_annotations(post_count=func.count())
 - Pagination (LIMIT, OFFSET)
 ```
 
-### QueryCache - FIFO Caching Mechanism
-**Automatic caching with performance monitoring**
+### FieldCache - Metadata Caching Mechanism
+**Automatic field metadata caching at class level**
 ```python
-# Cache configuration
-cache = QueryCache(maxsize=1000)  # FIFO eviction
+# Field cache access
+field_cache = User._get_field_cache()
 
-# Automatic cache key generation
-cache_key = hashlib.md5(str(query).encode()).hexdigest()
+# Field categorization
+deferred_fields = field_cache.get("deferred_fields", set())
+relationship_fields = field_cache.get("relationship_fields", set())
+regular_fields = field_cache.get("regular_fields", set())
 
-# Statistics tracking
-stats = cache.get_stats()
-# {"hits": int, "misses": int, "hit_rate": float, "cache_size": int}
+# Performance optimization through field metadata caching
 ```
 
 ### QueryExecutor - Unified Query Execution
@@ -303,8 +304,8 @@ stats = cache.get_stats()
 result = await executor.execute(
     query, 
     query_type="all",  # all, count, exists, update, delete, etc.
-    cache=cache,
-    use_cache=True
+    deferred_fields=deferred_fields,
+    field_cache=field_cache
 )
 
 # Iterator support for memory efficiency
@@ -379,7 +380,7 @@ async for item in executor.iterator(query, chunk_size=1000):
 3. **SQL Generation**: Implement SQLAlchemy query generation in build() method
 4. **QuerySet Integration**: Add corresponding method to QuerySet
 5. **ObjectsManager Integration**: Add delegation method to ObjectsManager for API completeness
-6. **Cache Compatibility**: Ensure method works with caching system
+6. **Field Selection Compatibility**: Ensure method works with field selection system
 7. **Type Safety**: Add proper type annotations and validation
 8. **Testing**: Comprehensive tests for all parameter combinations
 9. **Documentation**: Update query documentation with examples
@@ -460,8 +461,8 @@ while True:
         await process_user(user)
     last_id = users[-1].id
 
-# Cache control for memory optimization
-large_dataset = await User.objects.no_cache().filter(
+# Field selection for memory optimization
+large_dataset = await User.objects.defer("heavy_field").filter(
     User.created_at >= datetime.now() - timedelta(days=1)
 ).iterator(chunk_size=500)
 ```

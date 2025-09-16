@@ -41,7 +41,7 @@ hierarchical structure from general development practices to specific implementa
 
 ### Recently Updated (2024)
 
-- **Removed unimplemented features**: File validators, window functions, advanced cache management
+- **Removed unimplemented features**: File validators, window functions, query result caching
 - **Confirmed expression syntax support**: User.field expressions fully supported
 - **Updated feature boundaries**: Clear distinction between implemented and planned features
 - **Added documentation consistency rules**: Ensure 100% accuracy between docs and code
@@ -49,7 +49,7 @@ hierarchical structure from general development practices to specific implementa
 ### Implementation Status
 
 - **✅ Fully Implemented**: Expression syntax, basic caching, bulk operations, signals, relationships
-- **🚧 Planned Features**: Window functions (v2.0), advanced cache management (v2.1), database health checks (v2.0)
+- **🚧 Planned Features**: Window functions (v2.0), advanced field optimization (v2.1), database health checks (v2.0)
 - **❌ Not Planned**: File validators, complex monitoring (use external tools)
 
 ## Key Principles

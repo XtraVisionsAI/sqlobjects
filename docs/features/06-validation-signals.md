@@ -127,7 +127,7 @@ class User(ObjectModel):
     
     async def after_save(self, context: SignalContext):
         """Called after any save operation (CREATE or UPDATE)"""
-        await self.invalidate_cache()
+        await self.refresh_from_db()
     
     # Operation-specific signals (triggered based on detected operation)
     async def before_create(self, context: SignalContext):
@@ -191,7 +191,7 @@ class User(ObjectModel):
     @classmethod
     async def after_bulk_update(cls, context: SignalContext):
         """After bulk update"""
-        await cls.invalidate_bulk_caches(context.affected_count)
+        # Bulk operation completed
     
     @classmethod
     async def after_bulk_delete(cls, context: SignalContext):

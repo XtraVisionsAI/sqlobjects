@@ -28,7 +28,7 @@ from sqlobjects.database import init_dbs
 databases = await init_dbs({
     "main": {"url": "postgresql+asyncpg://user:pass@localhost/main"},
     "analytics": {"url": "sqlite+aiosqlite:///analytics.db"},
-    "cache": {"url": "redis://localhost:6379/0"}
+    "echo": False  # Disable SQL logging in production
 }, default="main")
 ```
 

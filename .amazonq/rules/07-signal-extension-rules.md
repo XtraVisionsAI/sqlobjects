@@ -37,7 +37,7 @@ class User(ObjectModel):  # Built-in signal functionality
     
     async def after_save(self, context: SignalContext):
         """Called after any save operation (CREATE or UPDATE)"""
-        cache.delete(f"user:{self.id}")
+        await self.refresh_from_db()
     
     # Operation-specific signals (triggered based on detected operation)
     async def before_create(self, context: SignalContext):
@@ -101,8 +101,8 @@ class User(ObjectModel):
     @classmethod
     async def after_bulk_update(cls, context: SignalContext):
         """After bulk update"""
-        # Invalidate caches for affected records
-        await cls.invalidate_bulk_caches(context.affected_count)
+        # Process bulk operation completion
+        # Bulk operation completed successfully
     
     @classmethod
     async def after_bulk_delete(cls, context: SignalContext):
@@ -219,7 +219,7 @@ await User.objects.bulk_update(mappings, match_fields=["id"])
 
 ### DeferredFieldProxy Usage
 - **Auto-creation**: Automatically create proxies through __getattribute__
-- **Cache management**: Proxy objects cached in StateManager
+- **Proxy management**: Proxy objects cached in StateManager
 - **Error-friendly**: Provide clear error messages
 
 ```python
@@ -237,7 +237,7 @@ bio_content = await user.bio.fetch()  # Lazy loading
 ### RelationFieldProxy Usage
 - **Relationship loading**: Integrate with existing prefetch logic
 - **Session management**: Automatically get correct database session
-- **Cache strategy**: Work cooperatively with existing cache mechanisms
+- **Caching strategy**: Work cooperatively with existing field caching mechanisms
 
 ```python
 from sqlobjects.model import ObjectModel, RelationFieldProxy

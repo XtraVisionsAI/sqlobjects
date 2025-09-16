@@ -16,7 +16,7 @@ SQLObjects is built on a solid architectural foundation that prioritizes perform
 ├─────────────────────┼───────────────────┤
 │   Field System      │   Session Mgmt    │
 ├─────────────────────┼───────────────────┤
-│   Signal System     │   Cache Layer     │
+│   Signal System     │   Query Layer     │
 ├─────────────────────────────────────────┤
 │           SQLAlchemy Core               │
 ├─────────────────────────────────────────┤
@@ -71,7 +71,7 @@ fields/
 - **QuerySet**: Chainable query building with lazy evaluation
 - **QueryBuilder**: Immutable query construction and SQL generation
 - **Executor**: Unified query execution and result processing
-- **Cache**: Query result caching with performance monitoring
+- **Query**: Optimized query execution and result processing
 
 ```python
 # Query system flow
@@ -122,16 +122,16 @@ queryset = User.objects.using(session).filter(...)
 - **Async Integration**: Simpler async/await integration
 - **Control**: Fine-grained control over SQL generation
 
-### Caching Strategy
+### Field and Relationship Caching
 
 ```python
-# Multi-level caching architecture
+# Field-level caching architecture
 ┌─────────────────┐
-│  Query Cache    │  ← Result caching with FIFO eviction
-├─────────────────┤
 │  Field Cache    │  ← Field metadata caching with LRU
 ├─────────────────┤
-│  Type Cache     │  ← Type conversion caching
+│  Relation Cache │  ← Relationship object caching
+├─────────────────┤
+│  Proxy Cache    │  ← Deferred field proxy caching
 └─────────────────┘
 ```
 
@@ -316,9 +316,9 @@ tests/
 
 ### Planned Enhancements
 
-- **Window Functions**: Advanced SQL window function support
-- **CTE Support**: Common Table Expression integration
-- **Advanced Caching**: Sophisticated cache management and invalidation
+- **Advanced Queries**: Enhanced query optimization and performance tools
+- **Field Optimization**: Advanced field selection and deferred loading
+- **Field Optimization**: Deferred loading and relationship caching
 - **Query Optimization**: Automatic query optimization and analysis
 
 ### Extensibility Goals

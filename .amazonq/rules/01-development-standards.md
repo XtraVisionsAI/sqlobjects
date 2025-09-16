@@ -143,7 +143,7 @@ class TestUserModel:
 - **Async/Await**: Proper async patterns and context management
 - **Memory Usage**: Efficient data structures and cleanup
 - **Database Operations**: Optimized queries and bulk operations
-- **Caching**: Appropriate use of LRU cache and memoization
+- **Field Optimization**: Appropriate use of field selection and deferred loading
 
 ### Security Guidelines
 - **Input Validation**: Sanitize and validate all inputs

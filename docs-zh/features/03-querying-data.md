@@ -173,25 +173,21 @@ active_posters = await User.objects.annotate(
 ).all()
 ```
 
-## Cache Control
+## 字段选择控制
 
-### Cache Management
+### 字段加载管理
 
 ```python
-# Default behavior uses cache
-users = await User.objects.filter(User.is_active == True).all()
+# 只加载指定字段
+users = await User.objects.only("id", "username", "email").all()
 
-# Force skip cache for real-time data
-live_users = await User.objects.no_cache().filter(
-    User.status == "online"
-).all()
+# 延迟加载重字段
+live_users = await User.objects.defer("bio", "profile_image").all()
 
-# Cache statistics
-stats = User.objects.get_cache_stats()
-# {"hits": 150, "misses": 50, "hit_rate": 0.75, "cache_size": 100}
-
-# Clear cache
-User.objects.clear_cache()
+# 结合过滤和字段选择
+active_users = await User.objects.filter(
+    User.is_active == True
+).only("id", "username").all()
 ```
 
 ## Advanced Query Methods

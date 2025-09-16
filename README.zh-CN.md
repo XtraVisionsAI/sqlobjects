@@ -228,9 +228,9 @@ user = await User.objects.using("analytics").create(username="analyst")
 async for user in User.objects.iterator(chunk_size=1000):
     await process_user(user)
 
-# 性能缓存控制
-users = await User.objects.filter(User.is_active == True).all()  # 使用缓存
-live_data = await User.objects.no_cache().filter(User.status == "online").all()  # 跳过缓存
+# 字段选择性能优化
+users = await User.objects.only("id", "username", "email").all()  # 只加载必要字段
+live_data = await User.objects.defer("bio", "profile_image").all()  # 延迟加载重字段
 
 # 字段级性能优化
 class User(ObjectModel):
@@ -306,7 +306,7 @@ uv run pytest
 查看我们的 [TODO.md](TODO.md) 了解计划功能：
 
 - **v2.0**: 数据库健康检查、窗口函数、高级批量操作
-- **v2.1**: 高级缓存管理、查询优化工具
+- **v2.1**: 高级字段优化、查询性能工具
 - **v2.2+**: CTE 支持、高级 SQL 函数
 
 ## 📄 许可证

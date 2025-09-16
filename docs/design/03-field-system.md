@@ -650,8 +650,7 @@ class FieldCache:
         self._type_cache.clear()
         TypeRegistry.get_sqlalchemy_type.cache_clear()
 
-# Global field cache instance
-field_cache = FieldCache()
+# Field cache is managed at the class level through FieldCacheMixin
 ```
 
 This field system architecture provides the foundation for SQLObjects' type-safe, high-performance field processing with comprehensive validation and cross-database compatibility.

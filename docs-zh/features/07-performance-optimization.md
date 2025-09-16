@@ -23,9 +23,9 @@ posts = await Post.objects.select_related("author").all()
 async for user in User.objects.iterator():
     await process_user(user)
 
-# Control cache usage
-users = await User.objects.filter(User.is_active == True).all()  # Uses cache
-live_data = await User.objects.no_cache().filter(User.status == "online").all()  # Skips cache
+# 使用字段选择优化
+users = await User.objects.only("id", "username", "email").all()  # 只加载必要字段
+live_data = await User.objects.defer("bio", "profile_image").all()  # 延迟加载重字段
 ```
 
 ## Bulk Operations
@@ -113,57 +113,37 @@ deleted = await User.objects.bulk_delete(
 )
 ```
 
-## Cache Control
+## 字段和关系缓存
 
-### Query Cache Management
+### 字段元数据缓存
 
 ```python
-# Default behavior uses cache for read operations
-users = await User.objects.filter(User.is_active == True).all()
+# 字段信息在类级别自动缓存
+class User(ObjectModel):
+    username: Column[str] = StringColumn(length=50)
+    bio: Column[str] = StringColumn(type="text", deferred=True)
+    
+    # 字段缓存在模型创建时自动构建
+    # 包括常规字段、延迟字段和关系字段的分类
 
-# Force skip cache for real-time data
-live_users = await User.objects.no_cache().filter(
-    User.last_login > datetime.now() - timedelta(minutes=1)
-).all()
-
-# Query cache statistics
-stats = User.objects.get_cache_stats()
-print(f"Query cache hit rate: {stats['hit_rate']:.2%}")
-print(f"Cache hits: {stats['hits']}, misses: {stats['misses']}")
-
-# Clear query cache
-User.objects.clear_cache()  # Clear query cache
-
-# Cache performance optimization
-if stats["hit_rate"] < 0.5:
-    # Low hit rate - consider query optimization
-    # or cache size adjustment
-    pass
+# 访问缓存的字段信息
+field_cache = User._get_field_cache()
+deferred_fields = field_cache.get("deferred_fields", set())
+relationship_fields = field_cache.get("relationship_fields", set())
 ```
 
-### Cache Strategy Guidelines
+### 关系对象缓存
 
 ```python
-# Use cache for:
-# - Frequently accessed reference data
-active_users = await User.objects.filter(User.is_active == True).all()
+# 相关对象在首次访问后被缓存
+user = await User.objects.get(User.id == 1)
+posts = await user.posts  # 加载并缓存相关文章
+posts_again = await user.posts  # 返回缓存的文章
 
-# - Expensive aggregation queries
-user_stats = await User.objects.aggregate(
-    total_users=func.count(),
-    avg_age=func.avg(User.age)
-)
-
-# Skip cache for:
-# - Real-time data requirements
-current_sessions = await Session.objects.no_cache().filter(
-    Session.expires_at > datetime.now()
-).all()
-
-# - One-time queries
-report_data = await User.objects.no_cache().filter(
-    User.created_at >= report_start_date
-).all()
+# 单一关系缓存
+post = await Post.objects.get(Post.id == 1)
+author = await post.author  # 加载并缓存作者
+author_again = await post.author  # 返回缓存的作者
 ```
 
 ## Query Optimization

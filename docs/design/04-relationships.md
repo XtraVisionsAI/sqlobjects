@@ -82,28 +82,28 @@ class RelationshipDescriptor:
             return self
         
         # Check if relationship is already loaded
-        cache_key = f"_relationship_{self.name}"
-        if hasattr(instance, cache_key):
-            return getattr(instance, cache_key)
+        cache_attr = f"_{self.name}_cache"
+        if hasattr(instance, cache_attr):
+            return getattr(instance, cache_attr)
         
         # Create relationship manager
         manager = self._create_manager(instance)
-        setattr(instance, cache_key, manager)
+        setattr(instance, cache_attr, manager)
         return manager
     
     def __set__(self, instance, value):
         """Set relationship value on instance"""
-        cache_key = f"_relationship_{self.name}"
+        cache_attr = f"_{self.name}_cache"
         
         if self.relationship_def.relationship_type in [RelationshipType.ONE_TO_ONE, RelationshipType.MANY_TO_ONE]:
             # Direct assignment for single-valued relationships
-            setattr(instance, cache_key, value)
+            setattr(instance, cache_attr, value)
         else:
             # For collections, replace the manager
             manager = self._create_manager(instance)
             if hasattr(value, '__iter__'):
                 manager.set(value)
-            setattr(instance, cache_key, manager)
+            setattr(instance, cache_attr, manager)
     
     def _create_manager(self, instance):
         """Create appropriate relationship manager"""

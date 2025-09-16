@@ -229,7 +229,7 @@ class User(ObjectModel):
         # Performance optimizations
         select_related_default = ["profile"]     # Default relationship loading
         prefetch_related_default = ["posts"]     # Default prefetch relationships
-        cache_timeout = 300                      # Cache timeout in seconds
+        indexes = ["username", "email"]          # Database indexes for performance
 ```
 
 ## Validation

@@ -68,7 +68,7 @@ collector.raise_if_errors()
 
 ### 3. 集成性能优化
 
-通过 QueryCache FIFO 缓存、批量操作优化和 FieldCacheMixin 代理系统提供性能增强：
+通过批量操作优化和 FieldCacheMixin 代理系统提供性能增强：
 
 ```python
 # QueryCache FIFO 缓存 - 自动管理缓存大小
@@ -108,8 +108,8 @@ camel_name = to_camel_case("user_profile")  # "UserProfile"
 plural = pluralize("user")                  # "users"
 
 # 调试工具
-query_stats = QuerySet.get_cache_stats()
-print(f"Cache hit rate: {query_stats['hit_rate']:.2%}")
+field_stats = User._get_field_cache()
+print(f"Field categories: {list(field_stats.keys())}")
 ```
 
 ## 模块架构
@@ -118,7 +118,7 @@ print(f"Cache hit rate: {query_stats['hit_rate']:.2%}")
 
 **模型集成层**
 - **ObjectModel**: 组合所有 Mixin 的完整模型基类，内置所有扩展功能
-- **ModelMixin**: 组合 FieldCacheMixin + SignalMixin + HistoryTrackingMixin
+- **ModelMixin**: 组合 FieldCacheMixin + SignalMixin
 
 **信号系统层**
 - **SignalMixin**: 信号混入类，内置在 ObjectModel 中
@@ -128,14 +128,14 @@ print(f"Cache hit rate: {query_stats['hit_rate']:.2%}")
 **代理系统层**
 - **DeferredFieldProxy**: 延迟字段代理，支持懒加载和缓存
 - **RelationFieldProxy**: 关系字段代理，支持关系懒加载
-- **FieldCacheMixin**: 集成代理系统到 __getattribute__ 中
+- **FieldCacheMixin**: 集成字段缓存和代理系统到 __getattribute__ 中
 
 **状态管理层**
 - **StateManager**: 统一实例状态管理，支持多种状态类型
 - **HistoryTrackingMixin**: 历史跟踪和脏字段检测
 
 **性能工具层**
-- **QueryCache**: FIFO 缓存机制，集成在 QuerySet 中
+- **FieldCache**: 字段元数据缓存机制，集成在模型类中
 - **ValidationError**: 分层异常系统，支持单字段和多字段错误
 
 ### 设计理念
@@ -145,12 +145,12 @@ print(f"Cache hit rate: {query_stats['hit_rate']:.2%}")
 **统一状态**: StateManager 统一管理实例状态，支持多种状态类型
 **智能代理**: 通过 __getattribute__ 集成代理系统，提供透明的延迟加载
 **装饰器驱动**: @emit_signals 装饰器自动处理信号发射和操作检测
-**性能内置**: 缓存、批量操作和代理系统内置在核心组件中
+**性能内置**: 字段缓存、批量操作和代理系统内置在核心组件中
 
 ### 与其他模块的集成
 
 **核心架构模块**: 集成信号系统到模型生命周期
-**数据操作模块**: 提供批量操作优化和查询缓存
+**数据操作模块**: 提供批量操作优化和字段缓存
 **字段系统模块**: 集成验证错误处理和异常系统
 
 ## API 参考
@@ -206,9 +206,9 @@ collector.raise_if_errors()
 ### 性能工具
 
 ```python
-# 查询缓存
-QuerySet.get_cache_stats()
-QuerySet.clear_query_cache()
+# 字段缓存
+field_cache = Model._get_field_cache()
+deferred_fields = field_cache.get("deferred_fields", set())
 
 # 批量操作
 .bulk_create(objects, batch_size=1000)
@@ -313,9 +313,10 @@ class UserValidator:
         self.collector.raise_if_errors()
 
 # 性能优化使用
-# 查询缓存统计
-stats = QuerySet.get_cache_stats()
-print(f"Cache hits: {stats['hits']}, misses: {stats['misses']}")
+# 字段缓存统计
+field_cache = User._get_field_cache()
+print(f"Deferred fields: {len(field_cache.get('deferred_fields', set()))}")
+print(f"Relationship fields: {len(field_cache.get('relationship_fields', set()))}")
 
 # 批量操作优化
 users_data = [{"name": f"User{i}", "email": f"user{i}@example.com"} 

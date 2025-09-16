@@ -381,79 +381,26 @@ class BulkUpdateOperation:
 
 ## Caching System
 
-### Query Cache Implementation
+### Query Execution Optimization
 
 ```python
-class QueryCache:
-    """FIFO query result cache with performance monitoring"""
-    
-    def __init__(self, maxsize=1000):
-        self.maxsize = maxsize
-        self.cache = {}
-        self.access_order = []
-        self.stats = {"hits": 0, "misses": 0}
-    
-    def get(self, key):
-        """Get cached result"""
-        if key in self.cache:
-            self.stats["hits"] += 1
-            return self.cache[key]
-        else:
-            self.stats["misses"] += 1
-            return None
-    
-    def set(self, key, value):
-        """Cache query result"""
-        if len(self.cache) >= self.maxsize:
-            # FIFO eviction
-            oldest_key = self.access_order.pop(0)
-            del self.cache[oldest_key]
-        
-        self.cache[key] = value
-        self.access_order.append(key)
-    
-    def get_stats(self):
-        """Get cache performance statistics"""
-        total_requests = self.stats["hits"] + self.stats["misses"]
-        hit_rate = self.stats["hits"] / total_requests if total_requests > 0 else 0
-        
-        return {
-            "hits": self.stats["hits"],
-            "misses": self.stats["misses"],
-            "hit_rate": hit_rate,
-            "cache_size": len(self.cache)
-        }
-    
-    def clear(self):
-        """Clear all cached results"""
-        self.cache.clear()
-        self.access_order.clear()
-        self.stats = {"hits": 0, "misses": 0}
-```
-
-### Cache Key Generation
-
-```python
-class CacheKeyGenerator:
-    """Generate consistent cache keys for queries"""
+class QueryOptimizer:
+    """Query execution optimization strategies"""
     
     @staticmethod
-    def generate_key(query, query_type, params=None):
-        """Generate cache key from query components"""
-        import hashlib
-        
-        # Build key components
-        key_parts = [
-            str(query),  # SQL query string
-            query_type,  # Query type (all, count, exists)
-        ]
-        
-        if params:
-            key_parts.append(str(sorted(params.items())))
-        
-        # Generate hash
-        key_string = "|".join(key_parts)
-        return hashlib.md5(key_string.encode()).hexdigest()
+    def optimize_count_query(query_builder):
+        """Remove unnecessary ORDER BY clauses from count queries"""
+        optimized_builder = query_builder.copy()
+        optimized_builder.orderings = []
+        return optimized_builder
+    
+    @staticmethod
+    def optimize_exists_query(query_builder):
+        """Optimize EXISTS queries with LIMIT 1"""
+        optimized_builder = query_builder.copy()
+        optimized_builder.orderings = []
+        optimized_builder.limit_value = 1
+        return optimized_builder
 ```
 
 ## Performance Optimizations

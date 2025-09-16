@@ -326,19 +326,19 @@ users = await User.objects.prefetch_related("posts").all()
 posts = await Post.objects.select_related("author").prefetch_related("tags").all()
 ```
 
-### Cache Control
+### Field Selection Control
 
 ```python
-# Use cache by default
-users = await User.objects.filter(User.is_active == True).all()
+# Load only specific fields
+users = await User.objects.only("id", "username", "email").all()
 
-# Skip cache for real-time data
-live_users = await User.objects.no_cache().filter(
+# Defer heavy fields until accessed
+users = await User.objects.defer("bio", "profile_image").all()
+
+# Combine with filtering
+live_users = await User.objects.filter(
     User.status == "online"
-).all()
-
-# Cache statistics
-stats = User.objects.get_cache_stats()
+).only("id", "username").all()
 ```
 
 ### Iterator for Large Datasets

@@ -51,19 +51,19 @@ for post in posts:
 ### Cache Strategy for Relationship Data
 **Balance between performance and data freshness**
 ```python
-# Cache relationship queries for reference data
+# Optimize relationship queries with field selection
 users = await User.objects.select_related("department").all()
 
-# Skip cache for dynamic relationship data
-live_posts = await Post.objects.no_cache().select_related("author").filter(
+# Use field selection for dynamic relationship data
+live_posts = await Post.objects.select_related("author").only("id", "title", "author__username").filter(
     Post.created_at > datetime.now() - timedelta(minutes=5)
 ).all()
 
 # Cache prefetch operations for stable data
 users = await User.objects.prefetch_related("roles").all()
 
-# Skip cache for user-specific relationship data
-user_posts = await Post.objects.no_cache().filter(
+# Optimize user-specific relationship data with field selection
+user_posts = await Post.objects.defer("content").filter(
     Post.author_id == current_user.id
 ).prefetch_related("comments").all()
 ```
@@ -71,11 +71,11 @@ user_posts = await Post.objects.no_cache().filter(
 ### Cache Performance Monitoring
 **Basic cache statistics available**
 ```python
-# Available: Basic cache control
-result = await queryset.no_cache().all()  # Skip cache
+# Available: Field selection control
+result = await queryset.only("id", "name").all()  # Load only needed fields
 
-# Basic cache statistics (implementation varies)
-stats = queryset.get_cache_stats()  # Basic performance monitoring
+# Field cache information available
+field_cache = Model._get_field_cache()  # Field metadata caching
 ```
 
 ## Performance Optimization Architecture
@@ -284,16 +284,16 @@ await PostTag.objects.bulk_create(associations, batch_size=1000)
 
 ### Performance Optimization Tools
 **Comprehensive performance optimization capabilities**
-- Cache control and performance monitoring
+- Field selection and performance monitoring
 - Memory-efficient data processing patterns
 - Query optimization techniques
 - Field selection and loading strategies
 
 ```python
 # Performance optimization examples
-stats = queryset.get_cache_stats()  # Performance monitoring
-queryset.clear_cache()              # Cache management
-queryset.no_cache()                 # Cache bypass
+field_cache = Model._get_field_cache()  # Performance monitoring
+queryset.only("field1", "field2")      # Field selection
+queryset.defer("heavy_field")          # Field deferring
 
 # Memory-efficient processing
 async for user in User.objects.iterator(chunk_size=1000):

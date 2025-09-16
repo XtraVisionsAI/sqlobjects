@@ -34,30 +34,30 @@ analytics_users = await bound_manager.all()
 
 ### 2. 组合模式 QuerySet 架构
 
-QuerySet 使用组合模式，通过 QueryBuilder、QueryCache 和 QueryExecutor 组件实现：
+QuerySet 使用组合模式，通过 QueryBuilder 和 QueryExecutor 组件实现：
 
 ```python
 # QuerySet 组合组件
 class QuerySet:
     def __init__(self, table, model_class, db_or_session=None):
         self._builder = QueryBuilder(model_class)      # 查询构建
-        self._cache = QueryCache()                      # FIFO 缓存
+        self._executor = QueryExecutor(db_or_session)   # 查询执行器
         self._executor = QueryExecutor(db_or_session)   # 统一执行
 
 # 链式构建 - 每个方法返回新的 QuerySet 实例
 query = User.objects.filter(User.is_active == True)  # 新 QuerySet
 query = query.filter(User.age >= 18)                 # 新 QuerySet
 query = query.order_by(User.name)                    # 新 QuerySet
-users = await query.all()  # 执行查询，使用缓存
+users = await query.all()  # 执行查询
 
 # Q 对象逻辑组合 - 支持 SQLAlchemy 表达式
 users = await User.objects.filter(
     Q(User.role == "admin") | Q(User.is_staff == True)
 ).all()
 
-# 组件共享 - 新 QuerySet 共享 cache 和 executor
+# 组件共享 - 新 QuerySet 共享 executor
 new_qs = query.filter(User.department == "IT")
-# new_qs._cache 与 query._cache 是同一个实例
+# new_qs._executor 与 query._executor 是同一个实例
 ```
 
 ### 3. CRUD 操作
@@ -123,20 +123,19 @@ deleted_rows = await User.objects.bulk_delete([1, 2, 3], batch_size=1000)
 - **ObjectsManager**: Django 风格的数据库操作管理器，支持会话绑定和批量操作
 
 **查询构建层**
-- **QuerySet**: 组合模式查询构建器，集成 QueryBuilder、QueryCache 和 QueryExecutor
+- **QuerySet**: 组合模式查询构建器，集成 QueryBuilder 和 QueryExecutor
 - **QueryBuilder**: 不可变查询构建器，处理 SQL 构建和查询优化
 - **Q**: SQLAlchemy 表达式逻辑组合器，支持 AND/OR/NOT 复杂条件
 
 **执行层**
 - **QueryExecutor**: 统一查询执行引擎，支持多种查询类型、迭代器和延迟加载
-- **QueryCache**: FIFO 缓存机制，提供查询结果缓存和性能统计
 
 ### 设计理念
 
 **描述符模式**: 通过 ObjectsDescriptor 为每个模型类提供独立的管理器实例
 **组合模式架构**: QuerySet 通过组件组合避免 MRO 问题，提高可维护性
 **不可变构建**: QueryBuilder 不可变设计，每个方法返回新实例
-**组件共享**: 新 QuerySet 实例共享 cache 和 executor，提高性能
+**组件共享**: 新 QuerySet 实例共享 executor，提高性能
 **统一执行**: QueryExecutor 单一执行方法处理所有查询类型
 **信号集成**: 批量操作使用 @emit_signals 装饰器集成信号系统
 **会话管理**: 支持 using() 方法进行会话绑定和 readonly 参数控制
@@ -196,8 +195,8 @@ await .dates(field, precision, order) / await .datetimes(field, precision, order
 # 索引访问方法
 await .get_item(index_or_slice)
 
-# 缓存控制方法
-.no_cache()
+# 字段选择方法
+.only(*fields) / .defer(*fields)
 
 # 子查询方法
 .subquery(name, query_type)
@@ -259,9 +258,9 @@ stats = await User.objects.aggregate(
     max_age=func.max(User.age)
 )
 
-# 缓存控制
-cached_users = await User.objects.filter(User.is_active == True).all()
-live_users = await User.objects.no_cache().filter(User.status == "online").all()
+# 字段选择控制
+selected_users = await User.objects.only("id", "username").all()
+deferred_users = await User.objects.defer("bio", "profile_image").all()
 
 # 查询执行方法
 last_user = await User.objects.last()

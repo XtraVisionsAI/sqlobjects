@@ -228,9 +228,9 @@ user = await User.objects.using("analytics").create(username="analyst")
 async for user in User.objects.iterator(chunk_size=1000):
     await process_user(user)
 
-# Cache control for performance
-users = await User.objects.filter(User.is_active == True).all()  # Uses cache
-live_data = await User.objects.no_cache().filter(User.status == "online").all()  # Skip cache
+# Field selection for performance
+users = await User.objects.only("id", "username", "email").all()  # Load only needed fields
+live_data = await User.objects.defer("bio", "profile_image").all()  # Defer heavy fields
 
 # Field-level performance optimization
 class User(ObjectModel):
@@ -306,7 +306,7 @@ uv run pytest
 See our [TODO.md](TODO.md) for planned features:
 
 - **v2.0**: Database health checks, window functions, advanced bulk operations
-- **v2.1**: Advanced cache management, query optimization tools
+- **v2.1**: Advanced field optimization, query performance tools
 - **v2.2+**: CTE support, advanced SQL functions
 
 ## 📄 License
