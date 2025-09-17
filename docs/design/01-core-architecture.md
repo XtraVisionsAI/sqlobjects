@@ -1,331 +1,283 @@
-# Core Architecture
+# SQLObjects Core Architecture Design Document
 
-> 📝 This document is based on the Chinese version. For the latest Chinese version, see [docs-zh/design/01-core-architecture.md](../../docs-zh/design/01-core-architecture.md)
+## Overview
 
-SQLObjects is built on a solid architectural foundation that prioritizes performance, type safety, and developer experience while maintaining the familiar Django ORM API.
+SQLObjects core architecture is built on SQLAlchemy Core using a composition pattern design, providing global database
+management, task-level session context, and complete model base classes.
+It implements decoupling between database manager and session manager through an event system, supporting multi-database
+environments and asynchronous operations.
 
-## Architecture Overview
+## Core Features
 
-### Foundation Stack
+### 1. Global Database Management
 
+DatabaseManager serves as a global singleton managing multi-database connections, while Database class provides event
+handling capabilities:
+
+```python
+# Database initialization - returns Database instance
+db = await init_db("postgresql://user:pass@localhost/db", name="main")
+main_db, analytics_db = await init_dbs({
+    "main": {"url": "postgresql://...", "pool_size": 20},
+    "analytics": {"url": "sqlite:///analytics.db"}
+}, default="main")
+
+# Event registration - through Database instance
+@db.on("connect")
+def on_connect(conn, record):
+    print("Database connected")
+
+# DatabaseManager manages all database instances
+# Supports default database and named database access
 ```
-┌─────────────────────────────────────────┐
-│           SQLObjects API Layer          │
-├─────────────────────────────────────────┤
-│     Model System    │   Query System    │
-├─────────────────────┼───────────────────┤
-│   Field System      │   Session Mgmt    │
-├─────────────────────┼───────────────────┤
-│   Signal System     │   Query Layer     │
-├─────────────────────────────────────────┤
-│           SQLAlchemy Core               │
-├─────────────────────────────────────────┤
-│        Database Drivers (Async)         │
-└─────────────────────────────────────────┘
+
+### 2. Task-Level Session Context
+
+AsyncSession class provides intelligent connection management, SessionContextManager provides task-level sessions based
+on asyncio.current_task:
+
+```python
+# Automatic session management - using default database
+user = await User.objects.get(User.id == 1)
+
+# Explicit transaction control - using context managers (recommended)
+from sqlobjects.session import ctx_session, ctx_sessions
+
+# Single database session
+async with ctx_session() as session:
+    user = await User.objects.using(session).create(name="John")
+
+# Specified database session
+async with ctx_session("analytics") as session:
+    data = await Log.objects.using(session).all()
+
+# Multi-database sessions
+async with ctx_sessions("main", "analytics") as sessions:
+    user = await User.objects.using(sessions["main"]).create(name="Alice")
+    await Log.objects.using(sessions["analytics"]).create(message="User created")
 ```
 
-### Core Design Principles
+### 3. Composition Pattern Model Base Class
 
-1. **Performance First**: Built on SQLAlchemy Core for maximum performance
-2. **Type Safety**: Comprehensive type annotations and runtime validation
-3. **Async Native**: Designed for async/await from the ground up
-4. **Django Familiarity**: Familiar API for Django developers
-5. **Extensibility**: Clean extension points and plugin architecture
+ObjectModel is implemented through composition of ModelProcessor metaclass and ModelMixin, integrating all functional
+components:
+
+```python
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, StringColumn
+
+class User(ObjectModel):  # Inherits ModelMixin + ModelProcessor metaclass
+    name: Column[str] = StringColumn(length=50)
+    email: Column[str] = StringColumn(length=100, unique=True)
+  
+    class Config:
+        table_name = "users"
+        ordering = ["-created_at"]
+
+# ObjectModel built-in features:
+# - SignalMixin: Signal system
+# - HistoryTrackingMixin: History tracking
+# - FieldCacheMixin: Field caching and proxy
+# - ValidationMixin: Validation system
+# - DeferredLoadingMixin: Deferred loading
+# - SessionMixin: Session management
+
+# Instance operations - intelligent detection and signal emission
+user = User(name="John", email="john@example.com")
+await user.save()  # Auto-detects CREATE, emits before_save/before_create/after_save/after_create
+
+user.email = "john.new@example.com"
+await user.save()  # Auto-detects UPDATE, only updates dirty fields
+```
+
+### 4. ModelProcessor Metaclass System
+
+ModelProcessor metaclass automatically handles model definitions, generating SQLAlchemy tables and setting up objects
+manager:
+
+```python
+# Automatic table name generation and objects manager setup
+class UserProfile(ObjectModel):  # → table: "user_profiles"
+    pass
+# Automatically sets: UserProfile.objects = ObjectsDescriptor(UserProfile)
+
+# Configuration processing and field caching
+class Product(ObjectModel):
+    name: Column[str] = StringColumn(length=100)
+    price: Column[Decimal] = NumericColumn(precision=10, scale=2)
+  
+    class Config:
+        indexes = [index("idx_name", "name")]
+        constraints = [constraint("price > 0")]
+
+# ModelProcessor automatically handles:
+# - Field definition conversion to SQLAlchemy Column
+# - Generation of __table__ attribute
+# - Setup of objects manager
+# - Initialization of field cache
+# - Processing of relationship definitions
+```
 
 ## Module Architecture
 
-### Core Modules
+### Core Components
 
-#### Model System (`model.py`)
-- **ObjectModel**: Base class for all models with metaclass magic
-- **Field Processing**: Automatic field discovery and table generation
-- **Configuration**: Model configuration and metadata processing
-- **State Management**: Instance state tracking and dirty field detection
+**Global Management Layer**
+
+- **DatabaseManager**: Global database manager, manages multiple database instances
+- **Database**: Database instance, provides event handling and connection management
+- **AsyncSession**: Intelligent session class, provides connection management and transaction control
+- **SessionContextManager**: Global session context manager, task-level sessions based on asyncio.current_task
+
+**Model Layer**
+
+- **ObjectModel**: Composition pattern model base class, integrates ModelMixin + ModelProcessor metaclass
+- **ModelProcessor**: Metaclass processor, automatically generates SQLAlchemy tables and objects manager
+- **ModelMixin**: Composes all functional Mixins, provides unified CRUD interface
+
+**Functional Mixin Layer**
+
+- **FieldCacheMixin**: Field caching and intelligent attribute access, integrated proxy system
+- **SignalMixin**: Signal system, built into ObjectModel
+- **HistoryTrackingMixin**: History tracking and dirty field detection
+- **ValidationMixin**: Validation system integration
+- **DeferredLoadingMixin**: Deferred loading functionality
+- **SessionMixin**: Session management and using() method
+
+**State Management Layer**
+
+- **StateManager**: Unified instance state management, supports dirty fields, deferred fields, proxy cache
+- **DeferredFieldProxy**: Deferred field proxy, supports lazy loading and caching
+- **RelationFieldProxy**: Relationship field proxy, supports relationship lazy loading
+
+### Design Philosophy
+
+**Composition Pattern**: Uses Mixin composition rather than complex inheritance for better maintainability
+**Global Management**: Global DatabaseManager and SessionContextManager instances for simplified usage
+**Event-Driven**: Database class provides extension points through event system
+**Intelligent Detection**: Automatic detection of CREATE/UPDATE operations, dirty field tracking, deferred loading
+**Metaclass-Driven**: ModelProcessor metaclass automatically handles model definition and table generation
+**Unified State**: StateManager unifies instance state management, supporting multiple state types
+
+### Integration with Other Modules
+
+**Data Operation Module**: Obtains sessions through SessionContextManager
+**Field System Module**: Processes field definitions through ModelProcessor
+**Relationship Processing Module**: Provides relationship support through ObjectModel
+
+## API Reference
+
+### Database Management
 
 ```python
-# Model system responsibilities
-class ObjectModel:
-    # Metaclass processing for automatic table generation
-    # Field discovery and type processing
-    # Configuration parsing and application
-    # State management and change tracking
+# Database initialization
+await init_db(url, name=None, **kwargs)
+await init_dbs(databases, default=None)
+
+# Table operations
+await create_tables(base_class, db_name=None)
+await drop_tables(base_class, db_name=None)
+
+# Connection management
+await close_db(db_name=None)
+await close_all_dbs()
 ```
 
-#### Field System (`fields/`)
-- **Type Registry**: Centralized mapping of Python types to SQLAlchemy types
-- **Field Definitions**: Type-safe field classes with parameter validation
-- **Shortcuts**: Convenience functions for common field types
-- **Validation**: Field-level validation integration
+### Session Management
 
 ```python
-# Field system architecture
-fields/
-├── core.py          # Core field classes and type registry
-├── shortcuts.py     # StringColumn, IntegerColumn, etc.
-├── functions.py     # column(), foreign_key(), etc.
-├── types/           # Specialized field types
-└── relations/       # Relationship field definitions
-```
-
-#### Query System (`queries/`, `queryset.py`)
-- **QuerySet**: Chainable query building with lazy evaluation
-- **QueryBuilder**: Immutable query construction and SQL generation
-- **Executor**: Unified query execution and result processing
-- **Query**: Optimized query execution and result processing
-
-```python
-# Query system flow
-QuerySet → QueryBuilder → SQLAlchemy Query → Database → Results
-    ↓           ↓              ↓              ↓         ↓
-  Chaining   SQL Build    Execution      Raw Data   Objects
-```
-
-#### Session Management (`session.py`, `database/`)
-- **Context Managers**: `ctx_session()` and `ctx_sessions()` for transaction control
-- **Database Manager**: Multi-database configuration and routing
-- **Connection Pooling**: Optimized connection pool management
-- **Transaction Control**: Automatic commit/rollback and isolation levels
-
-### Integration Patterns
-
-#### Unified Type System
-All components share a common type system for consistency:
-
-```python
-# Type registry used across all modules
-TypeRegistry = {
-    str: ("string", {"length": 255}),
-    int: ("integer", {}),
-    bool: ("boolean", {}),
-    datetime: ("datetime", {}),
-    # ... comprehensive type mapping
-}
-```
-
-#### Session Integration
-All operations support session binding through the `using()` pattern:
-
-```python
-# Consistent session binding across all operations
-user = await User.objects.using(session).create(...)
-await user.using(session).save()
-queryset = User.objects.using(session).filter(...)
-```
-
-## Performance Architecture
-
-### SQLAlchemy Core Foundation
-
-**Why Core over ORM?**
-- **Better Performance**: Direct SQL generation without ORM overhead
-- **Memory Efficiency**: Reduced object creation and memory allocation
-- **Async Integration**: Simpler async/await integration
-- **Control**: Fine-grained control over SQL generation
-
-### Field and Relationship Caching
-
-```python
-# Field-level caching architecture
-┌─────────────────┐
-│  Field Cache    │  ← Field metadata caching with LRU
-├─────────────────┤
-│  Relation Cache │  ← Relationship object caching
-├─────────────────┤
-│  Proxy Cache    │  ← Deferred field proxy caching
-└─────────────────┘
-```
-
-### Bulk Operations
-
-High-performance bulk processing through:
-- **Batch Processing**: Configurable batch sizes for optimal performance
-- **Memory Management**: Streaming processing for large datasets
-- **Database Optimization**: Database-specific bulk operation strategies
-
-## Type Safety Architecture
-
-### Comprehensive Type Annotations
-
-```python
-# Type safety throughout the system
-class User(ObjectModel):
-    username: Column[str] = StringColumn(length=50)  # Type-safe field definition
-    age: Column[int] = IntegerColumn(nullable=True)
-
-# Type-safe query building
-users: list[User] = await User.objects.filter(
-    User.age >= 18  # Type-checked field access
-).all()
-```
-
-### Runtime Validation
-
-- **Field Validation**: Type checking and constraint validation at field level
-- **Model Validation**: Business logic validation at model level
-- **Query Validation**: Parameter type checking in query building
-
-## Extension Architecture
-
-### Signal System
-
-Comprehensive lifecycle hooks with automatic registration:
-
-```python
-class User(ObjectModel):
-    # Signals automatically registered through method discovery
-    async def before_save(self, context): pass
-    async def after_create(self, context): pass
-    async def before_delete(self, context): pass
-```
-
-### Plugin Points
-
-Well-defined extension points for customization:
-- **Custom Field Types**: Extend the field system with new types
-- **Query Extensions**: Add custom query methods and operations
-- **Validation Extensions**: Custom validators and validation rules
-- **Signal Extensions**: Custom signal handlers and processors
-
-### Mixin Architecture
-
-Composition-based extension through mixins:
-
-```python
-# Core functionality through mixins
-class ObjectModel(
-    ModelMixin,      # Complete functionality integration
-    SignalMixin,     # Signal processing
-    HistoryMixin,    # History tracking
-    ModelProcessor   # Metadata processing
-):
+# Context managers
+async with ctx_session(db_name=None) as session:
     pass
+
+async with ctx_sessions(*db_names) as sessions:
+    pass
+
+# Recommended to use context managers rather than directly getting sessions
+# SessionContextManager.get_session() is mainly for internal implementation
 ```
 
-## Async Architecture
-
-### Native Async Design
-
-Built for async/await from the ground up:
-- **Async Context Managers**: Session and transaction management
-- **Async Iterators**: Memory-efficient large dataset processing
-- **Async Signals**: Non-blocking lifecycle hooks
-- **Async Validation**: Asynchronous validation support
-
-### Context Variable Integration
-
-Seamless context propagation for session management:
+### Model Definition
 
 ```python
-# Context variables for session inheritance
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, StringColumn
+
+class Model(ObjectModel):
+    # Field definitions
+    field: Column[str] = StringColumn(...)
+  
+    # Configuration class
+    class Config:
+        table_name = "custom_name"
+        ordering = ["-created_at"]
+        indexes = [...]
+        constraints = [...]
+```
+
+## Usage Guide
+
+### Basic Usage
+
+```python
+# 1. Database initialization
+await init_db("sqlite+aiosqlite:///app.db")
+
+# 2. Model definition
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, StringColumn
+
+class User(ObjectModel):
+    name: Column[str] = StringColumn(length=50)
+    email: Column[str] = StringColumn(length=100, unique=True)
+
+# 3. Create tables
+await create_tables(ObjectModel)
+
+# 4. Basic operations
+user = User(name="John", email="john@example.com")
+await user.save()
+```
+
+### Advanced Usage
+
+```python
+# Multi-database configuration
+await init_dbs({
+    "main": {
+        "url": "postgresql://localhost/main",
+        "pool_size": 20
+    },
+    "analytics": {
+        "url": "sqlite:///analytics.db"
+    }
+}, default="main")
+
+# Complex model configuration
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, StringColumn, NumericColumn
+from decimal import Decimal
+
+class Product(ObjectModel):
+    name: Column[str] = StringColumn(length=100)
+    price: Column[Decimal] = NumericColumn(precision=10, scale=2)
+  
+    class Config:
+        table_name = "products"
+        ordering = ["name"]
+        indexes = [
+            index("idx_name", "name"),
+            index("idx_price", "price", unique=True)
+        ]
+        constraints = [
+            constraint("price > 0", "ck_positive_price")
+        ]
+
+# Transaction management
 async with ctx_session() as session:
-    # All async tasks inherit the same session context
-    tasks = [asyncio.create_task(process_user(user_id)) for user_id in user_ids]
-    await asyncio.gather(*tasks)
+    # All operations within the same transaction
+    user = await User.objects.using(session).create(name="Alice")
+    product = await Product.objects.using(session).create(
+        name="Widget", price=Decimal("19.99")
+    )
 ```
-
-## Database Compatibility
-
-### Multi-Database Support
-
-Unified API across different database systems:
-- **PostgreSQL**: Full feature support with advanced capabilities
-- **MySQL**: Comprehensive support with dialect-specific optimizations
-- **SQLite**: Complete support for development and testing
-- **Others**: Extensible support for additional databases
-
-### Database-Specific Optimizations
-
-```python
-# Automatic dialect detection and optimization
-if session.bind.dialect.name == "postgresql":
-    # Use PostgreSQL-specific functions
-    result = func.date_trunc("day", User.created_at)
-elif session.bind.dialect.name == "mysql":
-    # Use MySQL-specific functions
-    result = func.date_format(User.created_at, "%Y-%m-%d")
-else:
-    # Fallback to standard SQL
-    result = func.date(User.created_at)
-```
-
-## Memory Management
-
-### Efficient Object Creation
-
-- **Lazy Loading**: Defer expensive operations until needed
-- **Object Pooling**: Reuse objects where possible
-- **Memory Monitoring**: Track memory usage and optimize accordingly
-- **Garbage Collection**: Proactive cleanup of unused objects
-
-### State Management
-
-Efficient state tracking without memory leaks:
-
-```python
-# StateManager for efficient state storage
-class StateManager:
-    def __init__(self):
-        self._state = {}  # Minimal state storage
-    
-    def get(self, key, default=None):
-        return self._state.get(key, default)
-    
-    def set(self, key, value):
-        self._state[key] = value
-```
-
-## Error Handling Architecture
-
-### Comprehensive Exception Hierarchy
-
-```python
-SQLObjectsError
-├── ValidationError      # Data validation failures
-├── DatabaseError       # Database operation failures
-├── ConfigurationError  # Configuration issues
-├── QueryError          # Query building/execution errors
-└── SessionError        # Session management errors
-```
-
-### Error Context and Recovery
-
-- **Rich Error Information**: Detailed error context for debugging
-- **Recovery Strategies**: Automatic retry and fallback mechanisms
-- **Error Propagation**: Clean error propagation through the stack
-- **Logging Integration**: Structured logging for error tracking
-
-## Testing Architecture
-
-### Test Organization
-
-```python
-tests/
-├── unit/           # Component isolation tests
-├── integration/    # Component interaction tests
-└── performance/    # Performance and benchmarking tests
-```
-
-### Test Patterns
-
-- **Behavior Testing**: Focus on observable behavior over implementation
-- **Fixture Management**: Reusable test data and database setup
-- **Performance Testing**: Automated performance regression detection
-- **Cross-Database Testing**: Ensure compatibility across database systems
-
-## Future Architecture Considerations
-
-### Planned Enhancements
-
-- **Advanced Queries**: Enhanced query optimization and performance tools
-- **Field Optimization**: Advanced field selection and deferred loading
-- **Field Optimization**: Deferred loading and relationship caching
-- **Query Optimization**: Automatic query optimization and analysis
-
-### Extensibility Goals
-
-- **Plugin Ecosystem**: Rich plugin system for community extensions
-- **Custom Backends**: Support for non-SQL data stores
-- **Advanced Monitoring**: Built-in performance monitoring and profiling
-- **Cloud Integration**: Native cloud database service integration
-
-This architecture provides a solid foundation for building high-performance, type-safe database applications while maintaining the familiar Django ORM experience that developers love.

@@ -1,50 +1,72 @@
-# Querying Data
+# Querying and Filtering Data
 
-> 📝 This document is based on the Chinese version. For the latest Chinese version, see [docs-zh/features/03-querying-data.md](../../docs-zh/features/03-querying-data.md)
+## Overview
 
-SQLObjects provides a powerful and intuitive query system with Django-style API, chainable methods, and comprehensive filtering capabilities.
+SQLObjects provides a Django-style query API with support for method chaining, Q objects for complex conditions, and
+powerful database operation expression support.
 
-## Basic Queries
+## Quick Start
 
-### Simple Filtering
+### Basic Queries
 
 ```python
-# Get all active users
+# Get all users
+users = await User.objects.all()
+
+# Filter by condition
 active_users = await User.objects.filter(User.is_active == True).all()
 
-# Get users by username
-user = await User.objects.filter(User.username == "alice").first()
+# Get single object
+user = await User.objects.get(User.username == "john")
 
-# Multiple conditions (AND)
-adult_users = await User.objects.filter(
-    User.age >= 18,
-    User.is_active == True
-).all()
+# Check existence
+exists = await User.objects.filter(User.email == "john@example.com").exists()
 ```
 
-### Field Lookups
+### Query Chaining
 
 ```python
+# Chain multiple conditions
+users = await (User.objects
+    .filter(User.is_active == True)
+    .filter(User.age >= 18)
+    .order_by("-created_at")
+    .limit(10)
+    .all())
+```
+
+## Filtering
+
+### Basic Conditions
+
+```python
+# Equality condition
+users = await User.objects.filter(User.username == "john").all()
+
+# Comparison operators
+adults = await User.objects.filter(User.age >= 18).all()
+recent = await User.objects.filter(User.created_at > datetime.now() - timedelta(days=7)).all()
+
 # String operations
 users = await User.objects.filter(User.username.like("%admin%")).all()
 users = await User.objects.filter(User.email.ilike("%GMAIL%")).all()  # Case insensitive
-
-# Numeric comparisons
-adults = await User.objects.filter(User.age >= 18).all()
-seniors = await User.objects.filter(User.age.between(65, 120)).all()
-
-# Date operations
-from datetime import datetime, timedelta
-recent_users = await User.objects.filter(
-    User.created_at > datetime.now() - timedelta(days=7)
-).all()
-
-# List operations
-user_ids = [1, 2, 3, 4, 5]
-users = await User.objects.filter(User.id.in_(user_ids)).all()
 ```
 
-### Q Objects for Complex Logic
+### Multi-condition Queries
+
+```python
+# AND conditions (default)
+users = await User.objects.filter(
+    User.is_active == True,
+    User.age >= 18,
+    User.email.like("%@company.com")
+).all()
+
+# Exclude conditions
+users = await User.objects.exclude(User.is_deleted == True).all()
+```
+
+### Complex Logic Queries with Q Objects
 
 ```python
 from sqlobjects.queries import Q
@@ -54,104 +76,87 @@ users = await User.objects.filter(
     Q(User.role == "admin") | Q(User.is_staff == True)
 ).all()
 
-# Complex combinations with proper precedence
+# Complex combinations
 users = await User.objects.filter(
     Q(User.age >= 18) & (Q(User.role == "admin") | Q(User.is_staff == True))
 ).all()
 
-# Negation
-active_users = await User.objects.filter(~Q(User.is_deleted == True)).all()
-
-# Nested Q objects
-complex_filter = Q(
-    Q(User.age >= 18) & Q(User.is_verified == True)
-) | Q(User.role == "admin")
-users = await User.objects.filter(complex_filter).all()
+# Negation conditions
+users = await User.objects.filter(~Q(User.is_deleted == True)).all()
 ```
 
-## Query Methods
+## Ordering and Limiting
 
-### Execution Methods
-
-```python
-# Get all results
-users = await User.objects.filter(User.is_active == True).all()
-
-# Get single result
-user = await User.objects.filter(User.username == "alice").get()
-
-# Get first result or None
-user = await User.objects.filter(User.age >= 18).first()
-
-# Get last result
-user = await User.objects.filter(User.is_active == True).last()
-
-# Check existence
-exists = await User.objects.filter(User.email == "test@example.com").exists()
-
-# Count results
-count = await User.objects.filter(User.is_active == True).count()
-```
-
-### Ordering and Limiting
+### Ordering
 
 ```python
-# Order by single field
+# Single field ordering
 users = await User.objects.order_by("username").all()
 users = await User.objects.order_by("-created_at").all()  # Descending
 
-# Order by multiple fields
-users = await User.objects.order_by("age", "-created_at").all()
+# Multi-field ordering
+users = await User.objects.order_by("department", "-salary").all()
 
+# Skip default ordering for performance
+count = await User.objects.skip_default_ordering().count()
+```
+
+### Pagination
+
+```python
 # Limit and offset
 users = await User.objects.limit(10).all()
 users = await User.objects.offset(20).limit(10).all()
 
-# Pagination helper
-page_2_users = await User.objects.offset(10).limit(10).all()
+# Index and slice access
+first_user = await User.objects.get_item(0)  # First user
+last_user = await User.objects.get_item(-1)  # Last user
+users = await User.objects.get_item(slice(0, 10))  # First 10
+users = await User.objects.get_item(slice(20, 30))  # 20th-30th
 ```
 
-### Field Selection
+## Field Selection
+
+### Specify Fields
 
 ```python
-# Select specific fields only
+# Load only specified fields
 users = await User.objects.only("id", "username", "email").all()
 
 # Exclude heavy fields
-users = await User.objects.defer("bio", "profile_image").all()
+users = await User.objects.defer("large_text_field", "binary_data").all()
 
-# Values as dictionaries
-user_data = await User.objects.values("id", "username", "email")
+# Return values as dictionaries
+user_data = await User.objects.values("id", "username", "email").all()
+# Result: [{"id": 1, "username": "john", "email": "john@example.com"}, ...]
 
-# Values as flat list
-usernames = await User.objects.values_list("username", flat=True)
+# Return values as tuples
+usernames = await User.objects.values_list("username", flat=True).all()
+# Result: ["john", "alice", "bob", ...]
 ```
 
-## Advanced Querying
+## Aggregation
 
-### Aggregation
+### Basic Aggregation
 
 ```python
 from sqlobjects.expressions import func
 
-# Simple aggregations
+# Count
+user_count = await User.objects.count()
+active_count = await User.objects.filter(User.is_active == True).count()
+
+# Other aggregation functions
 stats = await User.objects.aggregate(
     total_users=func.count(),
     avg_age=func.avg(User.age),
     max_age=func.max(User.age),
     min_age=func.min(User.age)
 )
-
-# Aggregation with filtering
-adult_stats = await User.objects.filter(
-    User.age >= 18
-).aggregate(
-    adult_count=func.count(),
-    avg_adult_age=func.avg(User.age)
-)
+# Result: {"total_users": 100, "avg_age": 32.5, "max_age": 65, "min_age": 18}
 ```
 
-### Annotation
+### Annotations
 
 ```python
 # Add calculated fields
@@ -162,195 +167,482 @@ users = await User.objects.annotate(
 ).all()
 
 # Use annotations in filtering
-active_authors = await User.objects.annotate(
+active_posters = await User.objects.annotate(
     post_count=func.count(User.posts)
-).filter(User.post_count > 5).all()
-```
-
-### Grouping
-
-```python
-# Group by field
-department_stats = await User.objects.values("department").annotate(
-    employee_count=func.count(),
-    avg_salary=func.avg(User.salary)
+).filter(
+    User.post_count > 5
 ).all()
-
-# Group by multiple fields
-stats = await User.objects.values("department", "role").annotate(
-    count=func.count(),
-    avg_age=func.avg(User.age)
-).all()
-
-# Having clause for group filtering
-large_departments = await User.objects.values("department").annotate(
-    employee_count=func.count()
-).having(func.count() > 10).all()
 ```
 
-### Distinct
+## Field Selection Control
+
+### Field Loading Management
 
 ```python
-# Remove duplicates
-departments = await User.objects.values("department").distinct()
+# Load only specified fields
+users = await User.objects.only("id", "username", "email").all()
 
-# Distinct on specific fields (PostgreSQL)
-users = await User.objects.distinct("department").all()
+# Defer loading heavy fields
+live_users = await User.objects.defer("bio", "profile_image").all()
+
+# Combine filtering and field selection
+active_users = await User.objects.filter(
+    User.is_active == True
+).only("id", "username").all()
 ```
 
-## Subqueries
+## Advanced Query Methods
 
-### Scalar Subqueries
+### Query Building Methods
 
 ```python
-# Use subquery result in comparison
-avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).subquery(query_type="scalar")
-older_users = await User.objects.filter(User.age > avg_age).all()
-
-# Subquery in annotation
+# Annotate with calculated fields
 users = await User.objects.annotate(
-    age_vs_avg=User.age - avg_age
+    full_name=func.concat(User.first_name, " ", User.last_name),
+    post_count=func.count(User.posts)
 ).all()
+
+# Group aggregation
+dept_stats = await User.objects.group_by("department").having(
+    func.count() > 5
+).aggregate(
+    dept_count=func.count(),
+    avg_salary=func.avg(User.salary)
+)
+
+# Manual joins for complex queries
+posts = await Post.objects.join(
+    User.__table__, 
+    Post.author_id == User.id,
+    join_type="inner"
+).all()
+
+# Left joins and outer joins
+posts = await Post.objects.leftjoin(
+    Comment.__table__,
+    Comment.post_id == Post.id
+).all()
+
+posts = await Post.objects.outerjoin(
+    Tag.__table__,
+    Tag.post_id == Post.id
+).all()
+
+# Row-level locking
+users = await User.objects.select_for_update(
+    nowait=True, 
+    skip_locked=False
+).filter(User.balance > 0).all()
+
+users = await User.objects.select_for_share(
+    nowait=False, 
+    skip_locked=True
+).filter(User.is_active == True).all()
+
+# Extra SQL fragments
+users = await User.objects.extra(
+    columns={"full_name": "first_name || ' ' || last_name"},
+    where=["age > %s"],
+    params=[18]
+).all()
+
+# Cache control
+users = await User.objects.no_cache().filter(
+    User.status == "online"
+).all()
+
+# Skip default ordering for performance
+count = await User.objects.skip_default_ordering().count()
+
+# Subquery creation
+avg_age = User.objects.aggregate(
+    avg_age=func.avg(User.age)
+).subquery(query_type="scalar")
+
+active_users = User.objects.filter(
+    User.is_active == True
+).subquery("active_users")
 ```
 
-### EXISTS Subqueries
+### Grouping and Aggregation
 
 ```python
-# Filter by related record existence
-has_posts = Post.objects.filter(Post.author_id == User.id).subquery(query_type="exists")
+# Grouping with having clause
+dept_stats = await User.objects.group_by("department").having(
+    func.count() > 5
+).aggregate(
+    dept_count=func.count(),
+    avg_salary=func.avg(User.salary)
+)
+
+# Complex grouping
+monthly_stats = await Sale.objects.group_by(
+    func.extract("year", Sale.created_at),
+    func.extract("month", Sale.created_at)
+).aggregate(
+    total_sales=func.sum(Sale.amount),
+    avg_sale=func.avg(Sale.amount)
+)
+```
+
+### Manual Joins and Locking
+
+```python
+# Join types
+# Inner join (default)
+posts = await Post.objects.join(
+    User.__table__,
+    Post.author_id == User.id
+).all()
+
+# Left join
+posts = await Post.objects.leftjoin(
+    Comment.__table__,
+    Comment.post_id == Post.id
+).all()
+
+# Outer join
+posts = await Post.objects.outerjoin(
+    Tag.__table__,
+    Tag.post_id == Post.id
+).all()
+
+# Multi-table joins
+posts = await Post.objects.join(
+    User.__table__, Post.author_id == User.id
+).leftjoin(
+    Comment.__table__, Comment.post_id == Post.id
+).all()
+
+# Complex join conditions
+posts = await Post.objects.join(
+    User.__table__,
+    and_(
+        Post.author_id == User.id,
+        User.is_active == True,
+        User.created_at < Post.created_at
+    )
+).all()
+
+# Pessimistic locking
+# FOR UPDATE locking
+users = await User.objects.select_for_update().filter(
+    User.balance > 0
+).all()
+
+# FOR UPDATE with NOWAIT
+users = await User.objects.select_for_update(nowait=True).filter(
+    User.account_status == "active"
+).all()
+
+# FOR UPDATE with SKIP LOCKED
+users = await User.objects.select_for_update(skip_locked=True).filter(
+    User.processing_status == "pending"
+).all()
+
+# Shared locks
+# FOR SHARE locking
+users = await User.objects.select_for_share().filter(
+    User.is_active == True
+).all()
+
+# FOR SHARE with options
+users = await User.objects.select_for_share(
+    nowait=True,
+    skip_locked=True
+).filter(User.role == "admin").all()
+```
+
+## Query Execution Methods
+
+### Other Execution Methods
+
+```python
+# Check existence
+exists = await User.objects.filter(User.email == "test@example.com").exists()
+
+# Raw SQL execution
+users = await User.objects.raw(
+    "SELECT * FROM users WHERE age > :age",
+    {"age": 18}
+)
+
+# First and last with ordering
+first_user = await User.objects.order_by("created_at").first()
+last_user = await User.objects.order_by("created_at").last()
+
+# Earliest and latest by specified field
+earliest = await User.objects.earliest("created_at")
+latest = await User.objects.latest("updated_at")
+
+# Earliest/latest with multiple fields
+earliest = await User.objects.earliest("created_at", "id")
+latest = await User.objects.latest("updated_at", "username")
+
+# Return values as dictionaries
+user_data = await User.objects.values("id", "username", "email")
+# Result: [{"id": 1, "username": "john", "email": "john@example.com"}]
+
+# Return values as tuples or flat lists
+user_tuples = await User.objects.values_list("username", "email")
+# Result: [("john", "john@example.com"), ("alice", "alice@example.com")]
+
+usernames = await User.objects.values_list("username", flat=True)
+# Result: ["john", "alice", "bob"]
+
+# Date and datetime extraction
+signup_years = await User.objects.dates("created_at", "year", order="DESC")
+# Result: [date(2023, 1, 1), date(2022, 1, 1)]
+
+login_hours = await User.objects.datetimes("last_login", "hour", order="ASC")
+# Result: [datetime(2023, 12, 1, 10, 0), datetime(2023, 12, 1, 11, 0)]
+
+# Index and slice access
+first_user = await User.objects.get_item(0)
+last_user = await User.objects.get_item(-1)
+users_slice = await User.objects.get_item(slice(10, 20))
+
+# Iterator for memory-efficient processing
+async for user in User.objects.iterator(chunk_size=1000):
+    await process_user(user)
+```
+
+### Raw SQL Queries
+
+```python
+# Execute raw SQL with parameters
+users = await User.objects.raw(
+    "SELECT * FROM users WHERE age > :age AND department = :dept",
+    {"age": 18, "dept": "engineering"}
+)
+
+# Complex raw queries
+results = await User.objects.raw(
+    """
+    SELECT u.*, COUNT(p.id) as post_count
+    FROM users u
+    LEFT JOIN posts p ON u.id = p.author_id
+    WHERE u.is_active = true
+    GROUP BY u.id
+    HAVING COUNT(p.id) > :min_posts
+    """,
+    {"min_posts": 5}
+)
+```
+
+## Advanced Queries
+
+### Subqueries
+
+```python
+# Scalar subqueries for single value comparisons
+avg_salary = User.objects.aggregate(
+    avg_salary=func.avg(User.salary)
+).subquery(query_type="scalar")
+
+high_earners = await User.objects.filter(
+    User.salary > avg_salary
+).all()
+
+# Multiple scalar subqueries
+max_age = User.objects.aggregate(max_age=func.max(User.age)).subquery(query_type="scalar")
+min_age = User.objects.aggregate(min_age=func.min(User.age)).subquery(query_type="scalar")
+
+users = await User.objects.filter(
+    (User.age == max_age) | (User.age == min_age)
+).all()
+
+# EXISTS subqueries for boolean conditions
+has_posts = Post.objects.filter(
+    Post.author_id == User.id
+).subquery(query_type="exists")
+
 authors = await User.objects.filter(has_posts).all()
 
 # Complex EXISTS conditions
 has_recent_posts = Post.objects.filter(
     Post.author_id == User.id,
-    Post.created_at > datetime.now() - timedelta(days=30)
+    Post.created_at >= datetime.now() - timedelta(days=30)
 ).subquery(query_type="exists")
+
 active_authors = await User.objects.filter(has_recent_posts).all()
-```
 
-### Table Subqueries
+# Table subqueries for complex joins
+active_users = User.objects.filter(
+    User.is_active == True
+).subquery("active_users")
 
-```python
-# Use subquery as table
-active_users = User.objects.filter(User.is_active == True).subquery("active_users")
 posts = await Post.objects.join(
     active_users, 
     Post.author_id == active_users.c.id
 ).all()
+
+# Complex table subqueries
+top_users = User.objects.annotate(
+    post_count=func.count(User.posts)
+).filter(
+    User.post_count > 10
+).subquery("top_users")
+
+popular_posts = await Post.objects.join(
+    top_users,
+    Post.author_id == top_users.c.id
+).all()
 ```
 
-## Relationship Queries
-
-### Filtering by Related Fields
+### Complex Aggregations
 
 ```python
-# Filter by foreign key relationship
-posts = await Post.objects.filter(Post.author.username == "alice").all()
+# Department statistics
+dept_stats = await User.objects.group_by("department").aggregate(
+    user_count=func.count(),
+    avg_salary=func.avg(User.salary),
+    max_salary=func.max(User.salary)
+)
 
-# Filter by reverse relationship
+# Conditional aggregations
+stats = await User.objects.aggregate(
+    total_users=func.count(),
+    active_users=func.sum(func.case([(User.is_active == True, 1)], else_=0)),
+    avg_age=func.avg(User.age)
+)
+```
+
+### Raw SQL
+
+```python
+# Raw SQL queries
+users = await User.objects.raw(
+    "SELECT * FROM users WHERE age > :min_age AND created_at > :date",
+    {"min_age": 18, "date": datetime.now() - timedelta(days=30)}
+).all()
+
+# Raw expressions
+users = await User.objects.annotate(
+    custom_field=text("CASE WHEN age >= 18 THEN 'adult' ELSE 'minor' END")
+).all()
+```
+
+## Related Queries
+
+### Loading Related Data
+
+```python
+# select_related (JOIN) - using string field names
+users = await User.objects.select_related("profile").all()
+
+# prefetch_related (separate queries) - using string field names
+users = await User.objects.prefetch_related("posts").all()
+
+# Multiple relationships
+users = await User.objects.select_related("profile").prefetch_related("posts", "groups").all()
+```
+
+### Filter by Related Fields
+
+```python
+# Filter by related fields
+users = await User.objects.filter(User.profile.bio.like("%developer%")).all()
 users = await User.objects.filter(User.posts.title.like("%python%")).all()
 
-# Multiple relationship levels
-comments = await Comment.objects.filter(
-    Comment.post.author.username == "alice"
-).all()
-```
-
-### Relationship Loading
-
-```python
-# Select related (JOIN for foreign keys)
-posts = await Post.objects.select_related("author", "category").all()
-
-# Prefetch related (separate queries for reverse relationships)
-users = await User.objects.prefetch_related("posts", "comments").all()
-
-# Combined loading strategies
-posts = await Post.objects.select_related("author").prefetch_related(
-    "comments", "tags"
-).all()
-
-# Access loaded relationships without additional queries
-for post in posts:
-    author = post.author           # From JOIN (select_related)
-    comments = await post.comments.all()  # From prefetch (prefetch_related)
-```
-
-## Raw SQL
-
-### Raw Queries
-
-```python
-# Execute raw SQL
-users = await User.objects.raw(
-    "SELECT * FROM users WHERE age > :age AND created_at > :date",
-    {"age": 18, "date": datetime.now() - timedelta(days=30)}
-)
-
-# Raw SQL with model instantiation
-users = await User.objects.raw(
-    "SELECT id, username, email FROM users WHERE is_active = true"
-)
-```
-
-### Extra Clauses
-
-```python
-# Add custom SELECT clauses
-users = await User.objects.extra(
-    select={"age_group": "CASE WHEN age < 18 THEN 'minor' ELSE 'adult' END"}
-).all()
-
-# Custom WHERE clauses
-users = await User.objects.extra(
-    where=["age > %s", "created_at > %s"],
-    params=[18, datetime.now() - timedelta(days=30)]
+# Count related objects
+users = await User.objects.annotate(
+    post_count=func.count(User.posts)
+).filter(
+    User.post_count > 5
 ).all()
 ```
 
 ## Performance Optimization
 
-### Query Optimization
+### Cache Control
 
 ```python
-# Skip default ordering when not needed
-count = await User.objects.skip_default_ordering().count()
+# Use cache for frequently accessed data
+users = await User.objects.filter(User.is_active == True).all()
 
-# Use select_related for foreign key relationships
-posts = await Post.objects.select_related("author").all()
+# Skip cache for real-time data
+live_data = await User.objects.no_cache().filter(
+    User.last_login > datetime.now() - timedelta(minutes=1)
+).all()
 
-# Use prefetch_related for reverse relationships
-users = await User.objects.prefetch_related("posts").all()
-
-# Combine for optimal loading
-posts = await Post.objects.select_related("author").prefetch_related("tags").all()
+# Monitor cache performance
+stats = User.objects.get_cache_stats()
+if stats["hit_rate"] < 0.5:
+    # Consider query optimization
+    pass
 ```
 
-### Field Selection Control
+### Efficient Queries
 
 ```python
-# Load only specific fields
-users = await User.objects.only("id", "username", "email").all()
+# Use exists() instead of count() for boolean checks
+has_users = await User.objects.filter(User.is_active == True).exists()
 
-# Defer heavy fields until accessed
-users = await User.objects.defer("bio", "profile_image").all()
-
-# Combine with filtering
-live_users = await User.objects.filter(
-    User.status == "online"
-).only("id", "username").all()
-```
-
-### Iterator for Large Datasets
-
-```python
-# Memory-efficient processing
+# Use iterator for large datasets
 async for user in User.objects.filter(User.is_active == True).iterator():
     await process_user(user)
 
-# Configure chunk size
-async for user in User.objects.iterator(chunk_size=1000):
+# Batch processing with memory cleanup
+async for user in User.objects.iterator(
+    chunk_size=1000,
+    memory_cleanup_interval=10
+):
     await process_user(user)
+
+# Skip default ordering for count operations
+count = await User.objects.skip_default_ordering().count()
+```
+
+### Query Analysis
+
+```python
+# Explain query execution
+explain_result = await User.objects.filter(User.age >= 18).explain(analyze=True)
+print(explain_result)
+
+# JSON format for programmatic analysis
+explain_json = await User.objects.filter(User.age >= 18).explain(output="json")
+```
+
+### QuerySet Shortcut Methods
+
+ObjectsManager provides direct access to all QuerySet methods:
+
+```python
+# Distinct operations
+unique_departments = await User.objects.distinct("department").all()
+all_distinct = await User.objects.distinct().all()
+
+# Exclude filtering
+non_deleted = await User.objects.exclude(User.is_deleted == True).all()
+
+# Ordering
+users = await User.objects.order_by("username", "-created_at").all()
+
+# Pagination
+page_users = await User.objects.limit(10).offset(20).all()
+
+# Field selection
+users = await User.objects.only("id", "username").all()
+users = await User.objects.defer("large_field").all()
+
+# Empty queryset
+empty = await User.objects.none().all()  # Always returns []
+
+# Reverse ordering
+users = await User.objects.order_by("created_at").reverse().all()
+
+# Related loading
+users = await User.objects.select_related("profile").all()
+users = await User.objects.prefetch_related("posts").all()
+
+# Advanced prefetch with custom queryset
+users = await User.objects.prefetch_related(
+    recent_posts=Post.objects.filter(
+        Post.created_at >= datetime.now() - timedelta(days=30)
+    ).order_by("-created_at").limit(5)
+).all()
 ```
 
 ## Date and Time Queries
@@ -358,102 +650,56 @@ async for user in User.objects.iterator(chunk_size=1000):
 ### Date Extraction
 
 ```python
-# Extract date parts (cross-database compatible)
-years = await User.objects.dates("created_at", "year")
-months = await User.objects.dates("created_at", "month")
+# Cross-database compatible date part extraction
+users_by_year = await User.objects.dates("created_at", "year", order="DESC")
+users_by_month = await User.objects.dates("created_at", "month", order="ASC")
+users_by_day = await User.objects.dates("created_at", "day")
 
-# DateTime extraction
-hours = await User.objects.datetimes("last_login", "hour")
+# Datetime extraction with precision levels
+login_times = await User.objects.datetimes("last_login", "hour", order="ASC")
+minute_logins = await User.objects.datetimes("last_login", "minute")
+second_logins = await User.objects.datetimes("last_login", "second")
+
+# Supported precision levels:
+# dates(): "year", "month", "day"
+# datetimes(): "year", "month", "day", "hour", "minute", "second"
 ```
 
 ### Date Filtering
 
 ```python
-from datetime import date, datetime
+from datetime import datetime, timedelta
 
-# Date comparisons
-today_users = await User.objects.filter(
-    User.created_at >= datetime.combine(date.today(), datetime.min.time())
+# Recent records
+recent_users = await User.objects.filter(
+    User.created_at >= datetime.now() - timedelta(days=7)
 ).all()
 
 # Date ranges
 this_month_users = await User.objects.filter(
-    User.created_at__year=2024,
-    User.created_at__month=1
+    User.created_at >= datetime.now().replace(day=1),
+    User.created_at < datetime.now().replace(day=1) + timedelta(days=32)
 ).all()
-```
 
-## Query Chaining
-
-### Method Chaining
-
-```python
-# Build complex queries step by step
-query = User.objects.filter(User.is_active == True)
-query = query.filter(User.age >= 18)
-query = query.order_by("-created_at")
-query = query.limit(10)
-
-users = await query.all()
-
-# Or chain directly
-users = await User.objects.filter(
-    User.is_active == True
-).filter(
-    User.age >= 18
-).order_by("-created_at").limit(10).all()
-```
-
-### Conditional Chaining
-
-```python
-def build_user_query(is_admin=False, min_age=None, search_term=None):
-    query = User.objects.filter(User.is_active == True)
-    
-    if is_admin:
-        query = query.filter(User.role == "admin")
-    
-    if min_age:
-        query = query.filter(User.age >= min_age)
-    
-    if search_term:
-        query = query.filter(
-            Q(User.username.like(f"%{search_term}%")) |
-            Q(User.email.like(f"%{search_term}%"))
-        )
-    
-    return query
-
-# Usage
-admin_users = await build_user_query(is_admin=True, min_age=21).all()
+# Extract date parts in filtering
+users_2023 = await User.objects.filter(
+    func.extract("year", User.created_at) == 2023
+).all()
 ```
 
 ## Best Practices
 
-### Query Performance
-
-1. **Use select_related for foreign keys**: Avoid N+1 queries
-2. **Use prefetch_related for reverse relationships**: Optimize related data loading
-3. **Skip default ordering for counts**: Use `skip_default_ordering()` for better performance
-4. **Use only() and defer()**: Load only necessary fields
-5. **Use iterator for large datasets**: Avoid memory issues with large result sets
-
-### Query Organization
+### Query Optimization
 
 ```python
-# Create reusable query methods
-class UserQuerySet:
-    def active(self):
-        return self.filter(User.is_active == True)
-    
-    def adults(self):
-        return self.filter(User.age >= 18)
-    
-    def by_role(self, role):
-        return self.filter(User.role == role)
+# Use select_related for foreign keys
+users = await User.objects.select_related("department").all()
 
-# Usage
-active_adult_admins = await User.objects.active().adults().by_role("admin").all()
+# Use prefetch_related for reverse foreign keys and many-to-many relationships
+users = await User.objects.prefetch_related("posts", "groups").all()
+
+# Combine both for complex relationships
+users = await User.objects.select_related("department").prefetch_related("posts").all()
 ```
 
 ### Error Handling
@@ -462,14 +708,33 @@ active_adult_admins = await User.objects.active().adults().by_role("admin").all(
 from sqlobjects.exceptions import DoesNotExist, MultipleObjectsReturned
 
 try:
-    user = await User.objects.filter(User.username == "alice").get()
+    user = await User.objects.get(User.username == "john")
 except DoesNotExist:
-    print("User not found")
+    # Handle user not found
+    user = None
 except MultipleObjectsReturned:
-    print("Multiple users found")
+    # Handle multiple users found
+    user = await User.objects.filter(User.username == "john").first()
+```
 
-# Safe get with default
-user = await User.objects.filter(User.username == "alice").first()
-if user is None:
-    print("User not found")
+### Memory Management
+
+```python
+# For large result sets, use iterator
+async for user in User.objects.filter(User.is_active == True).iterator():
+    # Process one user at a time
+    await process_user(user)
+
+# Or use pagination
+page_size = 100
+offset = 0
+while True:
+    users = await User.objects.offset(offset).limit(page_size).all()
+    if not users:
+        break
+
+    for user in users:
+        await process_user(user)
+
+    offset += page_size
 ```

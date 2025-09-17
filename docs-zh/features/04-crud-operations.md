@@ -1,95 +1,95 @@
-# CRUD Operations
+# CRUD 操作
 
-## Overview
+## 概述
 
-SQLObjects provides comprehensive Create, Read, Update, Delete operations with both individual and bulk processing capabilities, smart operation detection, and transaction support.
+SQLObjects 提供了全面的创建、读取、更新、删除操作支持，包括单个和批量处理能力、智能操作检测和事务支持。
 
-## Quick Start
+## 快速开始
 
-### Basic CRUD
+### 基本 CRUD 操作
 
 ```python
-# Create
+# 创建
 user = await User.objects.create(username="john", email="john@example.com")
 
-# Read
+# 读取
 user = await User.objects.get(User.id == 1)
 users = await User.objects.filter(User.is_active == True).all()
 
-# Update
+# 更新
 user.email = "john.new@example.com"
 await user.save()
 
-# Delete
+# 删除
 await user.delete()
 ```
 
-## Create Operations
+## 创建操作
 
-### Single Object Creation
+### 单个对象创建
 
 ```python
-# Method 1: Using objects manager
+# 方法 1：使用对象管理器
 user = await User.objects.create(
     username="alice",
     email="alice@example.com",
     age=25
 )
 
-# ObjectsManager create method uses from_dict internally
+# ObjectsManager 的 create 方法内部使用 from_dict
 user = await User.objects.create(
     username="alice",
     email="alice@example.com",
-    id=1  # init=False fields are handled automatically
+    id=1  # init=False 字段会自动处理
 )
 
-# Method 2: Instance creation and save
+# 方法 2：实例创建和保存
 user = User(username="bob", email="bob@example.com")
 await user.save()
 
-# With validation control
+# 带验证控制
 user = await User.objects.create(
     username="charlie",
-    email="invalid-email",  # Will raise ValidationError
-    validate=True  # Default behavior
+    email="invalid-email",  # 会抛出 ValidationError
+    validate=True  # 默认行为
 )
 ```
 
-### Bulk Creation
+### 批量创建
 
 ```python
-# Bulk create for performance
+# 批量创建以提升性能
 users_data = [
     {"username": "user1", "email": "user1@example.com"},
     {"username": "user2", "email": "user2@example.com"},
     {"username": "user3", "email": "user3@example.com"},
 ]
 
-# Returns number of created records
+# 返回创建的记录数量
 created_count = await User.objects.bulk_create(users_data, batch_size=1000)
 ```
 
-### Get or Create Pattern
+### 获取或创建模式
 
 ```python
-# Get existing or create new
+# 获取现有或创建新的
 user, created = await User.objects.get_or_create(
-    username="david",  # Lookup field
-    defaults={"email": "david@example.com", "age": 30}  # Values for creation
+    username="david",  # 查找字段
+    defaults={"email": "david@example.com", "age": 30}  # 创建时的值
 )
 
-# get_or_create and update_or_create also use from_dict
+# get_or_create 和 update_or_create 也使用 from_dict
 user, created = await User.objects.get_or_create(
     username="david",
-    defaults={"email": "david@example.com", "id": 100}  # Handles all field types
+    defaults={"email": "david@example.com", "id": 100}  # 处理所有字段类型
 )
 
 if created:
-    print("New user created")
+    print("创建了新用户")
 else:
-    print("Existing user found")
+    print("找到了现有用户")
 
-# Multiple lookup fields
+# 多个查找字段
 user, created = await User.objects.get_or_create(
     username="eve",
     email="eve@example.com",
@@ -97,82 +97,82 @@ user, created = await User.objects.get_or_create(
 )
 ```
 
-## Read Operations
+## 读取操作
 
-### Single Object Retrieval
+### 单个对象检索
 
 ```python
-# Get by primary key
+# 通过主键获取
 user = await User.objects.get(User.id == 1)
 
-# Get by unique field
+# 通过唯一字段获取
 user = await User.objects.get(User.username == "john")
 
-# Get with multiple conditions
+# 多条件获取
 user = await User.objects.get(
     User.username == "john",
     User.is_active == True
 )
 
-# First/last with ordering
+# 带排序的第一个/最后一个
 first_user = await User.objects.order_by("created_at").first()
 latest_user = await User.objects.order_by("-created_at").first()
 ```
 
-### Multiple Object Retrieval
+### 多个对象检索
 
 ```python
-# All objects
+# 所有对象
 users = await User.objects.all()
 
-# Filtered results
+# 过滤结果
 active_users = await User.objects.filter(User.is_active == True).all()
 
-# With pagination
+# 分页
 users_page = await User.objects.offset(20).limit(10).all()
 
-# Random sampling
+# 随机采样
 random_users = await User.objects.random(5)
 sample_users = await User.objects.sample(10)
 ```
 
-### Bulk Retrieval
+### 批量检索
 
 ```python
-# In bulk by field values
+# 通过字段值批量获取
 user_dict = await User.objects.in_bulk([1, 2, 3], field_name="id")
-# Result: {1: User(id=1), 2: User(id=2), 3: User(id=3)}
+# 结果：{1: User(id=1), 2: User(id=2), 3: User(id=3)}
 
 user_dict = await User.objects.in_bulk(
     ["john", "alice", "bob"], 
     field_name="username"
 )
-# Result: {"john": User(username="john"), "alice": User(username="alice")}
+# 结果：{"john": User(username="john"), "alice": User(username="alice")}
 
-# Using primary key (default)
-user_dict = await User.objects.in_bulk([1, 2, 3])  # field_name="pk" by default
+# 使用主键（默认）
+user_dict = await User.objects.in_bulk([1, 2, 3])  # field_name="pk" 为默认值
 ```
 
-## Update Operations
+## 更新操作
 
-### Single Object Updates
+### 单个对象更新
 
 ```python
-# Method 1: Load, modify, save
+# 方法 1：加载、修改、保存
 user = await User.objects.get(User.id == 1)
 user.email = "new.email@example.com"
 user.last_login = datetime.now()
 await user.save()
 
-# Method 2: Smart save with detached instance
+# 方法 2：分离实例的智能保存
 user = User(id=1, email="updated@example.com", username="updated_user")
-await user.save()  # Automatically detects UPDATE operation
+await user.save()  # 自动检测 UPDATE 操作
 ```
 
-### Bulk Updates
+### 批量更新
 
 ```python
-# Update multiple records with same values
+# 使用相同值更新多条记录
 affected = await User.objects.filter(
     User.is_active == False
 ).update(values={
@@ -180,17 +180,17 @@ affected = await User.objects.filter(
     "updated_at": datetime.now()
 })
 
-# Conditional updates with Q objects
+# 使用 Q 对象的条件更新
 affected = await User.objects.filter(
     Q(User.last_login < datetime.now() - timedelta(days=30)) |
     Q(User.login_count == 0)
 ).update(values={"is_active": False})
 
-# Bulk update with conflict resolution
+# 带冲突解决的批量更新
 mappings = [
     {"id": 1, "email": "user1@new.com", "status": "active"},
     {"id": 2, "email": "user2@new.com", "status": "inactive"},
-    # ... thousands of records
+    # ... 数千条记录
 ]
 
 affected = await User.objects.bulk_update(
@@ -199,20 +199,20 @@ affected = await User.objects.bulk_update(
     batch_size=1000
 )
 
-# With conflict handling
+# 带冲突处理
 affected = await User.objects.bulk_create(
     users_data,
-    on_conflict="ignore",  # Skip duplicates
+    on_conflict="ignore",  # 跳过重复项
     batch_size=1000
 )
 ```
 
-### Update or Create Pattern
+### 更新或创建模式
 
 ```python
-# Update existing or create new
+# 更新现有或创建新的
 user, created = await User.objects.update_or_create(
-    username="frank",  # Lookup field
+    username="frank",  # 查找字段
     defaults={
         "email": "frank@example.com",
         "last_login": datetime.now(),
@@ -221,194 +221,194 @@ user, created = await User.objects.update_or_create(
 )
 
 if created:
-    print("New user created")
+    print("创建了新用户")
 else:
-    print("Existing user updated")
+    print("更新了现有用户")
 ```
 
-## Delete Operations
+## 删除操作
 
-### Single Object Deletion
+### 单个对象删除
 
 ```python
-# Method 1: Load and delete
+# 方法 1：加载并删除
 user = await User.objects.get(User.id == 1)
 await user.delete()
 
-# Method 2: Delete detached instance
+# 方法 2：删除分离实例
 user = User(id=1)
-await user.delete()  # Automatically attaches to session
+await user.delete()  # 自动附加到会话
 ```
 
-### Bulk Deletion
+### 批量删除
 
 ```python
-# Delete with conditions
+# 带条件删除
 deleted = await User.objects.filter(
     User.is_active == False,
     User.last_login < datetime.now() - timedelta(days=365)
 ).delete()
 
-# Delete with Q objects
+# 使用 Q 对象删除
 deleted = await User.objects.filter(
     Q(User.is_deleted == True) | Q(User.status == "banned")
 ).delete()
 
-# True bulk delete for large ID lists (10-100x faster)
-user_ids = [1, 2, 3, 4, 5]  # Thousands of IDs
+# 大型 ID 列表的真正批量删除（快 10-100 倍）
+user_ids = [1, 2, 3, 4, 5]  # 数千个 ID
 deleted = await User.objects.bulk_delete(
     user_ids,
     id_field="id",
     batch_size=1000
 )
 
-# Bulk delete with custom field
+# 使用自定义字段的批量删除
 usernames = ["user1", "user2", "user3"]
 deleted = await User.objects.bulk_delete(
     usernames,
     id_field="username"
 )
 
-### Update All Records
+### 更新所有记录
 
 ```python
-# Update all records with same values
+# 使用相同值更新所有记录
 affected = await User.objects.update_all(
     status="migrated",
     updated_at=datetime.now()
 )
 ```
 
-### Delete All Records
+### 删除所有记录
 
 ```python
-# Delete all records
+# 删除所有记录
 deleted = await User.objects.delete_all()
 
-# Fast delete with TRUNCATE (use with caution)
-deleted = await User.objects.delete_all(fast=True)  # Returns -1, no transaction safety
+# 使用 TRUNCATE 的快速删除（请谨慎使用）
+deleted = await User.objects.delete_all(fast=True)  # 返回 -1，无事务安全性
 ```
 
-## Advanced Instance Operations
+## 高级实例操作
 
-### Smart Save Detection
+### 智能保存检测
 
 ```python
-# Automatic CREATE vs UPDATE detection
-# New instance (no primary key) → CREATE
+# 自动 CREATE vs UPDATE 检测
+# 新实例（无主键）→ CREATE
 user = User(username="new_user", email="new@example.com")
-await user.save()  # INSERT operation
+await user.save()  # INSERT 操作
 
-# Existing instance (has primary key) → UPDATE
+# 现有实例（有主键）→ UPDATE
 user.email = "updated@example.com"
-await user.save()  # UPDATE operation
+await user.save()  # UPDATE 操作
 
-# Detached instance (has primary key) → UPDATE via merge()
+# 分离实例（有主键）→ 通过 merge() 进行 UPDATE
 detached_user = User(id=1, username="detached", email="detached@example.com")
-await user.save()  # UPDATE via merge() strategy
+await user.save()  # 通过 merge() 策略进行 UPDATE
 
-# from_dict creates instances with proper dirty field tracking
+# from_dict 创建具有正确脏字段跟踪的实例
 user_data = {"username": "new_user", "email": "new@example.com"}
-user = User.from_dict(user_data)  # No dirty fields marked
-await user.save()  # Clean INSERT operation
+user = User.from_dict(user_data)  # 没有标记脏字段
+await user.save()  # 干净的 INSERT 操作
 
-# Manual construction marks all fields as dirty
-user = User(username="manual", email="manual@example.com")  # All fields marked dirty
-await user.save()  # UPDATE operation with all fields
+# 手动构造会标记所有字段为脏
+user = User(username="manual", email="manual@example.com")  # 所有字段标记为脏
+await user.save()  # 包含所有字段的 UPDATE 操作
 ```
 
-### Refresh Operations
+### 刷新操作
 
 ```python
-# Full refresh from database
+# 从数据库完全刷新
 user = await User.objects.get(User.id == 1)
 user.username = "modified_locally"
-await user.refresh()  # Resets all fields to database state
+await user.refresh()  # 将所有字段重置为数据库状态
 
-# Selective field refresh
+# 选择性字段刷新
 await user.refresh(fields=["username", "updated_at"])
 
-# Refresh detached instance
+# 刷新分离实例
 detached_user = User(id=1)
-await detached_user.refresh()  # Loads current data from database
+await detached_user.refresh()  # 从数据库加载当前数据
 ```
 
-### Session Management
+### 会话管理
 
 ```python
-# Using specific database session
+# 使用特定数据库会话
 async with ctx_session() as session:
     user = await User.objects.using(session).create(username="session_user")
     user.email = "updated@example.com"
     await user.using(session).save()
 
-# Cross-database operations
+# 跨数据库操作
 user = User(username="multi_db_user")
 await user.using("main_db").save()
-await user.using("analytics_db").save()  # Same data to different databases
+await user.using("analytics_db").save()  # 相同数据到不同数据库
 ```
 
-## Transaction Management
+## 事务管理
 
-### Automatic Transactions
+### 自动事务
 
 ```python
-# Single operation (auto-commit)
+# 单个操作（自动提交）
 user = await User.objects.create(username="auto_commit")
 
-# Multiple operations in transaction
+# 事务中的多个操作
 async with ctx_session() as session:
     user = await User.objects.using(session).create(username="tx_user")
     profile = await Profile.objects.using(session).create(user_id=user.id)
-    # Automatic commit on success, rollback on error
+    # 成功时自动提交，错误时回滚
 ```
 
-### Manual Transaction Control
+### 手动事务控制
 
 ```python
 from sqlobjects.session import ctx_session
 
 async with ctx_session() as session:
     try:
-        # Multiple operations
+        # 多个操作
         user = await User.objects.using(session).create(username="manual_tx")
         await User.objects.using(session).filter(
             User.is_active == False
         ).update(values={"status": "archived"})
-        
-        # Manual commit
+      
+        # 手动提交
         await session.commit()
     except Exception as e:
-        # Manual rollback
+        # 手动回滚
         await session.rollback()
         raise
 ```
 
-## Performance Optimization
+## 性能优化
 
-### Batch Size Guidelines
+### 批量大小指南
 
 ```python
-# Recommended batch sizes by database type
-postgresql_batch = 1000  # PostgreSQL handles larger batches
-mysql_batch = 500        # MySQL prefers smaller batches
-sqlite_batch = 100       # SQLite has lower limits
+# 按数据库类型推荐的批量大小
+postgresql_batch = 1000  # PostgreSQL 处理更大批次
+mysql_batch = 500        # MySQL 倾向于较小批次
+sqlite_batch = 100       # SQLite 有较低限制
 
-# Adjust based on record complexity
-simple_records_batch = 2000    # Simple fields (id, name, status)
-complex_records_batch = 200    # Complex fields (JSON, text, binary)
+# 根据记录复杂性调整
+simple_records_batch = 2000    # 简单字段（id、name、status）
+complex_records_batch = 200    # 复杂字段（JSON、text、binary）
 
-# Example usage
+# 使用示例
 await User.objects.bulk_create(
     large_dataset,
     batch_size=postgresql_batch if db_type == "postgresql" else mysql_batch
 )
 ```
 
-### Memory Management
+### 内存管理
 
 ```python
-# Process large updates in batches
+# 批量处理大型更新
 async def process_large_update(user_ids: list[int]):
     batch_size = 1000
     for i in range(0, len(user_ids), batch_size):
@@ -419,9 +419,9 @@ async def process_large_update(user_ids: list[int]):
         )
 ```
 
-## Error Handling
+## 错误处理
 
-### Common Exceptions
+### 常见异常
 
 ```python
 from sqlobjects.exceptions import (
@@ -431,88 +431,88 @@ from sqlobjects.exceptions import (
     IntegrityError
 )
 
-# Handle not found
+# 处理未找到
 try:
     user = await User.objects.get(User.username == "nonexistent")
 except DoesNotExist:
-    print("User not found")
+    print("用户未找到")
 
-# Handle multiple results
+# 处理多个结果
 try:
     user = await User.objects.get(User.email.like("%@gmail.com"))
 except MultipleObjectsReturned:
     user = await User.objects.filter(User.email.like("%@gmail.com")).first()
 
-# Handle validation errors
+# 处理验证错误
 try:
     user = await User.objects.create(username="ab", email="invalid")
 except ValidationError as e:
-    print(f"Validation failed: {e.message}")
+    print(f"验证失败：{e.message}")
 
-# Handle database constraints
+# 处理数据库约束
 try:
     user = await User.objects.create(username="existing_user")
 except IntegrityError as e:
-    print(f"Database constraint violation: {e}")
+    print(f"数据库约束违反：{e}")
 ```
 
-### Bulk Operation Error Handling
+### 批量操作错误处理
 
 ```python
-# Bulk operations with error handling
+# 带错误处理的批量操作
 try:
     affected = await User.objects.bulk_update(mappings, match_fields=["id"])
-    print(f"Updated {affected} records")
+    print(f"更新了 {affected} 条记录")
 except Exception as e:
-    # Handle bulk operation failures
-    logger.error(f"Bulk update failed: {e}")
-    
-    # Fallback to individual updates
+    # 处理批量操作失败
+    logger.error(f"批量更新失败：{e}")
+  
+    # 回退到个别更新
     for mapping in mappings:
         try:
             await User.objects.filter(User.id == mapping["id"]).update(
                 values={k: v for k, v in mapping.items() if k != "id"}
             )
         except Exception as individual_error:
-            logger.error(f"Individual update failed for {mapping['id']}: {individual_error}")
+            logger.error(f"ID {mapping['id']} 的个别更新失败：{individual_error}")
 ```
 
-## Best Practices
+## 最佳实践
 
-### Validation Strategy
+### 验证策略
 
 ```python
-# Enable validation for user input
-user_data = request.json  # From API request
+# 对用户输入启用验证
+user_data = request.json  # 来自 API 请求
 user = await User.objects.create(**user_data, validate=True)
 
-# Skip validation for trusted data
+# 对可信数据跳过验证
 system_user = await User.objects.create(
     username="system",
     email="system@internal.com",
-    validate=False  # Skip for performance
+    validate=False  # 为了性能跳过验证
 )
 ```
 
-### Bulk vs Individual Operations
+### 批量 vs 个别操作
 
 ```python
-# Use bulk operations for large datasets
+# 对大数据集使用批量操作
 if len(user_updates) > 100:
-    # Bulk update (10-100x faster)
+    # 批量更新（快 10-100 倍）
     await User.objects.bulk_update(user_updates, match_fields=["id"])
 else:
-    # Individual updates (better error handling)
+    # 个别更新（更好的错误处理）
     for update in user_updates:
         await User.objects.filter(User.id == update["id"]).update(values=update)
 ```
 
-### Session Usage
+### 会话使用
 
 ```python
-# Use sessions for related operations
+# 对相关操作使用会话
 async with ctx_session() as session:
-    # All operations in same transaction
+    # 所有操作在同一事务中
     user = await User.objects.using(session).create(username="related_ops")
     profile = await Profile.objects.using(session).create(user_id=user.id)
     settings = await Settings.objects.using(session).create(user_id=user.id)

@@ -1,12 +1,12 @@
-# Model Definition and Fields
+# 模型定义和字段
 
-## Overview
+## 概述
 
-SQLObjects provides a Django-style model definition system with automatic table generation, type-safe fields, and comprehensive validation support.
+SQLObjects 提供 Django 风格的模型定义系统，具有自动表生成、类型安全字段和全面的验证支持。
 
-## Quick Start
+## 快速开始
 
-### Basic Model
+### 基础模型
 
 ```python
 from sqlobjects.model import ObjectModel
@@ -19,80 +19,80 @@ class User(ObjectModel):
     is_active: Column[bool] = BooleanColumn(default=True)
 ```
 
-### Auto-Generated Features
+### 自动生成功能
 
 ```python
-# ModelProcessor metaclass automatically handles:
-# - Table name: "users" (pluralized snake_case)
-# - Objects manager: User.objects = ObjectsDescriptor(User)
-# - Field cache: _cached_field_info for performance
-# - Primary key: auto-generated id field if none specified
+# ModelProcessor 元类自动处理：
+# - 表名："users"（复数形式的蛇形命名法）
+# - 对象管理器：User.objects = ObjectsDescriptor(User)
+# - 字段缓存：_cached_field_info 用于性能优化
+# - 主键：如果未指定则自动生成 id 字段
 
 user = await User.objects.create(username="john", email="john@example.com")
-print(user.id)  # Auto-generated if using identity() or primary_key=True
+print(user.id)  # 使用 identity() 或 primary_key=True 时自动生成
 
-# ObjectsDescriptor provides fresh ObjectsManager instance on each access
-manager1 = User.objects  # New ObjectsManager instance
-manager2 = User.objects  # Another new ObjectsManager instance
+# ObjectsDescriptor 每次访问时提供新的 ObjectsManager 实例
+manager1 = User.objects  # 新的 ObjectsManager 实例
+manager2 = User.objects  # 另一个新的 ObjectsManager 实例
 ```
 
-## Field Types
+## 字段类型
 
-### String Fields
+### 字符串字段
 
 ```python
-# Basic string field
+# 基础字符串字段
 name: Column[str] = StringColumn(length=100)
 
-# Text field (no length limit)
+# 文本字段（无长度限制）
 description: Column[str] = TextColumn()
 
-# Fixed length
+# 固定长度
 code: Column[str] = StringColumn(type="char", length=10)
 
-# With validation
+# 带验证
 email: Column[str] = StringColumn(length=100, validators=[validate_email()])
 ```
 
-### Numeric Fields
+### 数值字段
 
 ```python
-# Integer variants
+# 整数类型变体
 id: Column[int] = IntegerColumn(primary_key=True)
 count: Column[int] = IntegerColumn(type="bigint")
 rating: Column[int] = IntegerColumn(type="smallint")
 
-# Decimal precision
+# 小数精度
 price: Column[Decimal] = NumericColumn(precision=10, scale=2)
 percentage: Column[float] = FloatColumn()
 ```
 
-### Date and Time
+### 日期和时间
 
 ```python
 from datetime import datetime, date, time
 
-# DateTime with auto-timestamp
+# 带自动时间戳的日期时间
 created_at: Column[datetime] = DateTimeColumn(default_factory=datetime.now)
 updated_at: Column[datetime] = DateTimeColumn(onupdate=datetime.now)
 
-# Date and time variants
+# 日期和时间变体
 birth_date: Column[date] = DateTimeColumn(type="date")
 start_time: Column[time] = DateTimeColumn(type="time")
 ```
 
-### Advanced Types
+### 高级类型
 
 ```python
-# JSON data
+# JSON 数据
 preferences: Column[dict] = JsonColumn(default=dict)
 metadata: Column[list] = JsonColumn(default=list)
 
-# Arrays (PostgreSQL)
+# 数组（PostgreSQL）
 tags: Column[list[str]] = ArrayColumn("string")
 matrix: Column[list[list[int]]] = ArrayColumn("integer", dimensions=2)
 
-# Enums
+# 枚举
 from enum import Enum
 
 class UserStatus(Enum):
@@ -105,151 +105,151 @@ status: Column[UserStatus] = EnumColumn(UserStatus, default=UserStatus.ACTIVE)
 import uuid
 external_id: Column[str] = UuidColumn(default_factory=uuid.uuid4)
 
-# Binary data
+# 二进制数据
 file_data: Column[bytes] = BinaryColumn(length=1024)
 
-# Foreign key relationships
+# 外键关系
 author_id: Column[int] = foreign_key("users.id")
 category_id: Column[int] = foreign_key("categories.id", nullable=False, index=True)
 ```
 
-## Field Parameters
+## 字段参数
 
-### Common Parameters
+### 通用参数
 
 ```python
-# Nullability and defaults
-username: Column[str] = StringColumn(nullable=False)  # Required
-nickname: Column[str] = StringColumn(nullable=True)   # Optional
-is_active: Column[bool] = BooleanColumn(default=True) # Default value
+# 可空性和默认值
+username: Column[str] = StringColumn(nullable=False)  # 必填
+nickname: Column[str] = StringColumn(nullable=True)   # 可选
+is_active: Column[bool] = BooleanColumn(default=True) # 默认值
 
-# Constraints
-email: Column[str] = StringColumn(unique=True)        # Unique constraint
-code: Column[str] = StringColumn(index=True)          # Database index
+# 约束
+email: Column[str] = StringColumn(unique=True)        # 唯一约束
+code: Column[str] = StringColumn(index=True)          # 数据库索引
 ```
 
-### Smart Code Generation Parameters
+### 智能代码生成参数
 
 ```python
-# _apply_codegen_defaults function automatically infers parameters
+# _apply_codegen_defaults 函数自动推断参数
 class User(ObjectModel):
-    # Regular fields get defaults: init=True, repr=True, compare=False
-    username: Column[str] = column(type="string")  # Auto-applies defaults
-    
-    # Primary key fields auto-set: init=False, repr=True, compare=True
-    id: Column[int] = identity()  # Auto-detected as primary key
-    
-    # Auto-increment fields auto-set: init=False
+    # 常规字段获得默认值：init=True, repr=True, compare=False
+    username: Column[str] = column(type="string")  # 自动应用默认值
+  
+    # 主键字段自动设置：init=False, repr=True, compare=True
+    id: Column[int] = identity()  # 自动检测为主键
+  
+    # 自增字段自动设置：init=False
     sequence_id: Column[int] = column(type="integer", autoincrement=True)
-    
-    # Server default fields auto-set: init=False
+  
+    # 服务器默认字段自动设置：init=False
     created_at: Column[datetime] = column(type="datetime", server_default=func.now())
-    
-    # Manual override of defaults
+  
+    # 手动覆盖默认值
     internal_field: Column[str] = column(type="string", init=False, repr=False)
-    password: Column[str] = column(type="string", repr=False)  # Hide sensitive info
-    version: Column[int] = column(type="integer", compare=True)  # Participate in comparison
+    password: Column[str] = column(type="string", repr=False)  # 隐藏敏感信息
+    version: Column[int] = column(type="integer", compare=True)  # 参与比较
 
-# from_dict method automatically handles init parameters
+# from_dict 方法自动处理 init 参数
 user_data = {"id": 1, "username": "alice", "created_at": datetime.now()}
-user = User.from_dict(user_data)  # Auto-separates init=True/False fields
+user = User.from_dict(user_data)  # 自动分离 init=True/False 字段
 
-# ObjectsManager creation methods use from_dict for consistency
+# ObjectsManager 创建方法使用 from_dict 以保持一致性
 user = await User.objects.create(
-    id=1,  # init=False field handled via setattr
-    username="bob",  # init=True field handled via constructor
-    created_at=datetime.now()  # init=False field handled via setattr
+    id=1,  # init=False 字段通过 setattr 处理
+    username="bob",  # init=True 字段通过构造函数处理
+    created_at=datetime.now()  # init=False 字段通过 setattr 处理
 )
 ```
 
-### Performance Optimization Parameters
+### 性能优化参数
 
 ```python
-# Deferred loading parameters
+# 延迟加载参数
 bio: Column[str] = column(
     type="text",
-    deferred=True,  # Defer loading until accessed
-    deferred_group="details",  # Group deferred fields
-    deferred_raiseload=True  # Raise error if accessed when deferred
+    deferred=True,  # 延迟加载直到访问
+    deferred_group="details",  # 分组延迟字段
+    deferred_raiseload=True  # 如果在延迟时访问则抛出错误
 )
 
-# History tracking
+# 历史追踪
 important_field: Column[str] = column(
     type="string",
-    active_history=True  # Track field value changes
+    active_history=True  # 追踪字段值变更
 )
 
-# Memory optimization
+# 内存优化
 profile_image: Column[bytes] = column(
     type="binary",
     deferred=True,
-    init=False,      # Exclude from constructor
-    repr=False       # Hide from string representation
+    init=False,      # 排除在构造函数外
+    repr=False       # 在字符串表示中隐藏
 )
 ```
 
-### Automatic Default Rules
+### 自动默认规则
 
 ```python
-# Primary key fields automatically get: init=False, repr=True, compare=True
+# 主键字段自动获得：init=False, repr=True, compare=True
 id: Column[int] = identity()
 
-# Auto-increment fields automatically get: init=False
+# 自增字段自动获得：init=False
 sequence_id: Column[int] = column(type="integer", autoincrement=True)
 
-# Server default fields automatically get: init=False
+# 服务器默认字段自动获得：init=False
 created_at: Column[datetime] = column(type="datetime", server_default=func.now())
 
-# Regular fields get: init=True, repr=True, compare=False, hash=None, kw_only=False
+# 常规字段获得：init=True, repr=True, compare=False, hash=None, kw_only=False
 username: Column[str] = column(type="string")
 ```
 
-### Enhanced Functionality Parameters
+### 增强功能参数
 
 ```python
-# Dynamic defaults and validation
+# 动态默认值和验证
 created_at: Column[datetime] = column(
     type="datetime",
-    default_factory=datetime.now,  # Dynamic default
-    validators=[validate_datetime()]  # Field-level validation
+    default_factory=datetime.now,  # 动态默认值
+    validators=[validate_datetime()]  # 字段级验证
 )
 
-# Insert-only defaults
+# 仅插入时默认值
 status: Column[str] = column(
     type="string",
-    insert_default="pending"  # Default only for INSERT operations
+    insert_default="pending"  # 仅在 INSERT 操作时的默认值
 )
 
-# Keyword-only parameters
+# 关键字参数
 optional_param: Column[str] = column(type="string", kw_only=True)
 ```
 
-## Foreign Key Fields
+## 外键字段
 
 ```python
 from sqlobjects.fields import foreign_key, ForeignKey, column
 
 class Post(ObjectModel):
     title: Column[str] = StringColumn(length=200)
-    
-    # Method 1: Using foreign_key() convenience function (recommended)
+  
+    # 方法1：使用 foreign_key() 便利函数（推荐）
     author_id: Column[int] = foreign_key("users.id")
     category_id: Column[int] = foreign_key("categories.id", nullable=False, index=True)
-    
-    # Method 2: Using column() with ForeignKey parameter
+  
+    # 方法2：使用带 ForeignKey 参数的 column()
     tag_id: Column[int] = column(
         type="integer",
         foreign_key=ForeignKey("tags.id"),
         nullable=True
     )
-    
-    # Foreign key with custom type
+  
+    # 带自定义类型的外键
     uuid_ref: Column[str] = foreign_key("external_table.uuid", type="string")
 ```
 
-## Field Shortcuts
+## 字段快捷方式
 
-### Identity and Timestamps
+### 身份标识和时间戳
 
 ```python
 from sqlobjects.model import ObjectModel
@@ -257,14 +257,14 @@ from sqlobjects.fields import Column, StringColumn, identity, column
 from datetime import datetime
 
 class Post(ObjectModel):
-    id: Column[int] = identity()  # Auto-increment primary key
+    id: Column[int] = identity()  # 自增主键
     title: Column[str] = StringColumn(length=200)
     author_id: Column[int] = column(type="integer", nullable=False)
     created_at: Column[datetime] = column(type="datetime", default_factory=datetime.now)
     updated_at: Column[datetime] = column(type="datetime", onupdate=datetime.now)
 ```
 
-### Identity and Computed Fields
+### 身份标识和计算字段
 
 ```python
 from sqlobjects.model import ObjectModel
@@ -272,22 +272,22 @@ from sqlobjects.fields import Column, NumericColumn, computed, identity
 from decimal import Decimal
 
 class Order(ObjectModel):
-    # Identity column with custom configuration
+    # 带自定义配置的身份列
     id: Column[int] = identity(start=1000, increment=1)
     order_number: Column[int] = identity(start=1000, increment=1, cache=10)
-    
+  
     subtotal: Column[Decimal] = NumericColumn(precision=10, scale=2)
     tax_rate: Column[Decimal] = NumericColumn(precision=5, scale=4)
-    
-    # Computed column
+  
+    # 计算列
     total: Column[Decimal] = computed(
         "subtotal * (1 + tax_rate)", 
         column_type="numeric", 
         precision=10, 
         scale=2
     )
-    
-    # Persisted computed column (stored in database)
+  
+    # 持久化计算列（存储在数据库中）
     total_cached: Column[Decimal] = computed(
         "subtotal * (1 + tax_rate)",
         persisted=True,
@@ -295,22 +295,22 @@ class Order(ObjectModel):
     )
 ```
 
-## Model Configuration
+## 模型配置
 
-### Table Settings
+### 表设置
 
 ```python
 class User(ObjectModel):
-    # ... fields ...
-    
+    # ... 字段 ...
+  
     class Config:
-        table_name = "app_users"  # Override default table name
-        ordering = ["-created_at"]  # Default ordering
+        table_name = "app_users"  # 覆盖默认表名
+        ordering = ["-created_at"]  # 默认排序
         verbose_name = "User Account"
         verbose_name_plural = "User Accounts"
 ```
 
-### Indexes and Constraints
+### 索引和约束
 
 ```python
 from sqlobjects.model import ObjectModel
@@ -322,7 +322,7 @@ class Product(ObjectModel):
     name: Column[str] = StringColumn(length=100)
     sku: Column[str] = StringColumn(length=50)
     price: Column[Decimal] = NumericColumn(precision=10, scale=2)
-    
+  
     class Config:
         indexes = [
             index("idx_sku", "sku", unique=True),
@@ -334,9 +334,9 @@ class Product(ObjectModel):
         ]
 ```
 
-## Validation
+## 验证
 
-### Field Validation
+### 字段验证
 
 ```python
 from sqlobjects.model import ObjectModel
@@ -358,7 +358,7 @@ class User(ObjectModel):
     )
 ```
 
-### Model Validation
+### 模型验证
 
 ```python
 from sqlobjects.model import ObjectModel
@@ -366,18 +366,18 @@ from sqlobjects.fields import Column, StringColumn, IntegerColumn, BooleanColumn
 from sqlobjects.exceptions import ValidationError
 
 class User(ObjectModel):
-    # ... fields ...
-    
+    # ... 字段 ...
+  
     def validate(self):
-        """Custom model-level validation"""
+        """自定义模型级验证"""
         if self.age and self.age < 18 and self.is_admin:
-            raise ValidationError("Users under 18 cannot be administrators")
-        
+            raise ValidationError("18岁以下的用户不能成为管理员")
+      
         if self.username and self.username.lower() in ['admin', 'root']:
-            raise ValidationError("Reserved username not allowed")
+            raise ValidationError("不允许使用保留用户名")
 ```
 
-### Custom Validation
+### 自定义验证
 
 ```python
 from sqlobjects.model import ObjectModel
@@ -386,14 +386,14 @@ from sqlobjects.validators import validate_regex, validate_length
 from sqlobjects.exceptions import ValidationError
 
 def validate_file_extension(value):
-    """Custom file extension validator"""
+    """自定义文件扩展名验证器"""
     if not value.lower().endswith(('.pdf', '.doc', '.docx')):
-        raise ValidationError("Only PDF and Word documents are allowed")
+        raise ValidationError("只允许 PDF 和 Word 文档")
 
 class Document(ObjectModel):
     title: Column[str] = column(type="string", length=200)
-    
-    # Custom validation
+  
+    # 自定义验证
     filename: Column[str] = column(
         type="string",
         validators=[
@@ -401,114 +401,114 @@ class Document(ObjectModel):
             validate_file_extension
         ]
     )
-    
-    # Pattern validation
+  
+    # 模式验证
     document_code: Column[str] = column(
         type="string",
         validators=[
-            validate_regex(r'^DOC-\d{4}-\d{2}$', "Format: DOC-YYYY-MM")
+            validate_regex(r'^DOC-\d{4}-\d{2}$', "格式：DOC-YYYY-MM")
         ]
     )
 ```
 
-## Model Methods
+## 模型方法
 
-### Instance Operations
+### 实例操作
 
 ```python
-# Create and save
+# 创建并保存
 user = User(username="alice", email="alice@example.com")
 await user.save()
 
-# Update
+# 更新
 user.email = "alice.new@example.com"
 await user.save()
 
-# Delete
+# 删除
 await user.delete()
 
-# Refresh from database
+# 从数据库刷新
 await user.refresh()
-await user.refresh(fields=["username", "email"])  # Selective refresh
+await user.refresh(fields=["username", "email"])  # 选择性刷新
 ```
 
-### Smart Data Conversion
+### 智能数据转换
 
 ```python
-# to_dict method - supports deferred fields and safe access
-user_dict = user.to_dict()  # All loaded fields
-user_dict = user.to_dict(include=["id", "username"])  # Specific fields
-user_dict = user.to_dict(exclude=["password_hash"])  # Exclude sensitive fields
-user_dict = user.to_dict(include_deferred=True)  # Include deferred fields
-user_dict = user.to_dict(safe_access=False)  # Unsafe access may raise exceptions
+# to_dict 方法 - 支持延迟字段和安全访问
+user_dict = user.to_dict()  # 所有已加载字段
+user_dict = user.to_dict(include=["id", "username"])  # 指定字段
+user_dict = user.to_dict(exclude=["password_hash"])  # 排除敏感字段
+user_dict = user.to_dict(include_deferred=True)  # 包含延迟字段
+user_dict = user.to_dict(safe_access=False)  # 不安全访问可能抛出异常
 
-# from_dict method - smart handling of init parameters and defaults
+# from_dict 方法 - 智能处理 init 参数和默认值
 user_data = {"username": "bob", "email": "bob@example.com", "id": 1}
 user = User.from_dict(user_data, validate=True)
 
-# from_dict internal processing flow:
-# 1. Filter invalid fields (not in table.columns)
-# 2. Apply default_factory and column.default
-# 3. Separate init=True/False fields based on field.get_codegen_params()
-# 4. Create instance with init=True fields
-# 5. Set init=False fields via setattr
-# 6. Clear dirty_fields tracking
-# 7. Execute validation (if validate=True)
+# from_dict 内部处理流程：
+# 1. 过滤无效字段（不在 table.columns 中）
+# 2. 应用 default_factory 和 column.default
+# 3. 基于 field.get_codegen_params() 分离 init=True/False 字段
+# 4. 使用 init=True 字段创建实例
+# 5. 通过 setattr 设置 init=False 字段
+# 6. 清除脏字段追踪
+# 7. 执行验证（如果 validate=True）
 
-# ObjectsManager integration - all creation methods use from_dict
+# ObjectsManager 集成 - 所有创建方法都使用 from_dict
 user = await User.objects.create(
-    id=1,  # init=False field auto-handled
-    username="alice",  # init=True field
-    created_at=datetime.now()  # init=False field auto-handled
+    id=1,  # init=False 字段自动处理
+    username="alice",  # init=True 字段
+    created_at=datetime.now()  # init=False 字段自动处理
 )
 
 user, created = await User.objects.get_or_create(
     username="bob",
-    defaults={"id": 2, "created_at": datetime.now()}  # Mixed field types auto-handled
+    defaults={"id": 2, "created_at": datetime.now()}  # 混合字段类型自动处理
 )
 
 user, created = await User.objects.update_or_create(
     username="charlie",
-    defaults={"email": "charlie@example.com"}  # Update also uses from_dict logic
+    defaults={"email": "charlie@example.com"}  # 更新也使用 from_dict 逻辑
 )
 ```
 
-## Best Practices
+## 最佳实践
 
-### Field Naming
+### 字段命名
 
 ```python
-# Use descriptive names
+# 使用描述性名称
 created_at: Column[datetime] = DateTimeColumn(default_factory=datetime.now)
 is_active: Column[bool] = BooleanColumn(default=True)
 user_count: Column[int] = IntegerColumn(default=0)
 
-# Avoid abbreviations
-# Good: description, category_id, is_published
-# Avoid: desc, cat_id, pub
+# 避免缩写
+# 好的：description, category_id, is_published
+# 避免：desc, cat_id, pub
 ```
 
-### Default Values
+### 默认值
 
 ```python
-# Static defaults
+# 静态默认值
 is_active: Column[bool] = BooleanColumn(default=True)
 status: Column[str] = StringColumn(default="pending")
 
-# Dynamic defaults
+# 动态默认值
 created_at: Column[datetime] = DateTimeColumn(default_factory=datetime.now)
 uuid: Column[str] = UuidColumn(default_factory=uuid.uuid4)
 ```
 
-### Validation Strategy
+### 验证策略
 
 ```python
-# Combine field and model validation
+# 结合字段和模型验证
 class User(ObjectModel):
-    email: Column[str] = column(type="string", validators=[validate_email()])  # Field level
+    email: Column[str] = column(type="string", validators=[validate_email()])  # 字段级
     age: Column[int] = column(type="integer", validators=[validate_range(0, 150)])
-    
-    def validate(self):  # Model level
+  
+    def validate(self):  # 模型级
         if self.email and User.objects.filter(User.email == self.email).exists():
-            raise ValidationError("Email already exists")
+            raise ValidationError("邮箱已存在")
 ```

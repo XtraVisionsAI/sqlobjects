@@ -1,79 +1,177 @@
-# SQLObjects Features Documentation
+# SQLObjects Feature Documentation
 
-This directory contains comprehensive documentation for all SQLObjects features and capabilities.
+This directory contains complete feature documentation for SQLObjects, organized by functionality to help users
+understand and implement specific capabilities.
 
-## Feature Documentation
+## Documentation Structure
+
+### [01. Database Setup](01-database-setup.md)
+
+Learn how to configure and manage database connections, sessions, and transactions.
+
+**Core Topics:**
+
+- Single and multi-database setup
+- Connection pooling and configuration
+- Session management patterns
+- Transaction control
+- Database events and lifecycle management
+
+### [02. Model Definition](02-model-definition.md)
+
+Understand how to define models with fields, validation, and configuration.
+
+**Core Topics:**
+
+- Model class definition and table generation
+- Field types and parameters with performance optimization
+- Field-level and model-level validation
+- Code generation control with dataclass integration
+- Identity columns and computed columns
+- Custom field types and type registration
+
+### [03. Data Querying](03-querying-data.md)
+
+Master the query API for filtering, sorting, and retrieving data.
+
+**Core Topics:**
+
+- Basic and complex filtering with Q objects
+- Sorting, pagination, and field selection
+- Aggregation and annotation
+- Subqueries and complex queries
+- Raw SQL integration
+
+### [04. CRUD Operations](04-crud-operations.md)
+
+Learn comprehensive create, read, update, delete operations.
+
+**Core Topics:**
+
+- Individual and bulk operations
+- Smart save() with automatic CREATE/UPDATE detection
+- Detached instance operations
+- Transaction management
+- Performance optimization for large datasets
+
+### [05. Relationships](05-relationships.md)
+
+Implement and optimize relationships between models.
+
+**Core Topics:**
+
+- One-to-many, one-to-one, and many-to-many relationships
+- Lazy and eager loading strategies
+- JOIN optimization and manual joins
+- Relationship querying and filtering
+- Complex relationship patterns
+
+### [06. Validation and Signals](06-validation-signals.md)
+
+Implement data validation and lifecycle hooks.
+
+**Core Topics:**
+
+- Field-level validation with validators parameter integration
+- Custom validation logic and schema validation
+- Signal system for database operation hooks
+- Smart operation detection and bulk signals
+- Error handling and validation strategies
+
+### [07. Performance Optimization](07-performance-optimization.md)
+
+Optimize database operations for high-performance applications.
+
+**Core Topics:**
+
+- Bulk operations and batching
+- Field-level performance optimization (lazy loading, active history)
+- Query optimization and memory management
+- Connection pooling and session patterns
+- Performance monitoring and benchmarking
+- Best practices and optimization checklist
+
+## Getting Started
+
+If you're new to SQLObjects, we recommend following this learning path:
+
+1. **Start with [Database Setup](01-database-setup.md)** - Learn basic configuration
+2. **Move to [Model Definition](02-model-definition.md)** - Define your first models
+3. **Practice [Data Querying](03-querying-data.md)** - Learn to retrieve data
+4. **Master [CRUD Operations](04-crud-operations.md)** - Implement data manipulation
+5. **Add [Relationships](05-relationships.md)** - Connect your models
+6. **Implement [Validation and Signals](06-validation-signals.md)** - Add business logic
+7. **Optimize with [Performance Optimization](07-performance-optimization.md)** - Scale your application
+
+## Feature Categories
 
 ### Core Features
-- **[Database Setup](01-database-setup.md)** - Database configuration, connection management, and multi-database support
-- **[Model Definition](02-model-definition.md)** - Model creation, field types, validation, and configuration
-- **[Querying Data](03-querying-data.md)** - Query building, filtering, aggregation, and optimization
-- **[CRUD Operations](04-crud-operations.md)** - Create, read, update, delete operations and bulk processing
-- **[Relationships](05-relationships.md)** - Model relationships, loading strategies, and performance optimization
-- **[Validation & Signals](06-validation-signals.md)** - Data validation and lifecycle hooks
-- **[Performance Optimization](07-performance-optimization.md)** - Performance tuning, caching, and best practices
 
-## Quick Navigation
+- **Database Management**: Multi-database support with automatic connection handling
+- **Model System**: Django-style models with automatic table generation
+- **Query API**: Chainable queries with SQLAlchemy expression support
+- **Type Safety**: Complete type annotations and validation
 
-### Getting Started
-1. [Database Setup](01-database-setup.md#quick-start) - Initialize your database connection
-2. [Model Definition](02-model-definition.md#basic-model-definition) - Create your first model
-3. [Querying Data](03-querying-data.md#basic-queries) - Start querying your data
+### Model Definition
 
-### Common Tasks
-- **Creating Records**: [CRUD Operations - Create](04-crud-operations.md#create-operations)
-- **Bulk Operations**: [CRUD Operations - Bulk](04-crud-operations.md#bulk-operations)
-- **Complex Queries**: [Querying Data - Advanced](03-querying-data.md#advanced-querying)
-- **Relationship Loading**: [Relationships - Loading](05-relationships.md#relationship-loading)
-- **Performance Tuning**: [Performance Optimization](07-performance-optimization.md)
+- **Smart Field Parameters**: Automatic inference of init, repr, compare parameters based on field characteristics
+- **Constructor Control**: Field-level model constructor participation control via init parameter
+- **from_dict Method**: Intelligent handling of different field types during instance creation
 
 ### Advanced Features
-- **Multi-Database**: [Database Setup - Multi-Database](01-database-setup.md#multi-database-setup)
-- **Custom Validation**: [Validation & Signals - Custom](06-validation-signals.md#custom-validation)
-- **Lifecycle Hooks**: [Validation & Signals - Signals](06-validation-signals.md#signal-system)
-- **Raw SQL**: [Querying Data - Raw SQL](03-querying-data.md#raw-sql)
 
-## Documentation Status
+- **Smart Operations**: Automatic CREATE/UPDATE detection for save operations
+- **Bulk Processing**: High-performance bulk operations for large datasets
+- **Signal System**: Comprehensive lifecycle hooks for database operations
+- **Field Enhancements**: Field-level performance optimization and code generation control
 
-> 📝 These English documents are based on the Chinese versions. For the most up-to-date content, see the corresponding files in [docs-zh/features/](../../docs-zh/features/).
+### CRUD Operations
 
-### Translation Status
-- ✅ **Database Setup** - Complete
-- ✅ **Model Definition** - Complete  
-- ✅ **Querying Data** - Complete
-- 🚧 **CRUD Operations** - In Progress
-- 🚧 **Relationships** - In Progress
-- 🚧 **Validation & Signals** - In Progress
-- 🚧 **Performance Optimization** - In Progress
+- **Unified Instance Creation**: ObjectsManager methods use from_dict to ensure consistent instance creation behavior
+- **Dirty Field Tracking**: Automatic tracking of field modifications to optimize UPDATE operations
+- **Smart Operation Detection**: Automatically determine INSERT vs UPDATE operations
 
-## Related Documentation
+### Performance Features
 
-### Design Documentation
-- [Core Architecture](../design/01-core-architecture.md) - System architecture and design principles
-- [Data Operations](../design/02-data-operations.md) - Query execution and data processing
-- [Field System](../design/03-field-system.md) - Field types and type system
+- **Connection Pooling**: Optimized database connection management
+- **Memory Management**: Iterator support and efficient pagination
+- **Field-level Optimization**: Lazy loading and active history tracking
+- **Query Optimization**: Relationship loading and query analysis tools
+- **Bulk Operations**: 10-100x performance improvements for bulk data
 
-### Development Resources
-- [Developer Guide](../../.amazonq/rules/) - Development rules and guidelines
-- [API Reference](../api/) - Detailed API documentation
-- [Examples](../../examples/) - Code examples and tutorials
+## Code Examples
 
-## Contributing to Documentation
+Each feature document includes:
 
-### Updating Documentation
-1. **English Updates**: Update files in this directory (`docs/features/`)
-2. **Chinese Updates**: Update corresponding files in `docs-zh/features/`
-3. **Sync Status**: Update translation status in this README
-4. **Cross-References**: Ensure all links point to correct language versions
+- **Quick Start**: Get up and running immediately
+- **Basic Usage**: Common patterns and simple examples
+- **Advanced Usage**: Complex scenarios and best practices
+- **Performance Tips**: Optimization strategies
+- **Error Handling**: Common issues and solutions
 
-### Documentation Standards
-- **Runnable Examples**: All code examples must be executable
-- **API Accuracy**: Examples must match actual implementation
-- **Progressive Complexity**: Start simple, build to advanced concepts
-- **Cross-Platform**: Examples work across supported databases
+## Integration with Design Documentation
 
-### Getting Help
-- **Issues**: Report documentation issues on GitHub
-- **Discussions**: Join community discussions for clarification
-- **Contributions**: Submit pull requests for improvements
-- **Translation**: Help translate missing documentation
+These feature documents complement the [design documentation](../design/) which covers technical architecture and
+implementation details. Use both together for comprehensive understanding:
+
+- **Feature Documentation**: Focus on "how to use" SQLObjects capabilities
+- **Design Documentation**: Focus on "how SQLObjects works" internally
+
+## Contributing
+
+When adding new features or updating existing ones:
+
+1. Update the relevant feature documentation
+2. Include practical code examples
+3. Add performance considerations
+4. Update this README if adding new feature categories
+5. Ensure examples follow the project's coding standards
+
+## Support
+
+For questions about specific features:
+
+- Check the relevant feature documentation first
+- Review [design documentation](../design/) for technical details
+- Look at test files for additional usage examples
+- Reference the API documentation in each feature document

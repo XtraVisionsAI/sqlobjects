@@ -1,561 +1,305 @@
-# Data Operations
+# SQLObjects Data Operations Design Documentation
 
-> 📝 This document is based on the Chinese version. For the latest Chinese version, see [docs-zh/design/02-data-operations.md](../../docs-zh/design/02-data-operations.md)
+## Overview
 
-This document describes the internal architecture and implementation details of SQLObjects' data operations system, including query execution, result processing, and performance optimizations.
+The SQLObjects data operations module adopts a composite pattern architecture, providing Django-style database operation
+interfaces. It implements high-performance database access through ObjectsDescriptor descriptors, composite QuerySet,
+and unified QueryExecutor.
 
-## Query Execution Architecture
+## Core Features
 
-### QuerySet to SQL Pipeline
+### 1. Descriptor Pattern Objects Manager
 
-```python
-# Query execution flow
-QuerySet → QueryBuilder → SQLAlchemy Query → Database → Results → Objects
-
-# Example flow
-User.objects.filter(User.age >= 18).order_by("-created_at").limit(10).all()
-    ↓
-QueryBuilder.add_filter(User.age >= 18)
-    ↓
-QueryBuilder.add_ordering("-created_at")
-    ↓
-QueryBuilder.add_limit(10)
-    ↓
-SQLAlchemy select() statement
-    ↓
-Database execution
-    ↓
-Raw result rows
-    ↓
-Object instantiation
-    ↓
-List[User] objects
-```
-
-### QueryBuilder Implementation
+Automatically provides independent ObjectsManager instances for each model class through ObjectsDescriptor descriptors:
 
 ```python
-class QueryBuilder:
-    """Immutable query builder for SQL construction"""
-    
-    def __init__(self, model_class):
-        self.model_class = model_class
-        self.table = model_class.__table__
-        self.conditions = []
-        self.orderings = []
-        self.limit_value = None
-        self.offset_value = None
-        self.select_related_fields = []
-        self.prefetch_related_fields = []
-    
-    def add_filter(self, condition):
-        """Add WHERE condition (returns new QueryBuilder)"""
-        new_builder = self._copy()
-        new_builder.conditions.append(condition)
-        return new_builder
-    
-    def add_ordering(self, field):
-        """Add ORDER BY clause (returns new QueryBuilder)"""
-        new_builder = self._copy()
-        new_builder.orderings.append(field)
-        return new_builder
-    
-    def build(self):
-        """Build SQLAlchemy query from accumulated conditions"""
-        query = select(self.table)
-        
-        # Apply WHERE conditions
-        if self.conditions:
-            query = query.where(and_(*self.conditions))
-        
-        # Apply ORDER BY
-        if self.orderings:
-            order_clauses = []
-            for ordering in self.orderings:
-                if ordering.startswith('-'):
-                    field = getattr(self.table.c, ordering[1:])
-                    order_clauses.append(field.desc())
-                else:
-                    field = getattr(self.table.c, ordering)
-                    order_clauses.append(field.asc())
-            query = query.order_by(*order_clauses)
-        
-        # Apply LIMIT and OFFSET
-        if self.limit_value:
-            query = query.limit(self.limit_value)
-        if self.offset_value:
-            query = query.offset(self.offset_value)
-        
-        return query
+# ObjectsDescriptor automatic setup
+class User(ObjectModel):
+    name: Column[str] = StringColumn(length=50)
+# Auto-setup: User.objects = ObjectsDescriptor(User)
+
+# ObjectsDescriptor returns new ObjectsManager instance on each User.objects access
+# Query operations return ObjectModel instance or instance lists
+users = await User.objects.all()  # Returns list[User]
+user = await User.objects.get(User.name == "John")  # Returns User instance
+first_user = await User.objects.first()  # Returns User instance or None
+
+# Chained queries - ObjectsManager methods return QuerySet
+active_users = await User.objects.filter(
+    User.age >= 18
+).order_by("name").limit(10).all()
+
+# Session binding - returns new ObjectsManager instance
+bound_manager = User.objects.using("analytics")
+analytics_users = await bound_manager.all()
 ```
 
-### Query Execution Engine
+### 2. Composite Pattern QuerySet Architecture
+
+QuerySet uses composite pattern, implemented through QueryBuilder and QueryExecutor components:
 
 ```python
-class QueryExecutor:
-    """Unified query execution interface"""
-    
-    def __init__(self, session, cache=None):
-        self.session = session
-        self.cache = cache
-    
-    async def execute(self, query, query_type="all", use_cache=True):
-        """Execute query with caching and result processing"""
-        
-        # Generate cache key
-        cache_key = None
-        if use_cache and self.cache:
-            cache_key = self._generate_cache_key(query, query_type)
-            cached_result = self.cache.get(cache_key)
-            if cached_result is not None:
-                return cached_result
-        
-        # Execute query
-        if query_type == "all":
-            result = await self._execute_all(query)
-        elif query_type == "count":
-            result = await self._execute_count(query)
-        elif query_type == "exists":
-            result = await self._execute_exists(query)
-        else:
-            raise ValueError(f"Unknown query type: {query_type}")
-        
-        # Cache result
-        if use_cache and self.cache and cache_key:
-            self.cache.set(cache_key, result)
-        
-        return result
-    
-    async def _execute_all(self, query):
-        """Execute SELECT query and return objects"""
-        result = await self.session.execute(query)
-        rows = result.fetchall()
-        return [self._row_to_object(row) for row in rows]
-    
-    async def _execute_count(self, query):
-        """Execute COUNT query"""
-        count_query = select(func.count()).select_from(query.alias())
-        result = await self.session.execute(count_query)
-        return result.scalar()
-    
-    async def _execute_exists(self, query):
-        """Execute EXISTS query"""
-        exists_query = select(exists(query))
-        result = await self.session.execute(exists_query)
-        return result.scalar()
+# QuerySet composite components
+class QuerySet:
+    def __init__(self, table, model_class, db_or_session=None):
+        self._builder = QueryBuilder(model_class)      # Query building
+        self._executor = QueryExecutor(db_or_session)   # Query executor
+        self._executor = QueryExecutor(db_or_session)   # Unified execution
+
+# Chained building - each method returns new QuerySet instance
+query = User.objects.filter(User.is_active == True)  # New QuerySet
+query = query.filter(User.age >= 18)                 # New QuerySet
+query = query.order_by(User.name)                    # New QuerySet
+users = await query.all()  # Execute query
+
+# Q object logical composition - supports SQLAlchemy expressions
+users = await User.objects.filter(
+    Q(User.role == "admin") | Q(User.is_staff == True)
+).all()
+
+# Component sharing - new QuerySet shares executor
+new_qs = query.filter(User.department == "IT")
+# new_qs._executor and query._executor are the same instance
 ```
 
-## Result Processing System
+### 3. CRUD Operations
 
-### Object Instantiation
+Complete Create, Read, Update, Delete operations support:
 
 ```python
-class ObjectInstantiator:
-    """Converts database rows to model objects"""
-    
-    def __init__(self, model_class):
-        self.model_class = model_class
-        self.field_map = self._build_field_map()
-    
-    def _build_field_map(self):
-        """Build mapping from column names to field names"""
-        field_map = {}
-        for field_name, field in self.model_class.__fields__.items():
-            column_name = field.column.name
-            field_map[column_name] = field_name
-        return field_map
-    
-    def row_to_object(self, row):
-        """Convert database row to model object"""
-        # Extract field values from row
-        field_values = {}
-        for column_name, value in row._mapping.items():
-            field_name = self.field_map.get(column_name)
-            if field_name:
-                field_values[field_name] = value
-        
-        # Create object using from_dict for proper initialization
-        obj = self.model_class.from_dict(field_values)
-        
-        # Mark as loaded from database (not dirty)
-        obj._state_manager.set("loaded_from_db", True)
-        obj._state_manager.set("dirty_fields", set())
-        
-        return obj
+# Create
+user = await User.objects.create(name="Alice", age=25)
+
+# Read
+user = await User.objects.get(User.id == 1)
+users = await User.objects.filter(User.age >= 18).all()
+
+# Update
+await User.objects.filter(User.id == 1).update(age=26)
+
+# Delete
+await User.objects.filter(User.id == 1).delete()
 ```
 
-### Relationship Loading
+### 4. Signal Integration with Batch Processing
+
+Batch operations use @emit_signals decorator to integrate signal system, supporting bulk signal emission:
 
 ```python
-class RelationshipLoader:
-    """Handles select_related and prefetch_related loading"""
-    
-    def __init__(self, session):
-        self.session = session
-    
-    async def load_select_related(self, objects, related_fields):
-        """Load foreign key relationships using JOINs"""
-        if not objects or not related_fields:
-            return objects
-        
-        # Build JOIN query
-        model_class = objects[0].__class__
-        query = select(model_class.__table__)
-        
-        for field_name in related_fields:
-            related_model = self._get_related_model(model_class, field_name)
-            query = query.join(related_model.__table__)
-        
-        # Execute and populate relationships
-        result = await self.session.execute(query)
-        # ... populate relationship data on objects
-        
-        return objects
-    
-    async def load_prefetch_related(self, objects, related_fields):
-        """Load reverse relationships using separate queries"""
-        if not objects or not related_fields:
-            return objects
-        
-        for field_name in related_fields:
-            await self._prefetch_field(objects, field_name)
-        
-        return objects
-    
-    async def _prefetch_field(self, objects, field_name):
-        """Prefetch single relationship field"""
-        # Get primary keys of main objects
-        object_ids = [obj.id for obj in objects]
-        
-        # Query related objects
-        related_model = self._get_related_model(objects[0].__class__, field_name)
-        foreign_key_field = self._get_foreign_key_field(related_model, objects[0].__class__)
-        
-        related_objects = await related_model.objects.filter(
-            getattr(related_model, foreign_key_field).in_(object_ids)
-        ).all()
-        
-        # Group related objects by foreign key
-        related_by_id = {}
-        for related_obj in related_objects:
-            fk_value = getattr(related_obj, foreign_key_field)
-            if fk_value not in related_by_id:
-                related_by_id[fk_value] = []
-            related_by_id[fk_value].append(related_obj)
-        
-        # Attach to main objects
-        for obj in objects:
-            related_list = related_by_id.get(obj.id, [])
-            setattr(obj, f"_prefetched_{field_name}", related_list)
+# Bulk create - automatically emits before_bulk_create/after_bulk_create signals
+@emit_signals(Operation.SAVE, is_bulk=True)
+async def bulk_create(self, objects):
+    # Actual implementation uses SQLAlchemy Core insert
+    stmt = insert(self._table).values(objects)
+    await session.execute(stmt)
+
+users_data = [
+    {"name": "Alice", "age": 25},
+    {"name": "Bob", "age": 30}
+]
+await User.objects.bulk_create(users_data)
+
+# Bulk update - uses bindparam and batch processing
+@emit_signals(Operation.SAVE, is_bulk=True)
+async def bulk_update(self, mappings, match_fields=["id"], batch_size=1000):
+    # Uses SQLAlchemy Core update + bindparam
+    # Supports batch processing and parameter binding
+    pass
+
+update_data = [
+    {"id": 1, "age": 26},
+    {"id": 2, "age": 31}
+]
+affected_rows = await User.objects.bulk_update(update_data, match_fields=["id"])
+
+# Bulk delete - uses IN clause and batch processing
+deleted_rows = await User.objects.bulk_delete([1, 2, 3], batch_size=1000)
 ```
 
-## Bulk Operations Implementation
+## Module Architecture
 
-### Bulk Create Architecture
+### Core Components
+
+**Manager Layer**
+
+- **ObjectsDescriptor**: Descriptor pattern, provides independent ObjectsManager instances for each model class
+- **ObjectsManager**: Django-style database operations manager, supports session binding and bulk operations
+
+**Query Building Layer**
+
+- **QuerySet**: Composite pattern query builder, integrates QueryBuilder and QueryExecutor
+- **QueryBuilder**: Immutable query builder, handles SQL construction and query optimization
+- **Q**: SQLAlchemy expression logical combiner, supports AND/OR/NOT complex conditions
+
+**Execution Layer**
+
+- **QueryExecutor**: Unified query execution engine, supports multiple query types, iterators and lazy loading
+
+### Design Philosophy
+
+**Descriptor Pattern**: Provides independent manager instances for each model class through ObjectsDescriptor
+**Composite Architecture**: QuerySet avoids MRO issues through component composition, improving maintainability
+**Immutable Building**: QueryBuilder immutable design, each method returns new instance
+**Component Sharing**: New QuerySet instances share executor, improving performance
+**Unified Execution**: QueryExecutor single execution method handles all query types
+**Signal Integration**: Bulk operations use @emit_signals decorator to integrate signal system
+**Session Management**: Supports using() method for session binding and readonly parameter control
+
+### Integration with Other Modules
+
+**Core Architecture Module**: Obtains database sessions through SessionContextManager
+**Field System Module**: Supports field expressions and function calls
+**Relationship Processing Module**: Integrates select_related and prefetch_related
+
+## API Reference
+
+### Objects Manager
 
 ```python
-class BulkCreateOperation:
-    """High-performance bulk insert implementation"""
-    
-    def __init__(self, model_class, session):
-        self.model_class = model_class
-        self.session = session
-        self.table = model_class.__table__
-    
-    async def execute(self, data, batch_size=1000, return_objects=False):
-        """Execute bulk create with batching"""
-        if not data:
-            return []
-        
-        created_objects = []
-        
-        # Process in batches
-        for batch in self._batch_data(data, batch_size):
-            batch_objects = await self._create_batch(batch, return_objects)
-            created_objects.extend(batch_objects)
-        
-        return created_objects
-    
-    async def _create_batch(self, batch_data, return_objects):
-        """Create single batch of records"""
-        # Validate data
-        validated_data = []
-        for item in batch_data:
-            if isinstance(item, dict):
-                # Create object for validation
-                obj = self.model_class.from_dict(item)
-                obj.validate()
-                validated_data.append(item)
-            else:
-                # Assume it's already a model instance
-                item.validate()
-                validated_data.append(item.to_dict())
-        
-        # Execute bulk insert
-        if return_objects:
-            # Use RETURNING clause (PostgreSQL) or fetch inserted records
-            result = await self.session.execute(
-                self.table.insert().returning(*self.table.c),
-                validated_data
-            )
-            rows = result.fetchall()
-            return [self._row_to_object(row) for row in rows]
-        else:
-            # Simple insert without returning objects
-            await self.session.execute(
-                self.table.insert(),
-                validated_data
-            )
-            return []
-    
-    def _batch_data(self, data, batch_size):
-        """Split data into batches"""
-        for i in range(0, len(data), batch_size):
-            yield data[i:i + batch_size]
+# Basic queries
+await User.objects.all()
+await User.objects.get(*conditions)
+await User.objects.first()
+await User.objects.count()
+
+# Create operations
+await User.objects.create(**kwargs)
+await User.objects.get_or_create(defaults=None, **lookup)
+await User.objects.update_or_create(defaults=None, **lookup)
+
+# Bulk operations
+await User.objects.bulk_create(objects)
+await User.objects.bulk_update(mappings, match_fields)
+await User.objects.bulk_delete(ids, id_field)
 ```
 
-### Bulk Update Architecture
+### QuerySet Methods
 
 ```python
-class BulkUpdateOperation:
-    """High-performance bulk update implementation"""
-    
-    def __init__(self, model_class, session):
-        self.model_class = model_class
-        self.session = session
-        self.table = model_class.__table__
-    
-    async def execute(self, mappings, match_fields, update_fields=None, batch_size=1000):
-        """Execute bulk update with field matching"""
-        if not mappings:
-            return 0
-        
-        total_updated = 0
-        
-        # Process in batches
-        for batch in self._batch_data(mappings, batch_size):
-            updated_count = await self._update_batch(batch, match_fields, update_fields)
-            total_updated += updated_count
-        
-        return total_updated
-    
-    async def _update_batch(self, batch_mappings, match_fields, update_fields):
-        """Update single batch of records"""
-        # Build update statement with CASE expressions
-        update_stmt = self.table.update()
-        
-        # Build WHERE clause for matching
-        match_conditions = []
-        for field in match_fields:
-            column = getattr(self.table.c, field)
-            values = [mapping[field] for mapping in batch_mappings]
-            match_conditions.append(column.in_(values))
-        
-        if match_conditions:
-            update_stmt = update_stmt.where(and_(*match_conditions))
-        
-        # Build SET clause with CASE expressions
-        set_values = {}
-        fields_to_update = update_fields or self._get_update_fields(batch_mappings, match_fields)
-        
-        for field in fields_to_update:
-            column = getattr(self.table.c, field)
-            
-            # Build CASE expression
-            case_conditions = []
-            for mapping in batch_mappings:
-                match_condition = and_(*[
-                    getattr(self.table.c, match_field) == mapping[match_field]
-                    for match_field in match_fields
-                ])
-                case_conditions.append((match_condition, mapping[field]))
-            
-            set_values[column] = case(case_conditions)
-        
-        update_stmt = update_stmt.values(**set_values)
-        
-        # Execute update
-        result = await self.session.execute(update_stmt)
-        return result.rowcount
+# Query building methods (return QuerySet)
+.filter(*conditions) / .exclude(*conditions)
+.order_by(*fields) / .limit(count) / .offset(count)
+.only(*fields) / .defer(*fields)
+.select_related(*fields) / .prefetch_related(*fields)
+.distinct(*fields) / .annotate(**kwargs)
+.group_by(*fields) / .having(*conditions)
+.join(table, condition) / .select_for_update()
+.skip_default_ordering() / .reverse() / .none()
+
+# Query execution methods (execute query)
+await .all() / await .get() / await .first()
+await .count() / await .exists()
+await .last() / await .earliest() / await .latest()
+await .values(*fields) / await .values_list(*fields)
+await .aggregate(**kwargs) / await .raw(sql)
+await .iterator() / await .create() / await .update() / await .delete()
+
+# Date/time query methods
+await .dates(field, precision, order) / await .datetimes(field, precision, order)
+
+# Index access methods
+await .get_item(index_or_slice)
+
+# Field selection methods
+.only(*fields) / .defer(*fields)
+
+# Subquery methods
+.subquery(name, query_type)
 ```
 
-## Caching System
-
-### Query Execution Optimization
+### Q Object Operations
 
 ```python
-class QueryOptimizer:
-    """Query execution optimization strategies"""
-    
-    @staticmethod
-    def optimize_count_query(query_builder):
-        """Remove unnecessary ORDER BY clauses from count queries"""
-        optimized_builder = query_builder.copy()
-        optimized_builder.orderings = []
-        return optimized_builder
-    
-    @staticmethod
-    def optimize_exists_query(query_builder):
-        """Optimize EXISTS queries with LIMIT 1"""
-        optimized_builder = query_builder.copy()
-        optimized_builder.orderings = []
-        optimized_builder.limit_value = 1
-        return optimized_builder
+# Basic usage
+Q(User.name == "John")
+Q(User.age >= 18, User.is_active == True)
+
+# Logical combination
+Q(User.name == "John") & Q(User.age >= 18)
+Q(User.role == "admin") | Q(User.is_staff == True)
+~Q(User.is_deleted == True)
 ```
 
-## Performance Optimizations
+## Usage Guide
 
-### Query Optimization Strategies
+### Basic Usage
 
 ```python
-class QueryOptimizer:
-    """Query optimization and analysis"""
-    
-    @staticmethod
-    def optimize_count_query(query_builder):
-        """Optimize COUNT queries by removing unnecessary clauses"""
-        # Remove ORDER BY for count queries (significant performance boost)
-        optimized_builder = query_builder._copy()
-        optimized_builder.orderings = []
-        
-        # Remove SELECT fields, only need COUNT
-        optimized_builder.select_fields = []
-        
-        return optimized_builder
-    
-    @staticmethod
-    def optimize_exists_query(query_builder):
-        """Optimize EXISTS queries"""
-        optimized_builder = query_builder._copy()
-        
-        # Remove ORDER BY and LIMIT for exists queries
-        optimized_builder.orderings = []
-        optimized_builder.limit_value = None
-        optimized_builder.offset_value = None
-        
-        # Add LIMIT 1 for early termination
-        optimized_builder.limit_value = 1
-        
-        return optimized_builder
-    
-    @staticmethod
-    def analyze_query_performance(query, execution_time):
-        """Analyze query performance and suggest optimizations"""
-        suggestions = []
-        
-        query_str = str(query).lower()
-        
-        # Check for potential N+1 queries
-        if "select" in query_str and "where" in query_str and "in" in query_str:
-            suggestions.append("Consider using select_related or prefetch_related")
-        
-        # Check for missing indexes
-        if execution_time > 1.0 and "where" in query_str:
-            suggestions.append("Consider adding database indexes for WHERE conditions")
-        
-        # Check for unnecessary ordering
-        if "order by" in query_str and "count" in query_str:
-            suggestions.append("Remove ORDER BY from COUNT queries")
-        
-        return suggestions
+# Simple queries
+users = await User.objects.all()
+user = await User.objects.get(User.name == "John")
+
+# Filtering and ordering
+active_users = await User.objects.filter(
+    User.is_active == True
+).order_by("name").all()
+
+# Create and update
+user = await User.objects.create(name="Alice", age=25)
+await User.objects.filter(User.id == user.id).update(age=26)
 ```
 
-### Memory Management
+### Advanced Usage
 
 ```python
-class MemoryManager:
-    """Memory-efficient result processing"""
-    
-    @staticmethod
-    async def process_large_resultset(query_executor, query, chunk_size=1000):
-        """Process large result sets in chunks"""
-        offset = 0
-        
-        while True:
-            # Build chunked query
-            chunked_query = query.offset(offset).limit(chunk_size)
-            
-            # Execute chunk
-            chunk_results = await query_executor.execute(chunked_query, "all")
-            
-            if not chunk_results:
-                break
-            
-            # Yield results for processing
-            for result in chunk_results:
-                yield result
-            
-            # Cleanup chunk from memory
-            del chunk_results
-            
-            # Move to next chunk
-            offset += chunk_size
-            
-            # Trigger garbage collection every 10 chunks
-            if offset % (chunk_size * 10) == 0:
-                import gc
-                gc.collect()
+# Complex query combination
+admin_or_staff = await User.objects.filter(
+    Q(User.role == "admin") | Q(User.is_staff == True),
+    User.is_active == True
+).select_related("profile").all()
+
+# Advanced query methods
+users = await User.objects.distinct("department").annotate(
+    full_name=func.concat(User.first_name, " ", User.last_name),
+    post_count=func.count(User.posts)
+).group_by("department").having(
+    func.count() > 5
+).all()
+
+# Aggregate queries
+stats = await User.objects.aggregate(
+    total_users=func.count(),
+    avg_age=func.avg(User.age),
+    max_age=func.max(User.age)
+)
+
+# Field selection control
+selected_users = await User.objects.only("id", "username").all()
+deferred_users = await User.objects.defer("bio", "profile_image").all()
+
+# Query execution methods
+last_user = await User.objects.last()
+earliest = await User.objects.earliest("created_at")
+user_data = await User.objects.values("id", "username", "email")
+usernames = await User.objects.values_list("username", flat=True)
+
+# Bulk operations
+users_data = [
+    {"name": f"User{i}", "age": 20 + i}
+    for i in range(100)
+]
+await User.objects.bulk_create(users_data)
+
+# Large dataset processing
+async for user in User.objects.iterator(chunk_size=1000):
+    await process_user(user)
+
+# Date/time queries
+signup_years = await User.objects.dates("created_at", "year", order="DESC")
+login_hours = await User.objects.datetimes("last_login", "hour")
+
+# Index access
+first_user = await User.objects.order_by("created_at").get_item(0)
+recent_users = await User.objects.order_by("-created_at").get_item(slice(0, 5))
+
+# Session management
+async with ctx_session() as session:
+    users = await User.objects.using(session).filter(
+        User.is_active == True
+    ).all()
+  
+    for user in users:
+        await User.objects.using(session).filter(
+            User.id == user.id
+        ).update(last_seen=datetime.now())
 ```
-
-## Database Dialect Handling
-
-### Cross-Database Compatibility
-
-```python
-class DialectHandler:
-    """Handle database-specific operations"""
-    
-    def __init__(self, session):
-        self.session = session
-        self.dialect = session.bind.dialect.name
-    
-    def get_limit_offset_clause(self, limit, offset):
-        """Generate database-specific LIMIT/OFFSET"""
-        if self.dialect == "postgresql":
-            return f"LIMIT {limit} OFFSET {offset}"
-        elif self.dialect == "mysql":
-            return f"LIMIT {offset}, {limit}"
-        elif self.dialect == "sqlite":
-            return f"LIMIT {limit} OFFSET {offset}"
-        else:
-            return f"LIMIT {limit} OFFSET {offset}"  # Standard SQL
-    
-    def get_date_trunc_function(self, precision, field):
-        """Get database-specific date truncation function"""
-        if self.dialect == "postgresql":
-            return func.date_trunc(precision, field)
-        elif self.dialect == "mysql":
-            if precision == "day":
-                return func.date(field)
-            elif precision == "month":
-                return func.date_format(field, "%Y-%m-01")
-            elif precision == "year":
-                return func.date_format(field, "%Y-01-01")
-        elif self.dialect == "sqlite":
-            if precision == "day":
-                return func.date(field)
-            elif precision == "month":
-                return func.strftime("%Y-%m-01", field)
-            elif precision == "year":
-                return func.strftime("%Y-01-01", field)
-        
-        # Fallback to extract function
-        return func.extract(precision, field)
-    
-    def supports_returning(self):
-        """Check if database supports RETURNING clause"""
-        return self.dialect in ["postgresql", "sqlite"]
-    
-    def get_bulk_insert_strategy(self):
-        """Get optimal bulk insert strategy for database"""
-        if self.dialect == "postgresql":
-            return "copy"  # Use COPY for best performance
-        elif self.dialect == "mysql":
-            return "multi_insert"  # Use multi-row INSERT
-        elif self.dialect == "sqlite":
-            return "transaction"  # Use single transaction
-        else:
-            return "batch"  # Generic batching
-```
-
-This data operations architecture provides the foundation for SQLObjects' high-performance query execution, result processing, and optimization capabilities while maintaining cross-database compatibility and type safety.

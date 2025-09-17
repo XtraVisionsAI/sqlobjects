@@ -1,26 +1,71 @@
-# Relationships
+# Relations and Joins
 
-> 📝 This document is based on the Chinese version. For the latest Chinese version, see [docs-zh/features/05-relationships.md](../../docs-zh/features/05-relationships.md)
+## Overview
 
-SQLObjects provides comprehensive relationship support with optimized loading strategies, intuitive APIs, and high-performance relationship operations.
+SQLObjects provides comprehensive relationship support, including automatic JOIN optimization, lazy and eager loading
+strategies, and intuitive relationship traversal syntax.
+
+## Quick Start
+
+### Basic Relations
+
+```python
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, StringColumn, TextColumn, foreign_key
+from sqlobjects.relations import relationship
+
+class User(ObjectModel):
+    username: Column[str] = StringColumn(length=50)
+    email: Column[str] = StringColumn(length=100)
+
+class Post(ObjectModel):
+    title: Column[str] = StringColumn(length=200)
+    content: Column[str] = TextColumn()
+    author_id: Column[int] = foreign_key("users.id")  # Foreign key constraint
+
+    # Define relationships using unified relationship() function
+    author = relationship("User", foreign_keys="author_id")
+
+# Add reverse relationship to User
+User.posts = relationship("Post", foreign_keys="Post.author_id")
+```
+
+### Using Relations
+
+```python
+# Access related objects
+post = await Post.objects.get(Post.id == 1)
+author = await post.author  # Lazy loading
+
+# Reverse relationship
+user = await User.objects.get(User.id == 1)
+user_posts = await user.posts.all()  # QuerySet for reverse relationship
+```
 
 ## Relationship Types
 
 ### One-to-Many (Foreign Key)
 
 ```python
-class User(ObjectModel):
-    username: Column[str] = StringColumn(length=50)
-    
-    # Reverse relationship
-    posts = relationship("Post", back_populates="author")
+class Department(ObjectModel):
+    name: Column[str] = StringColumn(length=100)
 
-class Post(ObjectModel):
-    title: Column[str] = StringColumn(length=200)
-    author_id: Column[int] = foreign_key("users.id")
-    
-    # Forward relationship
-    author = relationship("User", back_populates="posts")
+class Employee(ObjectModel):
+    name: Column[str] = StringColumn(length=100)
+    department_id: Column[int] = foreign_key("departments.id")  # Create foreign key constraint
+
+    # Many-to-one relationship
+    department = relationship("Department", foreign_keys="department_id")
+
+# Add reverse relationship to Department
+Department.employees = relationship("Employee", foreign_keys="Employee.department_id")
+
+# Usage
+employee = await Employee.objects.get(Employee.id == 1)
+dept = await employee.department  # Single object
+
+department = await Department.objects.get(Department.id == 1)
+employees = await department.employees.all()  # List of objects
 ```
 
 ### One-to-One
@@ -28,125 +73,170 @@ class Post(ObjectModel):
 ```python
 class User(ObjectModel):
     username: Column[str] = StringColumn(length=50)
-    
-    # One-to-one relationship
-    profile = relationship("Profile", back_populates="user", uselist=False)
 
 class Profile(ObjectModel):
-    user_id: Column[int] = foreign_key("users.id", unique=True)
-    bio: Column[str] = StringColumn(type="text")
-    
-    # Back reference
-    user = relationship("User", back_populates="profile")
+    bio: Column[str] = TextColumn()
+    user_id: Column[int] = foreign_key("users.id", unique=True)  # Unique constraint
+
+    # One-to-one relationship
+    user = relationship("User", foreign_keys="user_id")
+
+# Add reverse one-to-one relationship to User
+User.profile = relationship("Profile", foreign_keys="Profile.user_id", unique=True)
+
+# Usage
+profile = await Profile.objects.get(Profile.id == 1)
+user = await profile.user  # Single object
+
+user = await User.objects.get(User.id == 1)
+profile = await user.profile  # Single object (or None)
 ```
 
 ### Many-to-Many
 
 ```python
-# Association table
+class Post(ObjectModel):
+    title: Column[str] = StringColumn(length=200)
+
+class Tag(ObjectModel):
+    name: Column[str] = StringColumn(length=50)
+
+# Association table (automatically created)
 class PostTag(ObjectModel):
     post_id: Column[int] = foreign_key("posts.id", primary_key=True)
     tag_id: Column[int] = foreign_key("tags.id", primary_key=True)
 
-class Post(ObjectModel):
-    title: Column[str] = StringColumn(length=200)
-    
-    # Many-to-many relationship
-    tags = relationship("Tag", secondary="post_tags", back_populates="posts")
+# Add many-to-many relationships using through parameter
+Post.tags = relationship("Tag", through="PostTag")
+Tag.posts = relationship("Post", through="PostTag")
 
-class Tag(ObjectModel):
-    name: Column[str] = StringColumn(length=50, unique=True)
-    
-    # Back reference
-    posts = relationship("Post", secondary="post_tags", back_populates="tags")
+# Usage
+post = await Post.objects.get(Post.id == 1)
+tags = await post.tags.all()  # List of tags
+
+tag = await Tag.objects.get(Tag.id == 1)
+posts = await tag.posts.all()  # List of posts
 ```
 
-## Relationship Loading
+## Loading Strategies
 
-### select_related (JOIN Strategy)
-
-Use for foreign key and one-to-one relationships:
+### Lazy Loading (Default)
 
 ```python
-# Single relationship - both syntaxes supported
-posts = await Post.objects.select_related("author").all()        # String syntax
-posts = await Post.objects.select_related(Post.author).all()     # Expression syntax
+# Lazy loading - queries database when accessed
+post = await Post.objects.get(Post.id == 1)
+author = await post.author  # Executes separate query here
+
+# N+1 query problem example
+posts = await Post.objects.all()
+for post in posts:
+    author = await post.author  # Executes N additional queries!
+```
+
+### Eager Loading with select_related
+
+```python
+# Use select_related for foreign key relationships (JOIN)
+posts = await Post.objects.select_related("author").all()
+for post in posts:
+    author = post.author  # No additional queries - already loaded
 
 # Multiple relationships
 posts = await Post.objects.select_related("author", "category").all()
-posts = await Post.objects.select_related(Post.author, Post.category).all()
 
 # Nested relationships
 comments = await Comment.objects.select_related("post__author").all()
 
-# Access without additional queries
-for post in posts:
-    print(post.author.username)  # No additional query
+# String path syntax (Django-style)
+posts = await Post.objects.select_related("author").all()
 ```
 
-### prefetch_related (Separate Query Strategy)
-
-Use for reverse foreign key and many-to-many relationships:
+### Eager Loading with prefetch_related
 
 ```python
-# Reverse foreign key relationships - both syntaxes supported
-users = await User.objects.prefetch_related("posts").all()       # String syntax
-users = await User.objects.prefetch_related(User.posts).all()    # Expression syntax
+# Use prefetch_related for reverse foreign keys and many-to-many relationships
+users = await User.objects.prefetch_related("posts").all()
+for user in users:
+    posts = await user.posts.all()  # No additional queries
 
 # Many-to-many relationships
 posts = await Post.objects.prefetch_related("tags").all()
-posts = await Post.objects.prefetch_related(Post.tags).all()
+for post in posts:
+    tags = await post.tags.all()  # No additional queries
 
-# Multiple prefetch relationships
-users = await User.objects.prefetch_related("posts", "comments", "groups").all()
+# Multiple prefetches
+users = await User.objects.prefetch_related("posts", "groups", "permissions").all()
+
+# String path syntax (Django-style)
+users = await User.objects.prefetch_related("posts").all()
+```
+
+### Advanced Prefetch Configuration
+
+```python
+# Advanced prefetch with filtering and ordering
+users = await User.objects.prefetch_related(
+    published_posts=Post.objects.filter(Post.is_published == True)
+                               .order_by('-created_at')
+                               .limit(5)
+).all()
+
+# Multiple advanced configurations
+users = await User.objects.prefetch_related(
+    recent_posts=Post.objects.filter(
+        Post.created_at >= datetime.now() - timedelta(days=30)
+    ).order_by('-created_at'),
+    popular_posts=Post.objects.filter(Post.view_count > 1000)
+                             .order_by('-view_count')
+                             .limit(3)
+).all()
+
+# Mix simple and advanced prefetches
+users = await User.objects.prefetch_related(
+    'profile',  # Simple prefetch
+    recent_comments=Comment.objects.filter(
+        Comment.created_at >= datetime.now() - timedelta(days=7)
+    ).order_by('-created_at')
+).all()
 
 # Access prefetched data
 for user in users:
-    posts = await user.posts.all()  # Uses prefetched data
-    for post in posts:
-        tags = await post.tags.all()  # Additional query if not prefetched
+    # Advanced prefetch results are directly accessible
+    recent_posts = user.recent_posts  # Filtered/ordered post list
+    popular_posts = user.popular_posts  # Popular post list
 ```
 
-### Combined Loading Strategies
+### Combining Loading Strategies
 
 ```python
-# Optimize complex relationship queries
+# Combine select_related and prefetch_related
 posts = await Post.objects.select_related("author").prefetch_related("tags", "comments").all()
 
 for post in posts:
-    # From JOIN (select_related)
-    author = post.author
-    print(f"Author: {author.username}")
-    
-    # From prefetch (prefetch_related)
-    tags = await post.tags.all()
-    comments = await post.comments.all()
+    author = post.author  # From JOIN (select_related)
+    tags = await post.tags.all()  # From prefetch (prefetch_related)
+    comments = await post.comments.all()  # From prefetch
 ```
 
-## Relationship Queries
+## Advanced Relationship Queries
 
 ### Filtering by Related Fields
 
 ```python
-# Filter by foreign key relationship
-posts = await Post.objects.filter(Post.author.username == "alice").all()
+# Filter by foreign key fields
+posts = await Post.objects.filter(Post.author.username == "john").all()
 
-# Filter by reverse relationship
+# Filter by reverse relationships
 users = await User.objects.filter(User.posts.title.like("%python%")).all()
 
-# Multiple relationship levels
-comments = await Comment.objects.filter(
-    Comment.post.author.username == "alice"
+# Multiple relationship filters
+posts = await Post.objects.filter(
+    Post.author.is_active == True,
+    Post.category.name == "Technology"
 ).all()
-
-# Complex relationship filtering
-active_authors = await User.objects.filter(
-    User.posts.created_at > datetime.now() - timedelta(days=30),
-    User.posts.is_published == True
-).distinct().all()
 ```
 
-### Relationship Aggregation
+### Annotations on Relations
 
 ```python
 from sqlobjects.expressions import func
@@ -156,75 +246,93 @@ users = await User.objects.annotate(
     post_count=func.count(User.posts)
 ).all()
 
-# Aggregate related data
+# Aggregate related fields
 users = await User.objects.annotate(
-    post_count=func.count(User.posts),
     latest_post=func.max(User.posts.created_at),
     avg_post_length=func.avg(func.length(User.posts.content))
 ).all()
 
-# Filter by aggregated relationship data
-prolific_authors = await User.objects.annotate(
+# Filter by aggregated values
+active_authors = await User.objects.annotate(
     post_count=func.count(User.posts)
-).filter(User.post_count > 10).all()
-```
-
-### Relationship Existence
-
-```python
-# Users who have posts
-authors = await User.objects.filter(User.posts.exists()).all()
-
-# Users who don't have posts
-non_authors = await User.objects.filter(~User.posts.exists()).all()
-
-# Complex existence queries
-recent_authors = await User.objects.filter(
-    User.posts.filter(
-        Post.created_at > datetime.now() - timedelta(days=7)
-    ).exists()
+).filter(
+    User.post_count > 5
 ).all()
 ```
 
-## Relationship Operations
-
-### Creating Related Objects
+### Subqueries on Relations
 
 ```python
-# Create with foreign key
-user = await User.objects.create(username="alice")
+# Exists subquery
+has_posts = Post.objects.filter(Post.author_id == User.id).subquery(query_type="exists")
+authors = await User.objects.filter(has_posts).all()
+
+# Scalar subquery
+latest_post_date = Post.objects.filter(
+    Post.author_id == User.id
+).aggregate(
+    latest=func.max(Post.created_at)
+).subquery(query_type="scalar")
+
+active_authors = await User.objects.annotate(
+    latest_post_date=latest_post_date
+).filter(
+    User.latest_post_date >= datetime.now() - timedelta(days=30)
+).all()
+```
+
+## Manual Joins
+
+### Explicit JOIN Operations
+
+```python
+# Inner join
+posts_with_authors = await Post.objects.join(
+    User, Post.author_id == User.id
+).all()
+
+# Left join
+all_posts = await Post.objects.leftjoin(
+    User, Post.author_id == User.id
+).all()
+
+# Multiple joins
+posts_with_details = await Post.objects.join(
+    User, Post.author_id == User.id
+).join(
+    Category, Post.category_id == Category.id
+).all()
+```
+
+### JOIN with Subqueries
+
+```python
+# Join with subquery
+active_users = User.objects.filter(User.is_active == True).subquery("active_users")
+posts = await Post.objects.join(
+    active_users, 
+    Post.author_id == active_users.c.id
+).all()
+```
+
+## Relationship Management
+
+### Adding Related Objects
+
+```python
+# Create related objects
+user = await User.objects.create(username="author")
 post = await Post.objects.create(
-    title="My First Post",
+    title="My Post",
     author_id=user.id  # Set foreign key
 )
 
-# Create through relationship
-user = await User.objects.create(username="bob")
-post = await user.posts.create(title="Bob's Post")  # Automatic foreign key setting
-```
+# Many-to-many relationships
+post = await Post.objects.get(Post.id == 1)
+tag = await Tag.objects.get(Tag.id == 1)
 
-### Managing Many-to-Many Relationships
-
-```python
-# Create objects
-post = await Post.objects.create(title="Python Tutorial")
-tag1 = await Tag.objects.create(name="python")
-tag2 = await Tag.objects.create(name="tutorial")
-
-# Add relationships
-await post.tags.add(tag1, tag2)
-
-# Remove relationships
-await post.tags.remove(tag1)
-
-# Set relationships (replace all)
-await post.tags.set([tag2])
-
-# Clear all relationships
-await post.tags.clear()
-
-# Check relationship existence
-has_python_tag = await post.tags.filter(Tag.name == "python").exists()
+# Add to many-to-many (requires manual association table management)
+await PostTag.objects.create(post_id=post.id, tag_id=tag.id)
 ```
 
 ### Bulk Relationship Operations
@@ -232,9 +340,9 @@ has_python_tag = await post.tags.filter(Tag.name == "python").exists()
 ```python
 # Bulk create with relationships
 posts_data = [
-    {"title": "Post 1", "author_id": 1},
-    {"title": "Post 2", "author_id": 1},
-    {"title": "Post 3", "author_id": 2},
+    {"title": "Post 1", "author_id": 1, "category_id": 1},
+    {"title": "Post 2", "author_id": 1, "category_id": 2},
+    {"title": "Post 3", "author_id": 2, "category_id": 1},
 ]
 posts = await Post.objects.bulk_create(posts_data)
 
@@ -247,245 +355,164 @@ associations = [
 await PostTag.objects.bulk_create(associations)
 ```
 
-## Advanced Relationship Features
-
-### Custom Relationship Managers
-
-```python
-class PublishedPostManager:
-    def get_queryset(self):
-        return super().get_queryset().filter(is_published=True)
-
-class User(ObjectModel):
-    username: Column[str] = StringColumn(length=50)
-    
-    # All posts
-    posts = relationship("Post", back_populates="author")
-    
-    # Only published posts
-    published_posts = relationship(
-        "Post", 
-        back_populates="author",
-        primaryjoin="and_(User.id == Post.author_id, Post.is_published == True)"
-    )
-```
-
-### Relationship Ordering
-
-```python
-class User(ObjectModel):
-    username: Column[str] = StringColumn(length=50)
-    
-    # Posts ordered by creation date (newest first)
-    posts = relationship(
-        "Post", 
-        back_populates="author",
-        order_by="Post.created_at.desc()"
-    )
-    
-    # Recent posts only
-    recent_posts = relationship(
-        "Post",
-        back_populates="author",
-        primaryjoin="and_(User.id == Post.author_id, Post.created_at > func.now() - interval('30 days'))"
-    )
-```
-
-### Lazy Loading Control
-
-```python
-class Post(ObjectModel):
-    title: Column[str] = StringColumn(length=200)
-    author_id: Column[int] = foreign_key("users.id")
-    
-    # Different loading strategies
-    author = relationship("User", lazy="select")      # Load on access
-    category = relationship("Category", lazy="joined") # Always JOIN
-    tags = relationship("Tag", lazy="subquery")       # Use subquery
-    comments = relationship("Comment", lazy="dynamic") # Return query object
-```
-
 ## Performance Optimization
 
-### N+1 Query Prevention
+### Best Practices for Relationship Loading
 
 ```python
-# ❌ N+1 query problem
+# Good: Use select_related for foreign keys
+posts = await Post.objects.select_related("author", "category").all()
+
+# Good: Use prefetch_related for reverse relationships
+users = await User.objects.prefetch_related("posts", "comments").all()
+
+# Avoid: N+1 queries
 posts = await Post.objects.all()
 for post in posts:
     author = await post.author  # N additional queries!
 
-# ✅ Use select_related for foreign keys
-posts = await Post.objects.select_related("author").all()
-for post in posts:
-    author = post.author  # No additional query
-
-# ✅ Use prefetch_related for reverse relationships
-users = await User.objects.prefetch_related("posts").all()
-for user in users:
-    posts = await user.posts.all()  # No additional queries
+# Good: Combine loading strategies
+posts = await Post.objects.select_related("author").prefetch_related("tags").all()
 ```
 
-### Relationship Loading Optimization
+### Selective Field Loading
 
 ```python
-# Optimize complex relationship loading
-posts = await Post.objects.select_related(
-    "author",      # Foreign key - use JOIN
-    "category"     # Foreign key - use JOIN
-).prefetch_related(
-    "tags",        # Many-to-many - separate query
-    "comments"     # Reverse FK - separate query
+# Load only needed fields from related objects
+posts = await Post.objects.select_related("author").only(
+    "title", "content", "author__username", "author__email"
 ).all()
 
-# Access all relationships efficiently
-for post in posts:
-    print(f"Post: {post.title}")
-    print(f"Author: {post.author.username}")      # From JOIN
-    print(f"Category: {post.category.name}")      # From JOIN
-    
-    tags = await post.tags.all()                  # From prefetch
-    comments = await post.comments.all()          # From prefetch
-```
-
-### Relationship Caching
-
-```python
-# Optimize relationship queries
-users = await User.objects.prefetch_related("posts").all()
-
-# Load relationships with filtering
-live_posts = await Post.objects.select_related("author").filter(
-    Post.created_at > datetime.now() - timedelta(minutes=5)
+# Defer heavy fields from related objects
+posts = await Post.objects.select_related("author").defer(
+    "content", "author__bio"
 ).all()
 ```
 
-## Relationship Validation
-
-### Foreign Key Validation
+### Relationship Counting
 
 ```python
-class Post(ObjectModel):
+# Efficient counting without loading objects
+user_count = await User.objects.filter(User.posts__isnull=False).distinct().count()
+
+# Counting with annotations
+users_with_counts = await User.objects.annotate(
+    post_count=func.count(User.posts),
+    comment_count=func.count(User.comments)
+).all()
+```
+
+## Complex Relationship Patterns
+
+### Self-Referencing Relations
+
+```python
+class Category(ObjectModel):
+    name: Column[str] = StringColumn(length=100)
+    parent_id: Column[int] = foreign_key("categories.id", nullable=True)
+
+    # Self-referencing relationships
+    parent: Column["Category"] = relationship("Category", remote_side="id", back_populates="children")
+    children: Column[list["Category"]] = relationship("Category", back_populates="parent")
+
+# Usage
+category = await Category.objects.get(Category.id == 1)
+parent = await category.parent
+children = await category.children.all()
+```
+
+### Polymorphic Relations
+
+```python
+class Content(ObjectModel):
     title: Column[str] = StringColumn(length=200)
-    author_id: Column[int] = foreign_key("users.id")
-    
-    def validate(self):
-        # Validate foreign key exists
-        if self.author_id:
-            author_exists = await User.objects.filter(
-                User.id == self.author_id
-            ).exists()
-            if not author_exists:
-                raise ValidationError("Invalid author ID")
+    content_type: Column[str] = StringColumn(length=50)
+
+class Article(Content):
+    body: Column[str] = TextColumn()
+
+class Video(Content):
+    duration: Column[int] = IntegerColumn()
+    video_url: Column[str] = StringColumn(length=500)
+
+# Query polymorphic relationships
+contents = await Content.objects.filter(Content.content_type == "article").all()
 ```
 
-### Relationship Constraints
+### Through Model Relations
 
 ```python
+class Membership(ObjectModel):
+    user_id: Column[int] = foreign_key("users.id", primary_key=True)
+    group_id: Column[int] = foreign_key("groups.id", primary_key=True)
+    role: Column[str] = StringColumn(length=50, default="member")
+    joined_at: Column[datetime] = DateTimeColumn(default_factory=datetime.now)
+
 class User(ObjectModel):
-    username: Column[str] = StringColumn(length=50)
-    
-    async def before_delete(self, context):
-        # Prevent deletion if user has posts
-        post_count = await self.posts.count()
-        if post_count > 0:
-            raise ValidationError("Cannot delete user with existing posts")
-```
+    groups: Column[list["Group"]] = relationship(
+        "Group",
+        secondary="memberships",
+        back_populates="users"
+    )
 
-## Testing Relationships
+class Group(ObjectModel):
+    users: Column[list["User"]] = relationship(
+        "User",
+        secondary="memberships", 
+        back_populates="groups"
+    )
 
-### Relationship Testing Patterns
-
-```python
-import pytest
-
-class TestUserPostRelationship:
-    async def test_user_can_have_multiple_posts(self, test_session):
-        # Create user
-        user = await User.objects.using(test_session).create(username="testuser")
-        
-        # Create posts
-        post1 = await Post.objects.using(test_session).create(
-            title="Post 1", author_id=user.id
-        )
-        post2 = await Post.objects.using(test_session).create(
-            title="Post 2", author_id=user.id
-        )
-        
-        # Test relationship
-        posts = await user.posts.using(test_session).all()
-        assert len(posts) == 2
-        assert post1 in posts
-        assert post2 in posts
-    
-    async def test_select_related_prevents_n_plus_one(self, test_session):
-        # Create test data
-        users = await User.objects.using(test_session).bulk_create([
-            {"username": f"user{i}"} for i in range(10)
-        ])
-        
-        posts = await Post.objects.using(test_session).bulk_create([
-            {"title": f"Post {i}", "author_id": users[i % len(users)].id}
-            for i in range(100)
-        ])
-        
-        # Test select_related prevents N+1 queries
-        with query_counter() as counter:
-            posts = await Post.objects.using(test_session).select_related("author").all()
-            for post in posts:
-                _ = post.author.username  # Should not trigger additional queries
-        
-        # Should use only 1 query (JOIN), not N+1 queries
-        assert counter.count == 1
+# Access through model data
+memberships = await Membership.objects.filter(
+    Membership.user_id == 1,
+    Membership.role == "admin"
+).all()
 ```
 
 ## Best Practices
 
 ### Relationship Design
 
-1. **Use appropriate relationship types**: Choose the right relationship for your data model
-2. **Define back_populates**: Always define bidirectional relationships
-3. **Use meaningful names**: Choose clear, descriptive relationship names
-4. **Consider cascade behavior**: Define appropriate cascade rules for deletions
-
-### Performance Guidelines
-
 ```python
-# ✅ Good: Use select_related for foreign keys
-posts = await Post.objects.select_related("author", "category").all()
+# Use descriptive relationship names
+class Order(ObjectModel):
+    customer_id: Column[int] = foreign_key("users.id")
+    customer: Column["User"] = relationship("User", back_populates="orders")
 
-# ✅ Good: Use prefetch_related for reverse relationships
-users = await User.objects.prefetch_related("posts", "comments").all()
-
-# ✅ Good: Combine strategies for optimal loading
-posts = await Post.objects.select_related("author").prefetch_related("tags").all()
-
-# ❌ Bad: Don't load relationships you don't need
-posts = await Post.objects.select_related("author", "category", "editor").all()
-# Only load what you actually use
-
-# ✅ Good: Use exists() for existence checks
-has_posts = await User.objects.filter(User.posts.exists()).exists()
-
-# ❌ Bad: Don't count for existence checks
-has_posts = await user.posts.count() > 0  # Less efficient
+class User(ObjectModel):
+    orders: Column[list["Order"]] = relationship("Order", back_populates="customer")
 ```
 
-### Relationship Maintenance
+### Loading Strategy Selection
 
 ```python
-# ✅ Good: Clean up relationships on deletion
-class User(ObjectModel):
-    async def before_delete(self, context):
-        # Handle related data appropriately
-        await self.posts.update(author_id=None)  # Nullify foreign keys
-        await self.profile.delete()              # Delete dependent data
+# Use select_related for:
+# - Foreign key relationships (many-to-one)
+# - One-to-one relationships
+posts = await Post.objects.select_related("author", "category").all()
 
-# ✅ Good: Use transactions for relationship operations
-async with ctx_session() as session:
-    user = await User.objects.using(session).create(username="alice")
-    profile = await Profile.objects.using(session).create(
-        user_id=user.id, bio="Alice's profile"
-    )
-    # Both operations committed together
+# Use prefetch_related for:
+# - Reverse foreign key relationships (one-to-many)
+# - Many-to-many relationships
+users = await User.objects.prefetch_related("posts", "groups").all()
+```
+
+### Error Handling
+
+```python
+from sqlobjects.exceptions import DoesNotExist
+
+# Handle missing related objects
+try:
+    post = await Post.objects.get(Post.id == 1)
+    author = await post.author
+except DoesNotExist:
+    # Handle case where author was deleted
+    author = None
+
+# Check for null relationships
+user = await User.objects.get(User.id == 1)
+profile = await user.profile  # May be None for one-to-one relationships
+if profile:
+    bio = profile.bio
 ```

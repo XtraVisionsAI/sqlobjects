@@ -1,75 +1,75 @@
-# Database Setup and Configuration
+# 数据库设置和配置
 
-## Overview
+## 概述
 
-SQLObjects provides flexible database configuration supporting single and multiple databases with automatic connection management, session handling, and transaction control.
+SQLObjects 提供灵活的数据库配置，支持单数据库和多数据库，具有自动连接管理、会话处理和事务控制功能。
 
-## Quick Start
+## 快速开始
 
-### Single Database Setup
+### 单数据库设置
 
 ```python
 from sqlobjects.database import init_db, create_tables
 from sqlobjects.model import ObjectModel
 
-# Initialize database
+# 初始化数据库
 db = await init_db("sqlite+aiosqlite:///app.db")
 
-# Create tables
+# 创建表
 await create_tables(ObjectModel)
 
-# Ready to use
+# 准备使用
 user = await User.objects.create(username="john")
 ```
 
-### Multiple Database Setup
+### 多数据库设置
 
 ```python
 from sqlobjects.database import init_dbs
 
-# Initialize multiple databases - returns Database instance tuple
+# 初始化多个数据库 - 返回 Database 实例元组
 main_db, analytics_db = await init_dbs({
     "main": {"url": "postgresql+asyncpg://user:pass@localhost/main"},
     "analytics": {"url": "sqlite+aiosqlite:///analytics.db"}
 }, default="main")
 
-# Use specific database by name
+# 按名称使用特定数据库
 user = await User.objects.using("analytics").create(username="john")
 
-# Or use Database instance directly
+# 或直接使用 Database 实例
 user = await User.objects.using(analytics_db).create(username="jane")
 ```
 
-## Database Configuration
+## 数据库配置
 
-### Connection Parameters
+### 连接参数
 
 ```python
 from sqlobjects.database import DatabaseConfig
 
-# Advanced configuration
+# 高级配置
 config = DatabaseConfig(
     "postgresql://user:pass@localhost/db",
     pool_size=20,
     max_overflow=10,
     pool_timeout=30,
     pool_recycle=3600,
-    echo=False  # Set True for SQL logging
+    echo=False  # 设置为 True 启用 SQL 日志
 )
 
 db = await init_db(config.url, **config.engine_kwargs)
 ```
 
-### Environment-Based Configuration
+### 基于环境的配置
 
 ```python
 import os
 
-# Development
+# 开发环境
 if os.getenv("ENV") == "development":
     db_url = "sqlite+aiosqlite:///dev.db"
     echo = True
-# Production
+# 生产环境
 else:
     db_url = os.getenv("DATABASE_URL")
     echo = False
@@ -77,60 +77,60 @@ else:
 db = await init_db(db_url, echo=echo)
 ```
 
-## Session Management
+## 会话管理
 
-### Context Managers
+### 上下文管理器
 
 ```python
 from sqlobjects.session import ctx_session, ctx_sessions
 
-# Single database session (recommended)
+# 单数据库会话（推荐）
 async with ctx_session() as session:
     user = await User.objects.using(session).create(username="alice")
     posts = await user.posts.all()
-    # Automatic commit on success, rollback on error
+    # 成功时自动提交，错误时回滚
 
-# Specific database session
+# 特定数据库会话
 async with ctx_session("analytics") as session:
     logs = await Log.objects.using(session).all()
 
-# Multiple database sessions
+# 多数据库会话
 async with ctx_sessions("main", "analytics") as sessions:
     user = await User.objects.using(sessions["main"]).create(username="bob")
     await Log.objects.using(sessions["analytics"]).create(message="User created")
 
-# Session with specific database
+# 使用特定数据库的会话
 async with ctx_session("analytics") as session:
     users = await User.objects.using(session).all()
 ```
 
-### Default Session Usage
+### 默认会话使用
 
 ```python
-# Uses default database automatically
+# 自动使用默认数据库
 user = await User.objects.create(username="charlie")
 users = await User.objects.filter(User.is_active == True).all()
 ```
 
-## Transaction Patterns
+## 事务模式
 
-### Unified Transactions
+### 统一事务
 
 ```python
-# All operations in single transaction
+# 所有操作在单个事务中
 async with ctx_session() as session:
     user = await User.objects.using(session).create(username="david")
     profile = await Profile.objects.using(session).create(user_id=user.id)
-    # Automatic commit on success, rollback on error
+    # 成功时自动提交，错误时回滚
 ```
 
-### Independent Transactions
+### 独立事务
 
 ```python
 import asyncio
 import contextvars
 
-# Each task has independent transaction
+# 每个任务都有独立的事务
 tasks = [
     asyncio.create_task(process_user(user_id), context=contextvars.copy_context())
     for user_id in user_ids
@@ -138,111 +138,111 @@ tasks = [
 await asyncio.gather(*tasks, return_exceptions=True)
 ```
 
-## Database Events
+## 数据库事件
 
-### Connection Events
+### 连接事件
 
 ```python
-# Register database events
+# 注册数据库事件
 @db.on("connect")
 def on_connect(conn, record):
-    print("Database connected")
+    print("数据库已连接")
 
 @db.on("before_commit")
 def before_commit(session):
-    print("About to commit transaction")
+    print("即将提交事务")
 
 @db.on("after_commit")
 def after_commit(session):
-    print("Transaction committed")
+    print("事务已提交")
 ```
 
-### SQLAlchemy Events
+### SQLAlchemy 事件
 
 ```python
 from sqlalchemy import event
 
-# Direct SQLAlchemy event registration
+# 直接注册 SQLAlchemy 事件
 @event.listens_for(db.engine.sync_engine, "connect")
 def setup_connection(dbapi_connection, connection_record):
-    # Configure connection settings
+    # 配置连接设置
     pass
 ```
 
-## Connection Lifecycle
+## 连接生命周期
 
-### Graceful Shutdown
+### 优雅关闭
 
 ```python
 from sqlobjects.database import close_db, close_dbs, close_all_dbs
 
-# Close specific database by name
+# 按名称关闭特定数据库
 await close_db("analytics")
 
-# Close with automatic default reassignment
+# 关闭并自动重新分配默认数据库
 await close_db("main", auto_default=True)
 
-# Close multiple specific databases
+# 关闭多个特定数据库
 await close_dbs(["analytics", "backup"])
 
-# Close all databases
+# 关闭所有数据库
 await close_all_dbs()
 
-# Close Database instance directly
+# 直接关闭 Database 实例
 await analytics_db.close()
 ```
 
-### Health Checks
+### 健康检查
 
 ```python
-# Check database connectivity
+# 检查数据库连接性
 try:
     count = await User.objects.count()
-    print(f"Database healthy: {count} users")
+    print(f"数据库健康: {count} 个用户")
 except Exception as e:
-    print(f"Database error: {e}")
+    print(f"数据库错误: {e}")
 ```
 
-## Best Practices
+## 最佳实践
 
-### Connection Pooling
+### 连接池
 
 ```python
-# Optimize for your workload
+# 为您的工作负载优化
 config = DatabaseConfig(
     database_url,
-    pool_size=10,      # Base connections
-    max_overflow=20,   # Burst capacity
-    pool_timeout=30,   # Connection wait time
-    pool_recycle=3600  # Refresh connections hourly
+    pool_size=10,      # 基本连接数
+    max_overflow=20,   # 突发容量
+    pool_timeout=30,   # 连接等待时间
+    pool_recycle=3600  # 每小时刷新连接
 )
 ```
 
-### Error Handling
+### 错误处理
 
 ```python
 from sqlobjects.exceptions import DatabaseError
 
 try:
     async with ctx_session() as session:
-        # Database operations
+        # 数据库操作
         pass
 except DatabaseError as e:
-    # Handle database-specific errors
-    logger.error(f"Database error: {e}")
+    # 处理数据库特定错误
+    logger.error(f"数据库错误: {e}")
 except Exception as e:
-    # Handle general errors
-    logger.error(f"Unexpected error: {e}")
+    # 处理一般错误
+    logger.error(f"意外错误: {e}")
 ```
 
-### Testing Setup
+### 测试设置
 
 ```python
 import pytest
 
 @pytest.fixture
 async def test_db():
-    # Isolated test database
+    # 隔离的测试数据库
     db = await init_db(
         "sqlite+aiosqlite:///:memory:", 
         name="test", 

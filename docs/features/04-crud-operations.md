@@ -1,446 +1,520 @@
 # CRUD Operations
 
-> 📝 This document is based on the Chinese version. For the latest Chinese version, see [docs-zh/features/04-crud-operations.md](../../docs-zh/features/04-crud-operations.md)
+## Overview
 
-SQLObjects provides comprehensive Create, Read, Update, Delete (CRUD) operations with smart operation detection, bulk processing, and high-performance optimizations.
+SQLObjects provides comprehensive Create, Read, Update, Delete operation support, including single and bulk processing
+capabilities, intelligent operation detection, and transaction support.
+
+## Quick Start
+
+### Basic CRUD Operations
+
+```python
+# Create
+user = await User.objects.create(username="john", email="john@example.com")
+
+# Read
+user = await User.objects.get(User.id == 1)
+users = await User.objects.filter(User.is_active == True).all()
+
+# Update
+user.email = "john.new@example.com"
+await user.save()
+
+# Delete
+await user.delete()
+```
 
 ## Create Operations
 
-### Basic Creation
+### Single Object Creation
 
 ```python
-# Create single record
+# Method 1: Using object manager
 user = await User.objects.create(
     username="alice",
     email="alice@example.com",
     age=25
 )
 
-# Create with validation
-try:
-    user = await User.objects.create(
-        username="bob",
-        email="invalid-email"  # Will trigger validation error
-    )
-except ValidationError as e:
-    print(f"Validation failed: {e}")
+# ObjectsManager's create method internally uses from_dict
+user = await User.objects.create(
+    username="alice",
+    email="alice@example.com",
+    id=1  # init=False fields are handled automatically
+)
+
+# Method 2: Instance creation and save
+user = User(username="bob", email="bob@example.com")
+await user.save()
+
+# With validation control
+user = await User.objects.create(
+    username="charlie",
+    email="invalid-email",  # Will raise ValidationError
+    validate=True  # Default behavior
+)
 ```
 
-### get_or_create
+### Bulk Creation
+
+```python
+# Bulk create for performance
+users_data = [
+    {"username": "user1", "email": "user1@example.com"},
+    {"username": "user2", "email": "user2@example.com"},
+    {"username": "user3", "email": "user3@example.com"},
+]
+
+# Returns count of created records
+created_count = await User.objects.bulk_create(users_data, batch_size=1000)
+```
+
+### Get or Create Pattern
 
 ```python
 # Get existing or create new
 user, created = await User.objects.get_or_create(
-    username="charlie",
-    defaults={"email": "charlie@example.com", "age": 30}
+    username="david",  # Lookup field
+    defaults={"email": "david@example.com", "age": 30}  # Values for creation
+)
+
+# get_or_create and update_or_create also use from_dict
+user, created = await User.objects.get_or_create(
+    username="david",
+    defaults={"email": "david@example.com", "id": 100}  # Handles all field types
 )
 
 if created:
-    print("New user created")
+    print("Created new user")
 else:
-    print("Existing user found")
-```
+    print("Found existing user")
 
-### update_or_create
-
-```python
-# Update existing or create new
-user, created = await User.objects.update_or_create(
-    username="david",
-    defaults={"email": "david@example.com", "last_login": datetime.now()}
+# Multiple lookup fields
+user, created = await User.objects.get_or_create(
+    username="eve",
+    email="eve@example.com",
+    defaults={"age": 25, "is_active": True}
 )
 ```
 
 ## Read Operations
 
-### Basic Queries
+### Single Object Retrieval
 
 ```python
-# Get single record
+# Get by primary key
 user = await User.objects.get(User.id == 1)
 
-# Get with error handling
-try:
-    user = await User.objects.get(User.username == "alice")
-except DoesNotExist:
-    print("User not found")
-except MultipleObjectsReturned:
-    print("Multiple users found")
+# Get by unique field
+user = await User.objects.get(User.username == "john")
 
-# Get first or None
-user = await User.objects.filter(User.age >= 18).first()
+# Multi-condition get
+user = await User.objects.get(
+    User.username == "john",
+    User.is_active == True
+)
 
-# Check existence
-exists = await User.objects.filter(User.email == "test@example.com").exists()
+# First/last with ordering
+first_user = await User.objects.order_by("created_at").first()
+latest_user = await User.objects.order_by("-created_at").first()
 ```
 
-### List Operations
+### Multiple Object Retrieval
 
 ```python
-# Get all records
+# All objects
 users = await User.objects.all()
 
 # Filtered results
 active_users = await User.objects.filter(User.is_active == True).all()
 
-# Ordered results
-users = await User.objects.order_by("-created_at").all()
+# Pagination
+users_page = await User.objects.offset(20).limit(10).all()
 
-# Limited results
-recent_users = await User.objects.order_by("-created_at").limit(10).all()
+# Random sampling
+random_users = await User.objects.random(5)
+sample_users = await User.objects.sample(10)
+```
+
+### Bulk Retrieval
+
+```python
+# Bulk get by field values
+user_dict = await User.objects.in_bulk([1, 2, 3], field_name="id")
+# Result: {1: User(id=1), 2: User(id=2), 3: User(id=3)}
+
+user_dict = await User.objects.in_bulk(
+    ["john", "alice", "bob"], 
+    field_name="username"
+)
+# Result: {"john": User(username="john"), "alice": User(username="alice")}
+
+# Using primary key (default)
+user_dict = await User.objects.in_bulk([1, 2, 3])  # field_name="pk" is default
 ```
 
 ## Update Operations
 
-### Single Record Updates
+### Single Object Update
 
 ```python
-# Update using save()
+# Method 1: Load, modify, save
 user = await User.objects.get(User.id == 1)
-user.email = "newemail@example.com"
-await user.save()  # Smart detection: UPDATE operation
+user.email = "new.email@example.com"
+user.last_login = datetime.now()
+await user.save()
 
-# Update with validation
-user.age = -5  # Invalid age
-try:
-    await user.save()
-except ValidationError as e:
-    print(f"Update failed: {e}")
+# Method 2: Detached instance smart save
+user = User(id=1, email="updated@example.com", username="updated_user")
+await user.save()  # Automatically detects UPDATE operation
 ```
 
 ### Bulk Updates
 
 ```python
-# Update multiple records
-await User.objects.filter(User.age < 18).update(is_minor=True)
+# Update multiple records with same values
+affected = await User.objects.filter(
+    User.is_active == False
+).update(values={
+    "status": "inactive",
+    "updated_at": datetime.now()
+})
 
-# Update with expressions
-from sqlobjects.expressions import func
-await User.objects.filter(User.is_active == True).update(
-    last_seen=func.now()
+# Conditional update using Q objects
+affected = await User.objects.filter(
+    Q(User.last_login < datetime.now() - timedelta(days=30)) |
+    Q(User.login_count == 0)
+).update(values={"is_active": False})
+
+# Bulk update with conflict resolution
+mappings = [
+    {"id": 1, "email": "user1@new.com", "status": "active"},
+    {"id": 2, "email": "user2@new.com", "status": "inactive"},
+    # ... thousands of records
+]
+
+affected = await User.objects.bulk_update(
+    mappings,
+    match_fields=["id"],
+    batch_size=1000
 )
 
-# Conditional updates
-await User.objects.filter(
-    User.created_at < datetime.now() - timedelta(days=30)
-).update(is_verified=True)
+# With conflict handling
+affected = await User.objects.bulk_create(
+    users_data,
+    on_conflict="ignore",  # Skip duplicates
+    batch_size=1000
+)
+```
+
+### Update or Create Pattern
+
+```python
+# Update existing or create new
+user, created = await User.objects.update_or_create(
+    username="frank",  # Lookup field
+    defaults={
+        "email": "frank@example.com",
+        "last_login": datetime.now(),
+        "login_count": 1
+    }
+)
+
+if created:
+    print("Created new user")
+else:
+    print("Updated existing user")
 ```
 
 ## Delete Operations
 
-### Single Record Deletion
+### Single Object Deletion
 
 ```python
-# Delete using instance
+# Method 1: Load and delete
 user = await User.objects.get(User.id == 1)
 await user.delete()
 
-# Delete with confirmation
-user = await User.objects.get(User.username == "alice")
-if user.posts_count == 0:  # Check before deletion
-    await user.delete()
+# Method 2: Delete detached instance
+user = User(id=1)
+await user.delete()  # Automatically attaches to session
 ```
 
 ### Bulk Deletion
 
 ```python
-# Delete multiple records
-await User.objects.filter(User.is_active == False).delete()
-
-# Delete with conditions
-await User.objects.filter(
+# Conditional delete
+deleted = await User.objects.filter(
+    User.is_active == False,
     User.last_login < datetime.now() - timedelta(days=365)
 ).delete()
 
-# Delete all (use with caution)
-await User.objects.all().delete()
-```
+# Delete using Q objects
+deleted = await User.objects.filter(
+    Q(User.is_deleted == True) | Q(User.status == "banned")
+).delete()
 
-## Bulk Operations
-
-### Bulk Create
-
-```python
-# High-performance bulk creation
-users_data = [
-    {"username": f"user{i}", "email": f"user{i}@example.com"}
-    for i in range(1000)
-]
-
-# Bulk create with batch processing
-created_users = await User.objects.bulk_create(
-    users_data,
-    batch_size=500,  # Process in batches
-    return_objects=True  # Return created objects
-)
-
-# Bulk create with conflict handling
-await User.objects.bulk_create(
-    users_data,
-    on_conflict="ignore"  # Ignore duplicate key errors
-)
-```
-
-### Bulk Update
-
-```python
-# True bulk update (much faster than individual updates)
-mappings = [
-    {"id": 1, "status": "active", "last_seen": datetime.now()},
-    {"id": 2, "status": "inactive", "last_seen": datetime.now()},
-    {"id": 3, "status": "pending", "last_seen": datetime.now()},
-]
-
-await User.objects.bulk_update(
-    mappings,
-    match_fields=["id"],  # Fields to match records
-    batch_size=1000
-)
-
-# Bulk update specific fields only
-await User.objects.bulk_update(
-    mappings,
-    match_fields=["id"],
-    update_fields=["status", "last_seen"]  # Only update these fields
-)
-```
-
-### Bulk Delete
-
-```python
-# Bulk delete by IDs
-user_ids = [1, 2, 3, 4, 5]
-await User.objects.bulk_delete(
+# True bulk delete for large ID lists (10-100x faster)
+user_ids = [1, 2, 3, 4, 5]  # Thousands of IDs
+deleted = await User.objects.bulk_delete(
     user_ids,
     id_field="id",
     batch_size=1000
 )
 
-# Bulk delete with custom field
+# Bulk delete using custom field
 usernames = ["user1", "user2", "user3"]
-await User.objects.bulk_delete(
+deleted = await User.objects.bulk_delete(
     usernames,
-    id_field="username",
-    batch_size=500
+    id_field="username"
+)
+
+### Update All Records
+
+```python
+# Update all records with same values
+affected = await User.objects.update_all(
+    status="migrated",
+    updated_at=datetime.now()
 )
 ```
 
-## Smart Operation Detection
-
-### Automatic CREATE vs UPDATE
+### Delete All Records
 
 ```python
-# CREATE operation (no primary key value)
-user = User(username="new_user", email="new@example.com")
-await user.save()  # Triggers INSERT
+# Delete all records
+deleted = await User.objects.delete_all()
 
-# UPDATE operation (has primary key value)
-user.email = "updated@example.com"
-await user.save()  # Triggers UPDATE
-
-# Detached instance UPDATE
-detached_user = User(id=1, username="detached", email="detached@example.com")
-await detached_user.save()  # Uses merge() strategy for UPDATE
+# Fast delete using TRUNCATE (use with caution)
+deleted = await User.objects.delete_all(fast=True)  # Returns -1, no transaction safety
 ```
 
-### Operation Context in Signals
+## Advanced Instance Operations
+
+### Smart Save Detection
 
 ```python
-from sqlobjects.signals import SignalContext, Operation
+# Automatic CREATE vs UPDATE detection
+# New instance (no primary key) → CREATE
+user = User(username="new_user", email="new@example.com")
+await user.save()  # INSERT operation
 
-class User(ObjectModel):
-    async def before_save(self, context: SignalContext):
-        print(f"Operation: {context.operation}")  # SAVE
-        print(f"Actual operation: {context.actual_operation}")  # CREATE or UPDATE
-        
-        if context.actual_operation == Operation.CREATE:
-            self.created_at = datetime.now()
-        else:
-            self.updated_at = datetime.now()
+# Existing instance (has primary key) → UPDATE
+user.email = "updated@example.com"
+await user.save()  # UPDATE operation
+
+# Detached instance (has primary key) → UPDATE via merge()
+detached_user = User(id=1, username="detached", email="detached@example.com")
+await user.save()  # UPDATE operation via merge() strategy
+
+# from_dict creates instance with proper dirty field tracking
+user_data = {"username": "new_user", "email": "new@example.com"}
+user = User.from_dict(user_data)  # No dirty fields marked
+await user.save()  # Clean INSERT operation
+
+# Manual construction marks all fields as dirty
+user = User(username="manual", email="manual@example.com")  # All fields marked dirty
+await user.save()  # UPDATE operation with all fields
+```
+
+### Refresh Operations
+
+```python
+# Full refresh from database
+user = await User.objects.get(User.id == 1)
+user.username = "modified_locally"
+await user.refresh()  # Reset all fields to database state
+
+# Selective field refresh
+await user.refresh(fields=["username", "updated_at"])
+
+# Refresh detached instance
+detached_user = User(id=1)
+await detached_user.refresh()  # Load current data from database
+```
+
+### Session Management
+
+```python
+# Using specific database session
+async with ctx_session() as session:
+    user = await User.objects.using(session).create(username="session_user")
+    user.email = "updated@example.com"
+    await user.using(session).save()
+
+# Cross-database operations
+user = User(username="multi_db_user")
+await user.using("main_db").save()
+await user.using("analytics_db").save()  # Same data to different databases
 ```
 
 ## Transaction Management
 
-### Single Operations
+### Automatic Transactions
+
+```python
+# Single operations (auto-commit)
+user = await User.objects.create(username="auto_commit")
+
+# Multiple operations in transaction
+async with ctx_session() as session:
+    user = await User.objects.using(session).create(username="tx_user")
+    profile = await Profile.objects.using(session).create(user_id=user.id)
+    # Auto-commit on success, rollback on error
+```
+
+### Manual Transaction Control
 
 ```python
 from sqlobjects.session import ctx_session
 
-# Automatic transaction management
-async with ctx_session() as session:
-    user = await User.objects.using(session).create(username="alice")
-    posts = await Post.objects.using(session).bulk_create([
-        {"title": "Post 1", "author_id": user.id},
-        {"title": "Post 2", "author_id": user.id}
-    ])
-    # Automatic commit on success, rollback on exception
-```
-
-### Complex Transactions
-
-```python
-# Multi-step operations in single transaction
 async with ctx_session() as session:
     try:
-        # Create user
-        user = await User.objects.using(session).create(
-            username="complex_user",
-            email="complex@example.com"
-        )
-        
-        # Create related data
-        profile = await Profile.objects.using(session).create(
-            user_id=user.id,
-            bio="User biography"
-        )
-        
-        # Update statistics
-        await Stats.objects.using(session).filter(
-            Stats.type == "user_count"
-        ).update(value=Stats.value + 1)
-        
-        # All operations committed together
+        # Multiple operations
+        user = await User.objects.using(session).create(username="manual_tx")
+        await User.objects.using(session).filter(
+            User.is_active == False
+        ).update(values={"status": "archived"})
+    
+        # Manual commit
+        await session.commit()
     except Exception as e:
-        # All operations rolled back automatically
-        print(f"Transaction failed: {e}")
+        # Manual rollback
+        await session.rollback()
+        raise
 ```
 
 ## Performance Optimization
 
-### Batch Size Optimization
+### Batch Size Guidelines
 
 ```python
-# Optimize batch sizes for different operations
-await User.objects.bulk_create(data, batch_size=1000)  # Large batches for inserts
-await User.objects.bulk_update(mappings, batch_size=500)  # Smaller batches for updates
-await User.objects.bulk_delete(ids, batch_size=2000)  # Large batches for deletes
+# Recommended batch sizes by database type
+postgresql_batch = 1000  # PostgreSQL handles larger batches well
+mysql_batch = 500        # MySQL prefers smaller batches
+sqlite_batch = 100       # SQLite has lower limits
+
+# Adjust by record complexity
+simple_records_batch = 2000    # Simple fields (id, name, status)
+complex_records_batch = 200    # Complex fields (JSON, text, binary)
+
+# Usage example
+await User.objects.bulk_create(
+    large_dataset,
+    batch_size=postgresql_batch if db_type == "postgresql" else mysql_batch
+)
 ```
 
-### Memory-Efficient Operations
+### Memory Management
 
 ```python
-# Process large datasets efficiently
-async def process_large_dataset():
-    async for user in User.objects.iterator(chunk_size=1000):
-        # Process each user
-        user.last_processed = datetime.now()
-        await user.save()
-        
-        # Memory is automatically managed in chunks
-```
-
-### Query Optimization
-
-```python
-# Skip default ordering for better performance
-count = await User.objects.skip_default_ordering().count()
-
-# Use select_related to avoid N+1 queries
-posts = await Post.objects.select_related("author").all()
-for post in posts:
-    print(post.author.username)  # No additional query
-
-# Use only() to load specific fields
-users = await User.objects.only("id", "username", "email").all()
+# Process large updates in batches
+async def process_large_update(user_ids: list[int]):
+    batch_size = 1000
+    for i in range(0, len(user_ids), batch_size):
+        batch = user_ids[i:i + batch_size]
+        await User.objects.bulk_update(
+            [{"id": uid, "processed": True} for uid in batch],
+            match_fields=["id"]
+        )
 ```
 
 ## Error Handling
 
-### Validation Errors
+### Common Exceptions
 
 ```python
-from sqlobjects.exceptions import ValidationError
-
-try:
-    user = await User.objects.create(
-        username="",  # Empty username
-        email="invalid-email"  # Invalid email
-    )
-except ValidationError as e:
-    print(f"Validation failed: {e}")
-    # Handle validation errors appropriately
-```
-
-### Database Errors
-
-```python
-from sqlobjects.exceptions import DatabaseError, IntegrityError
-
-try:
-    # Attempt to create user with duplicate email
-    user = await User.objects.create(
-        username="duplicate",
-        email="existing@example.com"  # Already exists
-    )
-except IntegrityError as e:
-    print(f"Integrity constraint violated: {e}")
-except DatabaseError as e:
-    print(f"Database error: {e}")
-```
-
-### Bulk Operation Errors
-
-```python
-# Handle errors in bulk operations
-try:
-    await User.objects.bulk_create(invalid_data)
-except ValidationError as e:
-    print(f"Bulk validation failed: {e}")
-    # Process valid records separately
-    
-# Use on_conflict for graceful error handling
-await User.objects.bulk_create(
-    data_with_duplicates,
-    on_conflict="ignore"  # Skip duplicates instead of failing
+from sqlobjects.exceptions import (
+    DoesNotExist, 
+    MultipleObjectsReturned, 
+    ValidationError,
+    IntegrityError
 )
+
+# Handle not found
+try:
+    user = await User.objects.get(User.username == "nonexistent")
+except DoesNotExist:
+    print("User not found")
+
+# Handle multiple results
+try:
+    user = await User.objects.get(User.email.like("%@gmail.com"))
+except MultipleObjectsReturned:
+    user = await User.objects.filter(User.email.like("%@gmail.com")).first()
+
+# Handle validation errors
+try:
+    user = await User.objects.create(username="ab", email="invalid")
+except ValidationError as e:
+    print(f"Validation failed: {e.message}")
+
+# Handle database constraints
+try:
+    user = await User.objects.create(username="existing_user")
+except IntegrityError as e:
+    print(f"Database constraint violation: {e}")
+```
+
+### Bulk Operation Error Handling
+
+```python
+# Bulk operations with error handling
+try:
+    affected = await User.objects.bulk_update(mappings, match_fields=["id"])
+    print(f"Updated {affected} records")
+except Exception as e:
+    # Handle bulk failure
+    logger.error(f"Bulk update failed: {e}")
+
+    # Fallback to individual updates
+    for mapping in mappings:
+        try:
+            await User.objects.filter(User.id == mapping["id"]).update(
+                values={k: v for k, v in mapping.items() if k != "id"}
+            )
+        except Exception as individual_error:
+            logger.error(f"Individual update failed for ID {mapping['id']}: {individual_error}")
 ```
 
 ## Best Practices
 
-### CRUD Operation Guidelines
-
-1. **Use bulk operations for large datasets**: 10-100x performance improvement
-2. **Validate data before bulk operations**: Catch errors early
-3. **Use transactions for related operations**: Ensure data consistency
-4. **Handle errors gracefully**: Provide meaningful error messages
-5. **Monitor performance**: Use appropriate batch sizes
-
-### Performance Best Practices
+### Validation Strategy
 
 ```python
-# ✅ Good: Use bulk operations for multiple records
-await User.objects.bulk_create(users_data, batch_size=1000)
+# Enable validation for user input
+user_data = request.json  # From API request
+user = await User.objects.create(**user_data, validate=True)
 
-# ❌ Bad: Individual creates in loop
-for user_data in users_data:
-    await User.objects.create(**user_data)  # Much slower
-
-# ✅ Good: Use select_related for foreign keys
-posts = await Post.objects.select_related("author").all()
-
-# ❌ Bad: N+1 query problem
-posts = await Post.objects.all()
-for post in posts:
-    author = await post.author  # Additional query for each post
+# Skip validation for trusted data
+system_user = await User.objects.create(
+    username="system",
+    email="system@internal.com",
+    validate=False  # Skip validation for performance
+)
 ```
 
-### Transaction Best Practices
+### Bulk vs Individual Operations
 
 ```python
-# ✅ Good: Use context managers for transactions
-async with ctx_session() as session:
-    # All operations in single transaction
-    pass
+# Use bulk operations for large datasets
+if len(user_updates) > 100:
+    # Bulk update (10-100x faster)
+    await User.objects.bulk_update(user_updates, match_fields=["id"])
+else:
+    # Individual updates (better error handling)
+    for update in user_updates:
+        await User.objects.filter(User.id == update["id"]).update(values=update)
+```
 
-# ✅ Good: Keep transactions short
-async with ctx_session() as session:
-    # Quick database operations only
-    user = await User.objects.using(session).create(...)
-    # Don't do long-running tasks here
+### Session Usage
 
-# ❌ Bad: Long-running operations in transaction
+```python
+# Use sessions for related operations
 async with ctx_session() as session:
-    user = await User.objects.using(session).create(...)
-    await send_email(user)  # This should be outside transaction
-    await process_image(user.avatar)  # This too
+    # All operations in same transaction
+    user = await User.objects.using(session).create(username="related_ops")
+    profile = await Profile.objects.using(session).create(user_id=user.id)
+    settings = await Settings.objects.using(session).create(user_id=user.id)
 ```

@@ -1,656 +1,395 @@
-# Field System
+# SQLObjects Field System Design Document
 
-> 📝 This document is based on the Chinese version. For the latest Chinese version, see [docs-zh/design/03-field-system.md](../../docs-zh/design/03-field-system.md)
+## Overview
 
-This document describes the internal architecture and implementation details of SQLObjects' field system, including type registry, field processing, and validation integration.
+The SQLObjects field system adopts a unified Column descriptor architecture that supports unified definition of database
+fields and relationship fields. Through the TypeRegistry type registration system, ColumnAttribute enhanced attributes,
+and comprehensive parameter system, it provides type safety, performance optimization, and code generation control
+features.
 
-## Field System Architecture
+## Core Features
+
+### 1. Unified Column Descriptor Architecture
+
+Column descriptors support unified definition of database fields and relationship fields, with automatic setup via
+`__set_name__`:
+
+```python
+class User(ObjectModel):
+    # Database fields - using ColumnAttribute
+    name: Column[str] = StringColumn(length=50)
+    age: Column[int] = IntegerColumn()
+    email: Column[str] = StringColumn(length=100, unique=True)
+    is_active: Column[bool] = BooleanColumn(default=True)
+    metadata: Column[dict] = JsonColumn(default=dict)
+  
+    # Relationship fields - using RelationshipDescriptor
+    posts: Column[List["Post"]] = relationship("Post", foreign_keys="Post.author_id")
+
+# Column descriptor dual access mode:
+# - Class access: User.name returns ColumnAttribute for queries
+# - Instance access: user.name returns field value with type conversion support
+
+# Automatic type inference - using Auto type placeholder
+id: Column[int] = column(type=Auto(), primary_key=True)  # Replaced during ModelProcessor
+name: Column[str] = column(type=Auto())  # Uses Auto() instance for type inference
+
+# Comprehensive parameter system
+username: Column[str] = column(
+    type="string", length=50, unique=True,
+    # Enhanced functionality parameters
+    validators=[validate_length(3, 50)],
+    default_factory=None, insert_default=None,
+    # Performance optimization parameters
+    deferred=False, deferred_group=None, active_history=False,
+    # Code generation parameters
+    init=True, repr=True, compare=False, hash=None, kw_only=False
+)
+```
+
+### 2. Function Expression Chaining
+
+Supports chained function calls on fields, providing type-specific operation methods:
+
+```python
+# String function chaining
+User.name.upper().trim()
+User.email.lower().substring(1, 10)
+
+# Numeric function chaining
+User.age.abs().round(2)
+User.salary.sum().avg()
+
+# DateTime function chaining
+User.birth_date.year().month()
+User.created_at.age_in_years()
+```
+
+### 3. Data Validation System
+
+Complete field-level and model-level validation with built-in and custom validators:
+
+```python
+class User(ObjectModel):
+    username: Column[str] = StringColumn(
+        length=50,
+        validators=[
+            LengthValidator(min_length=3, max_length=50),
+            RegexValidator(r"^[a-zA-Z0-9_]+$")
+        ]
+    )
+  
+    email: Column[str] = StringColumn(
+        length=100,
+        validators=[EmailValidator()]
+    )
+  
+    def validate(self):
+        if self.age < 0:
+            raise ValidationError("Age cannot be negative")
+```
+
+### 4. Performance Optimization Features
+
+Field-level performance optimization with support for lazy loading and memory management:
+
+```python
+class User(ObjectModel):
+    # Deferred loading for large fields
+    bio: Column[str] = TextColumn(deferred=True)
+    profile_image: Column[bytes] = BinaryColumn(deferred=True, deferred_group="media")
+  
+    # Active history tracking
+    important_field: Column[str] = StringColumn(active_history=True)
+  
+    # Code generation control
+    internal_id: Column[str] = StringColumn(init=False, repr=False)
+    api_key: Column[str] = StringColumn(repr=False, compare=False)
+```
+
+## Module Architecture
 
 ### Core Components
 
-```python
-# Field system structure
-fields/
-├── core.py          # Core field classes and type registry
-├── shortcuts.py     # StringColumn, IntegerColumn, etc.
-├── functions.py     # column(), foreign_key(), etc.
-├── types/           # Specialized field types
-│   ├── base.py      # Base type classes
-│   ├── registry.py  # Type registry and mapping
-│   └── comparators.py # Field comparison operations
-├── relations/       # Relationship field definitions
-└── utils.py         # Field utilities and helpers
-```
+**Descriptor Layer**
 
-### Type Registry System
+- **Column**: Unified field descriptor supporting unified definition of database and relationship fields
+- **ColumnAttribute**: Enhanced SQLAlchemy Column with integrated validation, performance optimization, and code
+  generation control
+- **RelationshipDescriptor**: Relationship field descriptor handling relationship definition and access
 
-```python
-from functools import lru_cache
-import sqlalchemy as sa
+**Type System Layer**
 
-class TypeRegistry:
-    """Centralized type mapping with LRU caching"""
-    
-    # Core type mapping
-    TYPE_MAP = {
-        # Basic types
-        "string": (sa.String, {"length": 255}),
-        "text": (sa.Text, {}),
-        "integer": (sa.Integer, {}),
-        "bigint": (sa.BigInteger, {}),
-        "float": (sa.Float, {}),
-        "decimal": (sa.Numeric, {"precision": 10, "scale": 2}),
-        "boolean": (sa.Boolean, {}),
-        
-        # Date and time types
-        "date": (sa.Date, {}),
-        "time": (sa.Time, {}),
-        "datetime": (sa.DateTime, {}),
-        "timestamp": (sa.TIMESTAMP, {}),
-        
-        # Binary and JSON types
-        "binary": (sa.LargeBinary, {}),
-        "json": (sa.JSON, {}),
-        
-        # Database-specific types
-        "uuid": (sa.String, {"length": 36}),  # Generic UUID as string
-        "array": (sa.ARRAY, {}),  # PostgreSQL arrays
-        "enum": (sa.Enum, {}),    # Enum types
-    }
-    
-    @classmethod
-    @lru_cache(maxsize=1000)
-    def get_sqlalchemy_type(cls, type_name: str, **kwargs):
-        """Get SQLAlchemy type with caching"""
-        if type_name not in cls.TYPE_MAP:
-            raise ValueError(f"Unknown field type: {type_name}")
-        
-        sa_type, default_params = cls.TYPE_MAP[type_name]
-        
-        # Merge default parameters with provided kwargs
-        params = {**default_params, **kwargs}
-        
-        # Create and return SQLAlchemy type instance
-        return sa_type(**params)
-    
-    @classmethod
-    def register_type(cls, type_name: str, sa_type, default_params=None):
-        """Register new field type"""
-        cls.TYPE_MAP[type_name] = (sa_type, default_params or {})
-        
-        # Clear cache to include new type
-        cls.get_sqlalchemy_type.cache_clear()
-    
-    @classmethod
-    def get_python_type_mapping(cls, python_type: type) -> str:
-        """Map Python type to field type string"""
-        type_mapping = {
-            str: "string",
-            int: "integer",
-            float: "float",
-            bool: "boolean",
-            bytes: "binary",
-            dict: "json",
-            list: "json",
-        }
-        
-        # Handle datetime types
-        from datetime import datetime, date, time
-        type_mapping.update({
-            datetime: "datetime",
-            date: "date",
-            time: "time",
-        })
-        
-        return type_mapping.get(python_type, "string")
-```
+- **TypeRegistry**: Global type registration system supporting lazy initialization and automatic parameter extraction
+- **Auto**: Type inference placeholder replaced with concrete types during ModelProcessor processing
+- **Enhanced Types**: SQLAlchemy types + Comparator supporting database function chaining
 
-### Field Base Classes
+**Function Expression Layer**
+
+- **ColumnFunctionMixin**: Field function mixin providing function calls for Column descriptors
+- **ColumnAttributeFunctionMixin**: ColumnAttribute function mixin supporting database functions
+- **Comparator Classes**: Type-specific comparators providing rich database functions
+
+### Design Philosophy
+
+**Unified Descriptor**: Column descriptor uniformly handles database and relationship fields, simplifying API
+**Parameter Classification**: Categorizes parameters into SQLAlchemy, enhanced functionality, performance optimization,
+and code generation
+**Smart Defaults**: Automatically infers init/repr/compare parameters based on field characteristics
+**Type Registration**: Global TypeRegistry supports type aliases and automatic constructor parameter extraction
+**Function Integration**: Provides database function calls for fields through Mixin and Comparator
+**Performance First**: Built-in lazy loading, history tracking, and field caching capabilities
+
+### Integration with Other Modules
+
+**Core Architecture Module**: Processes field definitions through ModelProcessor
+**Data Operation Module**: Provides field expressions and query conditions
+**Extension Module**: Integrates validator and exception handling systems
+
+## API Reference
+
+### Field Definition Classes
 
 ```python
-from typing import TypeVar, Generic, Any, Optional, List, Callable
-import sqlalchemy as sa
+# Core field function
+column(
+    type="auto", name=None,
+    # SQLAlchemy parameters
+    primary_key=False, nullable=True, default=None, index=False, unique=False,
+    autoincrement="auto", doc=None, key=None, onupdate=None, comment=None,
+    system=False, server_default=None, server_onupdate=None, quote=None, info=None,
+    # Enhanced functionality parameters
+    default_factory=None, validators=None, insert_default=None,
+    # Performance optimization parameters
+    deferred=False, deferred_group=None, active_history=False, deferred_raiseload=None,
+    # Code generation parameters
+    init=None, repr=None, compare=None, hash=None, kw_only=None,
+    **kwargs  # Type-specific parameters
+)
 
-T = TypeVar('T')
-
-class FieldType(Generic[T]):
-    """Base class for all field types"""
-    
-    def __init__(
-        self,
-        type: str,
-        nullable: bool = True,
-        default: Any = None,
-        default_factory: Optional[Callable] = None,
-        server_default: Any = None,
-        primary_key: bool = False,
-        unique: bool = False,
-        index: bool = False,
-        validators: Optional[List[Callable]] = None,
-        init: bool = True,
-        repr: bool = True,
-        compare: bool = True,
-        hash: bool = False,
-        kw_only: bool = False,
-        deferred: bool = False,
-        **kwargs
-    ):
-        self.type = type
-        self.nullable = nullable
-        self.default = default
-        self.default_factory = default_factory
-        self.server_default = server_default
-        self.primary_key = primary_key
-        self.unique = unique
-        self.index = index
-        self.validators = validators or []
-        
-        # Code generation parameters
-        self.init = init
-        self.repr = repr
-        self.compare = compare
-        self.hash = hash
-        self.kw_only = kw_only
-        
-        # Performance parameters
-        self.deferred = deferred
-        
-        # Additional SQLAlchemy parameters
-        self.sa_kwargs = kwargs
-        
-        # Create SQLAlchemy column
-        self.column = self._create_column()
-    
-    def _create_column(self) -> sa.Column:
-        """Create SQLAlchemy column from field parameters"""
-        # Get SQLAlchemy type
-        sa_type = TypeRegistry.get_sqlalchemy_type(self.type, **self.sa_kwargs)
-        
-        # Build column parameters
-        column_kwargs = {
-            "nullable": self.nullable,
-            "primary_key": self.primary_key,
-            "unique": self.unique,
-            "index": self.index,
-        }
-        
-        # Add default values
-        if self.default is not None:
-            column_kwargs["default"] = self.default
-        elif self.default_factory is not None:
-            column_kwargs["default"] = self.default_factory
-        
-        if self.server_default is not None:
-            column_kwargs["server_default"] = self.server_default
-        
-        # Store field metadata for code generation
-        column_kwargs["info"] = {
-            "_sqlobjects_field": self,
-            "_codegen": {
-                "init": self.init,
-                "repr": self.repr,
-                "compare": self.compare,
-                "hash": self.hash,
-                "kw_only": self.kw_only,
-            },
-            "_performance": {
-                "deferred": self.deferred,
-            }
-        }
-        
-        return sa.Column(sa_type, **column_kwargs)
-    
-    def validate(self, value: T) -> T:
-        """Validate field value using registered validators"""
-        for validator in self.validators:
-            value = validator(value)
-        return value
-    
-    def __set_name__(self, owner, name):
-        """Called when field is assigned to model class"""
-        self.name = name
-        self.column.name = name
+# Column type classes
+StringColumn(length=None, **kwargs)
+TextColumn(**kwargs)
+IntegerColumn(type="integer", **kwargs)  # type: "integer"|"bigint"|"smallint"|"int"
+FloatColumn(type="float", **kwargs)     # type: "float"|"double"
+NumericColumn(precision=None, scale=None, **kwargs)
+BooleanColumn(**kwargs)
+DateTimeColumn(type="datetime", **kwargs)  # type: "datetime"|"date"|"time"|"interval"
+BinaryColumn(length=None, **kwargs)
+UuidColumn(**kwargs)
+JsonColumn(**kwargs)
+ArrayColumn(item_type, dimensions=1, **kwargs)
+EnumColumn(enum_class, **kwargs)
+IdentityColumn(start=1, increment=1, minvalue=None, maxvalue=None, cycle=False, cache=None, **kwargs)
+ComputedColumn(sqltext, persisted=None, column_type="auto", **kwargs)
 ```
 
-### Parameter Processing Pipeline
+### Function Expressions
 
 ```python
-class ParameterProcessor:
-    """Process and validate field parameters"""
-    
-    @staticmethod
-    def extract_sqlalchemy_params(kwargs: dict) -> tuple[dict, dict]:
-        """Separate SQLAlchemy parameters from field parameters"""
-        
-        # SQLAlchemy-specific parameters
-        sa_params = {}
-        field_params = {}
-        
-        # Known SQLAlchemy parameters
-        sa_param_names = {
-            "length", "precision", "scale", "collation", "charset",
-            "autoincrement", "doc", "comment", "system", "onupdate",
-            "quote", "key", "redefined", "info"
-        }
-        
-        for key, value in kwargs.items():
-            if key in sa_param_names:
-                sa_params[key] = value
-            else:
-                field_params[key] = value
-        
-        return sa_params, field_params
-    
-    @staticmethod
-    def process_init_parameter(field_type: str, **kwargs) -> bool:
-        """Determine if field should participate in __init__"""
-        
-        # Explicit init parameter takes precedence
-        if "init" in kwargs:
-            return kwargs["init"]
-        
-        # Auto-generated fields should not be in __init__
-        if kwargs.get("primary_key") and kwargs.get("autoincrement", True):
-            return False
-        
-        # Server-generated fields should not be in __init__
-        if kwargs.get("server_default") is not None:
-            return False
-        
-        # Fields with automatic defaults might not need init
-        if kwargs.get("default_factory") is not None:
-            return True  # User might want to override
-        
-        # Default: include in __init__
-        return True
-    
-    @staticmethod
-    def validate_parameter_combinations(field_type: str, **kwargs):
-        """Validate parameter combinations make sense"""
-        
-        # Cannot have both default and default_factory
-        if kwargs.get("default") is not None and kwargs.get("default_factory") is not None:
-            raise ValueError("Cannot specify both 'default' and 'default_factory'")
-        
-        # Primary key fields should not be nullable
-        if kwargs.get("primary_key") and kwargs.get("nullable", True):
-            raise ValueError("Primary key fields cannot be nullable")
-        
-        # Unique fields with default values might cause issues
-        if kwargs.get("unique") and kwargs.get("default") is not None:
-            import warnings
-            warnings.warn("Unique fields with default values may cause constraint violations")
-        
-        # Type-specific validations
-        if field_type == "string":
-            if "length" not in kwargs:
-                kwargs["length"] = 255  # Default string length
-        
-        elif field_type == "decimal":
-            if "precision" not in kwargs:
-                kwargs["precision"] = 10
-            if "scale" not in kwargs:
-                kwargs["scale"] = 2
+# String functions
+field.upper() / field.lower() / field.trim()
+field.substring(start, length) / field.length()
+field.concat(*args) / field.replace(old, new)
+field.left(length) / field.right(length)
+field.lpad(length, fill_char) / field.rpad(length, fill_char)
+field.ltrim(chars) / field.rtrim(chars)
+field.split_part(delimiter, field) / field.position(substring)
+field.reverse() / field.md5()
+field.regexp_replace(pattern, replacement, flags)
+
+# Numeric functions
+field.abs() / field.round(precision) / field.ceil() / field.floor()
+field.sqrt() / field.power(exponent) / field.mod(divisor)
+field.sign() / field.trunc(precision) / field.exp() / field.ln() / field.log(base)
+field.sum() / field.avg() / field.count_distinct()
+
+# DateTime functions
+field.extract(field) / field.year() / field.month() / field.day()
+field.hour() / field.minute()
+field.date_trunc(precision) / field.age_in_years() / field.age_in_months()
+field.days_between(end_date) / field.to_char(format_str) / field.add_days(days)
+
+# JSON functions
+field.extract_path(path) / field.extract_text(path)
+
+# Generic functions
+field.cast(type_, **kwargs) / field.coalesce(*values) / field.nullif(value)
+field.case(*conditions, else_=None) / field.greatest(*args) / field.least(*args)
 ```
 
-### Field Shortcut Functions
+### Utility Functions
 
 ```python
-# Shortcut field creation functions
-def StringColumn(length: int = 255, **kwargs) -> FieldType[str]:
-    """Create string field with specified length"""
-    return FieldType(type="string", length=length, **kwargs)
+# Identity and computed columns
+identity(start=1, increment=1, minvalue=None, maxvalue=None, cycle=False, cache=None, **kwargs)
+computed(sqltext, persisted=None, column_type="auto", **kwargs)
 
-def IntegerColumn(**kwargs) -> FieldType[int]:
-    """Create integer field"""
-    return FieldType(type="integer", **kwargs)
+# Foreign key constraints
+foreign_key(reference, type="integer", nullable=True, **kwargs)
 
-def BooleanColumn(default: bool = None, **kwargs) -> FieldType[bool]:
-    """Create boolean field"""
-    return FieldType(type="boolean", default=default, **kwargs)
+# Type system
+register_field_type(field_type, type_name, comparator=None, aliases=None, default_params=None)
+create_type_instance(type_name, kwargs)
+get_type_definition(type_name)
 
-def DateTimeColumn(**kwargs) -> FieldType[datetime]:
-    """Create datetime field"""
-    return FieldType(type="datetime", **kwargs)
+# SQLAlchemy integration
+ForeignKey(reference, **kwargs)  # Direct use of SQLAlchemy ForeignKey
 
-def JsonColumn(default=None, **kwargs) -> FieldType[dict]:
-    """Create JSON field"""
-    if default is None:
-        default = dict
-    return FieldType(type="json", default_factory=default, **kwargs)
+# Field compatibility
+is_field_definition(attr)
+get_column_from_field(field_def)
 
-# Generic column function
-def column(type: str, **kwargs) -> FieldType:
-    """Generic field creation function"""
-    return FieldType(type=type, **kwargs)
+# Validation and metadata
+get_field_validators(model_class, field_name)
+get_model_metadata(model_class)
 ```
 
-### Advanced Field Types
+### Type Registration System
 
 ```python
-class ArrayColumn(FieldType[List[T]]):
-    """PostgreSQL array field"""
-    
-    def __init__(self, item_type: str, dimensions: int = 1, **kwargs):
-        self.item_type = item_type
-        self.dimensions = dimensions
-        
-        # Get item SQLAlchemy type
-        item_sa_type = TypeRegistry.get_sqlalchemy_type(item_type)
-        
-        super().__init__(
-            type="array",
-            item_type=item_sa_type,
-            dimensions=dimensions,
-            **kwargs
-        )
+# TypeRegistry core methods
+registry = TypeRegistry()
+registry.register_type(field_type, name, comparator, aliases, default_params)
+registry.get_type_config(name)
+registry.create_enhanced_type(name, **params)
 
-class EnumColumn(FieldType[T]):
-    """Enum field with Python enum integration"""
-    
-    def __init__(self, enum_class, **kwargs):
-        self.enum_class = enum_class
-        
-        # Extract enum values
-        enum_values = [item.value for item in enum_class]
-        
-        super().__init__(
-            type="enum",
-            enum_class=enum_class,
-            values=enum_values,
-            **kwargs
-        )
-    
-    def validate(self, value):
-        """Validate enum value"""
-        if value is not None and not isinstance(value, self.enum_class):
-            # Try to convert string to enum
-            if isinstance(value, str):
-                try:
-                    value = self.enum_class(value)
-                except ValueError:
-                    raise ValueError(f"Invalid enum value: {value}")
-            else:
-                raise ValueError(f"Expected {self.enum_class.__name__}, got {type(value)}")
-        
-        return super().validate(value)
+# Auto type
+Auto()  # Automatic type inference placeholder
 
-class UuidColumn(FieldType[str]):
-    """UUID field with automatic generation"""
-    
-    def __init__(self, **kwargs):
-        import uuid
-        
-        # Default to UUID4 generation
-        if "default_factory" not in kwargs and "default" not in kwargs:
-            kwargs["default_factory"] = lambda: str(uuid.uuid4())
-        
-        super().__init__(type="uuid", **kwargs)
+# ColumnAttribute enhanced features
+attr.validate_value(value, field_name)
+attr.get_effective_default()
+attr.get_field_metadata()
+attr.get_codegen_params()
 ```
 
-### Field Comparison System
+## Usage Guide
+
+### Basic Usage
 
 ```python
-class FieldComparator:
-    """Provides comparison operations for fields"""
-    
-    def __init__(self, field: FieldType, column: sa.Column):
-        self.field = field
-        self.column = column
-    
-    def __eq__(self, other):
-        """Equality comparison"""
-        return self.column == other
-    
-    def __ne__(self, other):
-        """Inequality comparison"""
-        return self.column != other
-    
-    def __lt__(self, other):
-        """Less than comparison"""
-        return self.column < other
-    
-    def __le__(self, other):
-        """Less than or equal comparison"""
-        return self.column <= other
-    
-    def __gt__(self, other):
-        """Greater than comparison"""
-        return self.column > other
-    
-    def __ge__(self, other):
-        """Greater than or equal comparison"""
-        return self.column >= other
-    
-    def like(self, pattern: str):
-        """SQL LIKE operation"""
-        return self.column.like(pattern)
-    
-    def ilike(self, pattern: str):
-        """Case-insensitive LIKE operation"""
-        return self.column.ilike(pattern)
-    
-    def in_(self, values):
-        """SQL IN operation"""
-        return self.column.in_(values)
-    
-    def between(self, low, high):
-        """SQL BETWEEN operation"""
-        return self.column.between(low, high)
-    
-    def contains(self, value):
-        """Array/JSON contains operation (PostgreSQL)"""
-        if hasattr(self.column.type, 'contains'):
-            return self.column.contains(value)
-        else:
-            raise NotImplementedError("Contains operation not supported for this field type")
-    
-    def startswith(self, prefix: str):
-        """String starts with operation"""
-        return self.column.like(f"{prefix}%")
-    
-    def endswith(self, suffix: str):
-        """String ends with operation"""
-        return self.column.like(f"%{suffix}")
+# Basic field definition
+class User(ObjectModel):
+    name: Column[str] = StringColumn(length=50)
+    age: Column[int] = IntegerColumn()
+    email: Column[str] = StringColumn(length=100, unique=True)
+    is_active: Column[bool] = BooleanColumn(default=True)
+
+# Field function calls
+users = await User.objects.filter(
+    User.name.upper() == "JOHN",
+    User.age >= 18
+).all()
+
+# Basic validation
+class Product(ObjectModel):
+    name: Column[str] = StringColumn(
+        length=100,
+        validators=[LengthValidator(min_length=1)]
+    )
+    price: Column[Decimal] = NumericColumn(
+        precision=10, scale=2,
+        validators=[RangeValidator(min_value=0)]
+    )
 ```
 
-### Field Processing in Models
+### Advanced Usage
 
 ```python
-class FieldProcessor:
-    """Process fields during model class creation"""
-    
-    @staticmethod
-    def process_model_fields(model_class, namespace: dict):
-        """Process all fields in model class"""
-        fields = {}
-        columns = {}
-        
-        # Find all field definitions
-        for name, value in namespace.items():
-            if isinstance(value, FieldType):
-                # Process field
-                field = value
-                field.__set_name__(model_class, name)
-                
-                fields[name] = field
-                columns[name] = field.column
-                
-                # Create field comparator for queries
-                comparator = FieldComparator(field, field.column)
-                setattr(model_class, name, comparator)
-        
-        # Store field metadata
-        model_class.__fields__ = fields
-        model_class.__columns__ = columns
-        
-        # Create SQLAlchemy table
-        table_name = getattr(model_class.Config, "table_name", None)
-        if not table_name:
-            table_name = FieldProcessor._generate_table_name(model_class.__name__)
-        
-        model_class.__table__ = sa.Table(
-            table_name,
-            model_class.metadata,
-            *columns.values(),
-            **FieldProcessor._get_table_kwargs(model_class)
-        )
-    
-    @staticmethod
-    def _generate_table_name(class_name: str) -> str:
-        """Generate table name from class name"""
-        # Convert CamelCase to snake_case and pluralize
-        import re
-        
-        # Insert underscores before uppercase letters
-        s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', class_name)
-        snake_case = re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
-        
-        # Simple pluralization
-        if snake_case.endswith('y'):
-            return snake_case[:-1] + 'ies'
-        elif snake_case.endswith(('s', 'sh', 'ch', 'x', 'z')):
-            return snake_case + 'es'
-        else:
-            return snake_case + 's'
-    
-    @staticmethod
-    def _get_table_kwargs(model_class) -> dict:
-        """Get additional table creation arguments"""
-        kwargs = {}
-        
-        if hasattr(model_class, 'Config'):
-            config = model_class.Config
-            
-            # Schema
-            if hasattr(config, 'schema'):
-                kwargs['schema'] = config.schema
-            
-            # Indexes
-            if hasattr(config, 'indexes'):
-                # Process indexes
-                pass
-            
-            # Constraints
-            if hasattr(config, 'constraints'):
-                # Process constraints
-                pass
-        
-        return kwargs
+# Complex field configuration
+class User(ObjectModel):
+    username: Column[str] = column(
+        type="string", length=50,
+        nullable=False, unique=True,
+        validators=[validate_length(3, 50), validate_regex(r"^[a-zA-Z0-9_]+$")],
+        init=True, repr=True, compare=True
+    )
+  
+    password_hash: Column[str] = column(
+        type="string", length=255,
+        nullable=False,
+        repr=False  # Don't show in __repr__
+    )
+  
+    created_at: Column[datetime] = column(
+        type="datetime",
+        default_factory=datetime.now,
+        init=False  # Don't include in __init__
+    )
+  
+    # Performance optimization fields
+    bio: Column[str] = column(
+        type="text",
+        deferred=True,  # Lazy loading
+        deferred_group="details"
+    )
+  
+    # Identity and computed columns
+    id: Column[int] = identity()
+    full_name: Column[str] = computed(
+        "first_name || ' ' || last_name",
+        column_type="string"
+    )
+  
+    # Foreign key fields
+    author_id: Column[int] = foreign_key("users.id")
+    category_id: Column[int] = foreign_key("categories.id", nullable=False, index=True)
+
+# Chained function calls
+users = await User.objects.annotate(
+    display_name=User.first_name.concat(" ", User.last_name).upper(),
+    email_domain=User.email.split_part("@", 2),
+    age_years=User.birth_date.age_in_years(),
+    salary_rounded=User.salary.round(2)
+).filter(
+    User.name.upper().like("ADMIN%"),
+    User.birth_date.age_in_years() >= 18,
+    User.salary.abs() > 5000
+).all()
+
+# Subquery usage
+avg_salary = User.objects.aggregate(
+    avg_salary=func.avg(User.salary)
+).subquery()
+
+high_earners = await User.objects.filter(
+    User.salary > avg_salary
+).annotate(
+    salary_ratio=User.salary / avg_salary
+).all()
+
+# Custom validators
+def validate_password_strength(value):
+    if len(value) < 8:
+        raise ValidationError("Password too short")
+    if not any(c.isupper() for c in value):
+        raise ValidationError("Password must contain uppercase")
+
+class User(ObjectModel):
+    password: Column[str] = column(
+        type="string", length=255,
+        validators=[validate_password_strength]
+    )
+  
+    def validate(self):
+        if self.username.lower() in self.email.lower():
+            raise ValidationError("Username cannot be part of email")
+
+# Type registration and custom types
+from sqlalchemy import INET
+
+register_field_type(
+    INET, 'inet',
+    aliases=['ip_address'],
+    default_params={}
+)
+
+class Server(ObjectModel):
+    ip_address: Column[str] = column(type="inet")
+  
+# Field metadata access
+metadata = User.username.get_field_metadata()
+validators = get_field_validators(User, 'username')
+model_info = get_model_metadata(User)
 ```
-
-### Validation Integration
-
-```python
-class FieldValidator:
-    """Field-level validation system"""
-    
-    def __init__(self, field: FieldType):
-        self.field = field
-    
-    def validate_value(self, value, instance=None):
-        """Validate single field value"""
-        # Skip validation for None values if field is nullable
-        if value is None and self.field.nullable:
-            return value
-        
-        # Required field validation
-        if value is None and not self.field.nullable:
-            raise ValidationError(f"Field '{self.field.name}' is required")
-        
-        # Type validation
-        value = self._validate_type(value)
-        
-        # Custom validators
-        for validator in self.field.validators:
-            value = validator(value)
-        
-        return value
-    
-    def _validate_type(self, value):
-        """Validate value type matches field type"""
-        if value is None:
-            return value
-        
-        # Type-specific validation
-        if self.field.type == "string":
-            if not isinstance(value, str):
-                value = str(value)
-            
-            # Length validation
-            max_length = self.field.sa_kwargs.get("length")
-            if max_length and len(value) > max_length:
-                raise ValidationError(
-                    f"String too long: {len(value)} > {max_length}"
-                )
-        
-        elif self.field.type == "integer":
-            if not isinstance(value, int):
-                try:
-                    value = int(value)
-                except (ValueError, TypeError):
-                    raise ValidationError(f"Invalid integer: {value}")
-        
-        elif self.field.type == "boolean":
-            if not isinstance(value, bool):
-                # Convert common boolean representations
-                if isinstance(value, str):
-                    if value.lower() in ("true", "1", "yes", "on"):
-                        value = True
-                    elif value.lower() in ("false", "0", "no", "off"):
-                        value = False
-                    else:
-                        raise ValidationError(f"Invalid boolean: {value}")
-                elif isinstance(value, int):
-                    value = bool(value)
-                else:
-                    raise ValidationError(f"Invalid boolean: {value}")
-        
-        return value
-```
-
-### Field Caching and Performance
-
-```python
-class FieldCache:
-    """Cache field metadata for performance"""
-    
-    def __init__(self):
-        self._field_cache = {}
-        self._type_cache = {}
-    
-    @lru_cache(maxsize=500)
-    def get_field_info(self, model_class, field_name):
-        """Get cached field information"""
-        if model_class not in self._field_cache:
-            self._build_field_cache(model_class)
-        
-        return self._field_cache[model_class].get(field_name)
-    
-    def _build_field_cache(self, model_class):
-        """Build field cache for model class"""
-        field_info = {}
-        
-        for name, field in model_class.__fields__.items():
-            field_info[name] = {
-                "type": field.type,
-                "nullable": field.nullable,
-                "primary_key": field.primary_key,
-                "deferred": field.deferred,
-                "validators": field.validators,
-                "init": field.init,
-                "repr": field.repr,
-            }
-        
-        self._field_cache[model_class] = field_info
-    
-    def clear_cache(self):
-        """Clear all cached field information"""
-        self._field_cache.clear()
-        self._type_cache.clear()
-        TypeRegistry.get_sqlalchemy_type.cache_clear()
-
-# Field cache is managed at the class level through FieldCacheMixin
-```
-
-This field system architecture provides the foundation for SQLObjects' type-safe, high-performance field processing with comprehensive validation and cross-database compatibility.

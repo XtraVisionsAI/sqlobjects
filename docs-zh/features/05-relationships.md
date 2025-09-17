@@ -1,12 +1,12 @@
-# Relationships and Joins
+# 关系和连接
 
-## Overview
+## 概述
 
-SQLObjects provides comprehensive relationship support with automatic JOIN optimization, lazy and eager loading strategies, and intuitive relationship traversal syntax.
+SQLObjects 提供了全面的关系支持，包括自动 JOIN 优化、延迟和急切加载策略，以及直观的关系遍历语法。
 
-## Quick Start
+## 快速开始
 
-### Basic Relationships
+### 基础关系
 
 ```python
 from sqlobjects.model import ObjectModel
@@ -20,30 +20,30 @@ class User(ObjectModel):
 class Post(ObjectModel):
     title: Column[str] = StringColumn(length=200)
     content: Column[str] = TextColumn()
-    author_id: Column[int] = foreign_key("users.id")  # Foreign key constraint
-    
-    # Relationship using unified relationship() function
+    author_id: Column[int] = foreign_key("users.id")  # 外键约束
+  
+    # 使用统一的 relationship() 函数定义关系
     author = relationship("User", foreign_keys="author_id")
 
-# Add reverse relationship to User
+# 向 User 添加反向关系
 User.posts = relationship("Post", foreign_keys="Post.author_id")
 ```
 
-### Using Relationships
+### 使用关系
 
 ```python
-# Access related objects
+# 访问相关对象
 post = await Post.objects.get(Post.id == 1)
-author = await post.author  # Lazy loading
+author = await post.author  # 延迟加载
 
-# Reverse relationship
+# 反向关系
 user = await User.objects.get(User.id == 1)
-user_posts = await user.posts.all()  # QuerySet for reverse relationship
+user_posts = await user.posts.all()  # 反向关系的查询集
 ```
 
-## Relationship Types
+## 关系类型
 
-### One-to-Many (Foreign Key)
+### 一对多（外键）
 
 ```python
 class Department(ObjectModel):
@@ -51,23 +51,23 @@ class Department(ObjectModel):
 
 class Employee(ObjectModel):
     name: Column[str] = StringColumn(length=100)
-    department_id: Column[int] = foreign_key("departments.id")  # Creates FK constraint
-    
-    # Many-to-one relationship
+    department_id: Column[int] = foreign_key("departments.id")  # 创建外键约束
+  
+    # 多对一关系
     department = relationship("Department", foreign_keys="department_id")
 
-# Add reverse relationship to Department
+# 向 Department 添加反向关系
 Department.employees = relationship("Employee", foreign_keys="Employee.department_id")
 
-# Usage
+# 用法
 employee = await Employee.objects.get(Employee.id == 1)
-dept = await employee.department  # Single object
+dept = await employee.department  # 单个对象
 
 department = await Department.objects.get(Department.id == 1)
-employees = await department.employees.all()  # List of objects
+employees = await department.employees.all()  # 对象列表
 ```
 
-### One-to-One
+### 一对一
 
 ```python
 class User(ObjectModel):
@@ -75,23 +75,23 @@ class User(ObjectModel):
 
 class Profile(ObjectModel):
     bio: Column[str] = TextColumn()
-    user_id: Column[int] = foreign_key("users.id", unique=True)  # Unique constraint
-    
-    # One-to-one relationship
+    user_id: Column[int] = foreign_key("users.id", unique=True)  # 唯一约束
+  
+    # 一对一关系
     user = relationship("User", foreign_keys="user_id")
 
-# Add reverse one-to-one relationship to User
+# 向 User 添加反向一对一关系
 User.profile = relationship("Profile", foreign_keys="Profile.user_id", unique=True)
 
-# Usage
+# 用法
 profile = await Profile.objects.get(Profile.id == 1)
-user = await profile.user  # Single object
+user = await profile.user  # 单个对象
 
 user = await User.objects.get(User.id == 1)
-profile = await user.profile  # Single object (or None)
+profile = await user.profile  # 单个对象（或 None）
 ```
 
-### Many-to-Many
+### 多对多
 
 ```python
 class Post(ObjectModel):
@@ -100,87 +100,87 @@ class Post(ObjectModel):
 class Tag(ObjectModel):
     name: Column[str] = StringColumn(length=50)
 
-# Association table (automatically created)
+# 关联表（自动创建）
 class PostTag(ObjectModel):
     post_id: Column[int] = foreign_key("posts.id", primary_key=True)
     tag_id: Column[int] = foreign_key("tags.id", primary_key=True)
 
-# Add many-to-many relationships using through parameter
+# 使用 through 参数添加多对多关系
 Post.tags = relationship("Tag", through="PostTag")
 Tag.posts = relationship("Post", through="PostTag")
 
-# Usage
+# 用法
 post = await Post.objects.get(Post.id == 1)
-tags = await post.tags.all()  # List of tags
+tags = await post.tags.all()  # 标签列表
 
 tag = await Tag.objects.get(Tag.id == 1)
-posts = await tag.posts.all()  # List of posts
+posts = await tag.posts.all()  # 文章列表
 ```
 
-## Loading Strategies
+## 加载策略
 
-### Lazy Loading (Default)
+### 延迟加载（默认）
 
 ```python
-# Lazy loading - queries database when accessed
+# 延迟加载 - 访问时查询数据库
 post = await Post.objects.get(Post.id == 1)
-author = await post.author  # Separate query executed here
+author = await post.author  # 在此处执行单独查询
 
-# N+1 query problem example
+# N+1 查询问题示例
 posts = await Post.objects.all()
 for post in posts:
-    author = await post.author  # N additional queries!
+    author = await post.author  # 执行 N 次额外查询！
 ```
 
-### Eager Loading with select_related
+### 使用 select_related 的急切加载
 
 ```python
-# Use select_related for foreign key relationships (JOIN)
+# 对外键关系使用 select_related（JOIN）
 posts = await Post.objects.select_related("author").all()
 for post in posts:
-    author = post.author  # No additional query - already loaded
+    author = post.author  # 无额外查询 - 已经加载
 
-# Multiple relationships
+# 多个关系
 posts = await Post.objects.select_related("author", "category").all()
 
-# Nested relationships
+# 嵌套关系
 comments = await Comment.objects.select_related("post__author").all()
 
-# String path syntax (Django-style)
+# 字符串路径语法（Django 风格）
 posts = await Post.objects.select_related("author").all()
 ```
 
-### Eager Loading with prefetch_related
+### 使用 prefetch_related 的急切加载
 
 ```python
-# Use prefetch_related for reverse foreign keys and many-to-many
+# 对反向外键和多对多关系使用 prefetch_related
 users = await User.objects.prefetch_related("posts").all()
 for user in users:
-    posts = await user.posts.all()  # No additional queries
+    posts = await user.posts.all()  # 无额外查询
 
-# Many-to-many relationships
+# 多对多关系
 posts = await Post.objects.prefetch_related("tags").all()
 for post in posts:
-    tags = await post.tags.all()  # No additional queries
+    tags = await post.tags.all()  # 无额外查询
 
-# Multiple prefetch
+# 多个预取
 users = await User.objects.prefetch_related("posts", "groups", "permissions").all()
 
-# String path syntax (Django-style)
+# 字符串路径语法（Django 风格）
 users = await User.objects.prefetch_related("posts").all()
 ```
 
-### Advanced Prefetch Configuration
+### 高级预取配置
 
 ```python
-# Advanced prefetch with filtering and ordering
+# 带有过滤和排序的高级预取
 users = await User.objects.prefetch_related(
     published_posts=Post.objects.filter(Post.is_published == True)
                                .order_by('-created_at')
                                .limit(5)
 ).all()
 
-# Multiple advanced configurations
+# 多个高级配置
 users = await User.objects.prefetch_related(
     recent_posts=Post.objects.filter(
         Post.created_at >= datetime.now() - timedelta(days=30)
@@ -190,68 +190,68 @@ users = await User.objects.prefetch_related(
                              .limit(3)
 ).all()
 
-# Mixed simple and advanced prefetch
+# 混合简单和高级预取
 users = await User.objects.prefetch_related(
-    'profile',  # Simple prefetch
+    'profile',  # 简单预取
     recent_comments=Comment.objects.filter(
         Comment.created_at >= datetime.now() - timedelta(days=7)
     ).order_by('-created_at')
 ).all()
 
-# Access prefetched data
+# 访问预取的数据
 for user in users:
-    # Advanced prefetch results are directly accessible
-    recent_posts = user.recent_posts  # List of filtered/ordered posts
-    popular_posts = user.popular_posts  # List of popular posts
+    # 高级预取结果可直接访问
+    recent_posts = user.recent_posts  # 过滤/排序后的文章列表
+    popular_posts = user.popular_posts  # 热门文章列表
 ```
 
-### Combining Loading Strategies
+### 组合加载策略
 
 ```python
-# Combine select_related and prefetch_related
+# 组合 select_related 和 prefetch_related
 posts = await Post.objects.select_related("author").prefetch_related("tags", "comments").all()
 
 for post in posts:
-    author = post.author  # From JOIN (select_related)
-    tags = await post.tags.all()  # From prefetch (prefetch_related)
-    comments = await post.comments.all()  # From prefetch
+    author = post.author  # 来自 JOIN (select_related)
+    tags = await post.tags.all()  # 来自预取 (prefetch_related)
+    comments = await post.comments.all()  # 来自预取
 ```
 
-## Advanced Relationship Queries
+## 高级关系查询
 
-### Filtering by Related Fields
+### 按相关字段过滤
 
 ```python
-# Filter by foreign key field
+# 按外键字段过滤
 posts = await Post.objects.filter(Post.author.username == "john").all()
 
-# Filter by reverse relationship
+# 按反向关系过滤
 users = await User.objects.filter(User.posts.title.like("%python%")).all()
 
-# Multiple relationship filters
+# 多个关系过滤器
 posts = await Post.objects.filter(
     Post.author.is_active == True,
     Post.category.name == "Technology"
 ).all()
 ```
 
-### Annotations with Relationships
+### 关系的注解
 
 ```python
 from sqlobjects.expressions import func
 
-# Count related objects
+# 计算相关对象
 users = await User.objects.annotate(
     post_count=func.count(User.posts)
 ).all()
 
-# Aggregate related fields
+# 聚合相关字段
 users = await User.objects.annotate(
     latest_post=func.max(User.posts.created_at),
     avg_post_length=func.avg(func.length(User.posts.content))
 ).all()
 
-# Filter by aggregated values
+# 按聚合值过滤
 active_authors = await User.objects.annotate(
     post_count=func.count(User.posts)
 ).filter(
@@ -259,14 +259,14 @@ active_authors = await User.objects.annotate(
 ).all()
 ```
 
-### Subqueries with Relationships
+### 关系的子查询
 
 ```python
-# Exists subquery
+# 存在子查询
 has_posts = Post.objects.filter(Post.author_id == User.id).subquery(query_type="exists")
 authors = await User.objects.filter(has_posts).all()
 
-# Scalar subquery
+# 标量子查询
 latest_post_date = Post.objects.filter(
     Post.author_id == User.id
 ).aggregate(
@@ -280,22 +280,22 @@ active_authors = await User.objects.annotate(
 ).all()
 ```
 
-## Manual Joins
+## 手动连接
 
-### Explicit JOIN Operations
+### 显式 JOIN 操作
 
 ```python
-# Inner join
+# 内连接
 posts_with_authors = await Post.objects.join(
     User, Post.author_id == User.id
 ).all()
 
-# Left join
+# 左连接
 all_posts = await Post.objects.leftjoin(
     User, Post.author_id == User.id
 ).all()
 
-# Multiple joins
+# 多个连接
 posts_with_details = await Post.objects.join(
     User, Post.author_id == User.id
 ).join(
@@ -303,10 +303,10 @@ posts_with_details = await Post.objects.join(
 ).all()
 ```
 
-### JOIN with Subqueries
+### 子查询的 JOIN
 
 ```python
-# Join with subquery
+# 与子查询连接
 active_users = User.objects.filter(User.is_active == True).subquery("active_users")
 posts = await Post.objects.join(
     active_users, 
@@ -314,30 +314,30 @@ posts = await Post.objects.join(
 ).all()
 ```
 
-## Relationship Management
+## 关系管理
 
-### Adding Related Objects
+### 添加相关对象
 
 ```python
-# Create related objects
+# 创建相关对象
 user = await User.objects.create(username="author")
 post = await Post.objects.create(
     title="My Post",
-    author_id=user.id  # Set foreign key
+    author_id=user.id  # 设置外键
 )
 
-# Many-to-many relationships
+# 多对多关系
 post = await Post.objects.get(Post.id == 1)
 tag = await Tag.objects.get(Tag.id == 1)
 
-# Add to many-to-many (requires manual association table management)
+# 添加到多对多（需要手动管理关联表）
 await PostTag.objects.create(post_id=post.id, tag_id=tag.id)
 ```
 
-### Bulk Relationship Operations
+### 批量关系操作
 
 ```python
-# Bulk create with relationships
+# 带关系的批量创建
 posts_data = [
     {"title": "Post 1", "author_id": 1, "category_id": 1},
     {"title": "Post 2", "author_id": 1, "category_id": 2},
@@ -345,7 +345,7 @@ posts_data = [
 ]
 posts = await Post.objects.bulk_create(posts_data)
 
-# Bulk many-to-many associations
+# 批量多对多关联
 associations = [
     {"post_id": 1, "tag_id": 1},
     {"post_id": 1, "tag_id": 2},
@@ -354,73 +354,73 @@ associations = [
 await PostTag.objects.bulk_create(associations)
 ```
 
-## Performance Optimization
+## 性能优化
 
-### Relationship Loading Best Practices
+### 关系加载最佳实践
 
 ```python
-# Good: Use select_related for foreign keys
+# 好的做法：对外键使用 select_related
 posts = await Post.objects.select_related("author", "category").all()
 
-# Good: Use prefetch_related for reverse relationships
+# 好的做法：对反向关系使用 prefetch_related
 users = await User.objects.prefetch_related("posts", "comments").all()
 
-# Avoid: N+1 queries
+# 避免：N+1 查询
 posts = await Post.objects.all()
 for post in posts:
-    author = await post.author  # N additional queries!
+    author = await post.author  # N 次额外查询！
 
-# Good: Combine loading strategies
+# 好的做法：组合加载策略
 posts = await Post.objects.select_related("author").prefetch_related("tags").all()
 ```
 
-### Selective Field Loading
+### 选择性字段加载
 
 ```python
-# Load only needed fields from related objects
+# 只从相关对象加载需要的字段
 posts = await Post.objects.select_related("author").only(
     "title", "content", "author__username", "author__email"
 ).all()
 
-# Defer heavy fields from related objects
+# 延迟相关对象的重字段
 posts = await Post.objects.select_related("author").defer(
     "content", "author__bio"
 ).all()
 ```
 
-### Relationship Counting
+### 关系计数
 
 ```python
-# Efficient counting without loading objects
+# 高效计数不加载对象
 user_count = await User.objects.filter(User.posts__isnull=False).distinct().count()
 
-# Count with annotations
+# 带注解的计数
 users_with_counts = await User.objects.annotate(
     post_count=func.count(User.posts),
     comment_count=func.count(User.comments)
 ).all()
 ```
 
-## Complex Relationship Patterns
+## 复杂关系模式
 
-### Self-Referencing Relationships
+### 自引用关系
 
 ```python
 class Category(ObjectModel):
     name: Column[str] = StringColumn(length=100)
     parent_id: Column[int] = foreign_key("categories.id", nullable=True)
-    
-    # Self-referencing relationships
+  
+    # 自引用关系
     parent: Column["Category"] = relationship("Category", remote_side="id", back_populates="children")
     children: Column[list["Category"]] = relationship("Category", back_populates="parent")
 
-# Usage
+# 用法
 category = await Category.objects.get(Category.id == 1)
 parent = await category.parent
 children = await category.children.all()
 ```
 
-### Polymorphic Relationships
+### 多态关系
 
 ```python
 class Content(ObjectModel):
@@ -434,11 +434,11 @@ class Video(Content):
     duration: Column[int] = IntegerColumn()
     video_url: Column[str] = StringColumn(length=500)
 
-# Query polymorphic relationships
+# 查询多态关系
 contents = await Content.objects.filter(Content.content_type == "article").all()
 ```
 
-### Through Model Relationships
+### 通过模型的关系
 
 ```python
 class Membership(ObjectModel):
@@ -461,19 +461,19 @@ class Group(ObjectModel):
         back_populates="groups"
     )
 
-# Access through model data
+# 访问通过模型的数据
 memberships = await Membership.objects.filter(
     Membership.user_id == 1,
     Membership.role == "admin"
 ).all()
 ```
 
-## Best Practices
+## 最佳实践
 
-### Relationship Design
+### 关系设计
 
 ```python
-# Use descriptive relationship names
+# 使用描述性的关系名称
 class Order(ObjectModel):
     customer_id: Column[int] = foreign_key("users.id")
     customer: Column["User"] = relationship("User", back_populates="orders")
@@ -482,36 +482,36 @@ class User(ObjectModel):
     orders: Column[list["Order"]] = relationship("Order", back_populates="customer")
 ```
 
-### Loading Strategy Selection
+### 加载策略选择
 
 ```python
-# Use select_related for:
-# - Foreign key relationships (many-to-one)
-# - One-to-one relationships
+# 在以下情况使用 select_related：
+# - 外键关系（多对一）
+# - 一对一关系
 posts = await Post.objects.select_related("author", "category").all()
 
-# Use prefetch_related for:
-# - Reverse foreign key relationships (one-to-many)
-# - Many-to-many relationships
+# 在以下情况使用 prefetch_related：
+# - 反向外键关系（一对多）
+# - 多对多关系
 users = await User.objects.prefetch_related("posts", "groups").all()
 ```
 
-### Error Handling
+### 错误处理
 
 ```python
 from sqlobjects.exceptions import DoesNotExist
 
-# Handle missing related objects
+# 处理缺失的相关对象
 try:
     post = await Post.objects.get(Post.id == 1)
     author = await post.author
 except DoesNotExist:
-    # Handle case where author was deleted
+    # 处理作者被删除的情况
     author = None
 
-# Check for None relationships
+# 检查空关系
 user = await User.objects.get(User.id == 1)
-profile = await user.profile  # May be None for one-to-one
+profile = await user.profile  # 对于一对一关系可能为 None
 if profile:
     bio = profile.bio
 ```

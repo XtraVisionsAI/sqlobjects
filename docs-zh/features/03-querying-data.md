@@ -1,31 +1,31 @@
-# Querying and Filtering Data
+# 查询和过滤数据
 
-## Overview
+## 概述
 
-SQLObjects provides a Django-style query API with chainable methods, Q objects for complex conditions, and powerful expression support for database operations.
+SQLObjects 提供了 Django 风格的查询 API，支持链式调用方法、用于复杂条件的 Q 对象，以及强大的数据库操作表达式支持。
 
-## Quick Start
+## 快速开始
 
-### Basic Queries
+### 基础查询
 
 ```python
-# Get all users
+# 获取所有用户
 users = await User.objects.all()
 
-# Filter by condition
+# 按条件过滤
 active_users = await User.objects.filter(User.is_active == True).all()
 
-# Get single object
+# 获取单个对象
 user = await User.objects.get(User.username == "john")
 
-# Check existence
+# 检查是否存在
 exists = await User.objects.filter(User.email == "john@example.com").exists()
 ```
 
-### Query Chaining
+### 查询链式调用
 
 ```python
-# Chain multiple conditions
+# 链接多个条件
 users = await (User.objects
     .filter(User.is_active == True)
     .filter(User.age >= 18)
@@ -34,138 +34,138 @@ users = await (User.objects
     .all())
 ```
 
-## Filtering
+## 过滤
 
-### Basic Conditions
+### 基础条件
 
 ```python
-# Equality
+# 相等条件
 users = await User.objects.filter(User.username == "john").all()
 
-# Comparison operators
+# 比较操作符
 adults = await User.objects.filter(User.age >= 18).all()
 recent = await User.objects.filter(User.created_at > datetime.now() - timedelta(days=7)).all()
 
-# String operations
+# 字符串操作
 users = await User.objects.filter(User.username.like("%admin%")).all()
-users = await User.objects.filter(User.email.ilike("%GMAIL%")).all()  # Case insensitive
+users = await User.objects.filter(User.email.ilike("%GMAIL%")).all()  # 不区分大小写
 ```
 
-### Multiple Conditions
+### 多条件查询
 
 ```python
-# AND conditions (default)
+# AND 条件（默认）
 users = await User.objects.filter(
     User.is_active == True,
     User.age >= 18,
     User.email.like("%@company.com")
 ).all()
 
-# Exclude conditions
+# 排除条件
 users = await User.objects.exclude(User.is_deleted == True).all()
 ```
 
-### Q Objects for Complex Logic
+### 使用 Q 对象进行复杂逻辑查询
 
 ```python
 from sqlobjects.queries import Q
 
-# OR conditions
+# OR 条件
 users = await User.objects.filter(
     Q(User.role == "admin") | Q(User.is_staff == True)
 ).all()
 
-# Complex combinations
+# 复杂组合
 users = await User.objects.filter(
     Q(User.age >= 18) & (Q(User.role == "admin") | Q(User.is_staff == True))
 ).all()
 
-# Negation
+# 否定条件
 users = await User.objects.filter(~Q(User.is_deleted == True)).all()
 ```
 
-## Ordering and Limiting
+## 排序和限制
 
-### Sorting
+### 排序
 
 ```python
-# Single field
+# 单字段排序
 users = await User.objects.order_by("username").all()
-users = await User.objects.order_by("-created_at").all()  # Descending
+users = await User.objects.order_by("-created_at").all()  # 降序
 
-# Multiple fields
+# 多字段排序
 users = await User.objects.order_by("department", "-salary").all()
 
-# Skip default ordering for performance
+# 跳过默认排序以提高性能
 count = await User.objects.skip_default_ordering().count()
 ```
 
-### Pagination
+### 分页
 
 ```python
-# Limit and offset
+# 限制和偏移
 users = await User.objects.limit(10).all()
 users = await User.objects.offset(20).limit(10).all()
 
-# Index and slice access
-first_user = await User.objects.get_item(0)  # First user
-last_user = await User.objects.get_item(-1)  # Last user
-users = await User.objects.get_item(slice(0, 10))  # First 10
-users = await User.objects.get_item(slice(20, 30))  # Items 20-30
+# 索引和切片访问
+first_user = await User.objects.get_item(0)  # 第一个用户
+last_user = await User.objects.get_item(-1)  # 最后一个用户
+users = await User.objects.get_item(slice(0, 10))  # 前 10 个
+users = await User.objects.get_item(slice(20, 30))  # 第 20-30 个
 ```
 
-## Field Selection
+## 字段选择
 
-### Specific Fields
+### 指定字段
 
 ```python
-# Load only specific fields
+# 只加载指定字段
 users = await User.objects.only("id", "username", "email").all()
 
-# Exclude heavy fields
+# 排除重字段
 users = await User.objects.defer("large_text_field", "binary_data").all()
 
-# Values as dictionaries
+# 以字典形式返回值
 user_data = await User.objects.values("id", "username", "email").all()
-# Result: [{"id": 1, "username": "john", "email": "john@example.com"}, ...]
+# 结果: [{"id": 1, "username": "john", "email": "john@example.com"}, ...]
 
-# Values as tuples
+# 以元组形式返回值
 usernames = await User.objects.values_list("username", flat=True).all()
-# Result: ["john", "alice", "bob", ...]
+# 结果: ["john", "alice", "bob", ...]
 ```
 
-## Aggregation
+## 聚合
 
-### Basic Aggregates
+### 基础聚合
 
 ```python
 from sqlobjects.expressions import func
 
-# Count
+# 计数
 user_count = await User.objects.count()
 active_count = await User.objects.filter(User.is_active == True).count()
 
-# Other aggregates
+# 其他聚合函数
 stats = await User.objects.aggregate(
     total_users=func.count(),
     avg_age=func.avg(User.age),
     max_age=func.max(User.age),
     min_age=func.min(User.age)
 )
-# Result: {"total_users": 100, "avg_age": 32.5, "max_age": 65, "min_age": 18}
+# 结果: {"total_users": 100, "avg_age": 32.5, "max_age": 65, "min_age": 18}
 ```
 
-### Annotations
+### 注解
 
 ```python
-# Add calculated fields
+# 添加计算字段
 users = await User.objects.annotate(
     full_name=func.concat(User.first_name, " ", User.last_name),
     post_count=func.count(User.posts),
     latest_post=func.max(User.posts.created_at)
 ).all()
 
-# Use annotations in filtering
+# 在过滤中使用注解
 active_posters = await User.objects.annotate(
     post_count=func.count(User.posts)
 ).filter(
@@ -190,18 +190,18 @@ active_users = await User.objects.filter(
 ).only("id", "username").all()
 ```
 
-## Advanced Query Methods
+## 高级查询方法
 
-### Query Building Methods
+### 查询构建方法
 
 ```python
-# Annotation with calculated fields
+# 使用计算字段进行注解
 users = await User.objects.annotate(
     full_name=func.concat(User.first_name, " ", User.last_name),
     post_count=func.count(User.posts)
 ).all()
 
-# Grouping with aggregation
+# 分组聚合
 dept_stats = await User.objects.group_by("department").having(
     func.count() > 5
 ).aggregate(
@@ -209,14 +209,14 @@ dept_stats = await User.objects.group_by("department").having(
     avg_salary=func.avg(User.salary)
 )
 
-# Manual joins for complex queries
+# 复杂查询的手动连接
 posts = await Post.objects.join(
     User.__table__, 
     Post.author_id == User.id,
     join_type="inner"
 ).all()
 
-# Left and outer joins
+# 左连接和外连接
 posts = await Post.objects.leftjoin(
     Comment.__table__,
     Comment.post_id == Post.id
@@ -227,7 +227,7 @@ posts = await Post.objects.outerjoin(
     Tag.post_id == Post.id
 ).all()
 
-# Row-level locking
+# 行级锁定
 users = await User.objects.select_for_update(
     nowait=True, 
     skip_locked=False
@@ -238,22 +238,22 @@ users = await User.objects.select_for_share(
     skip_locked=True
 ).filter(User.is_active == True).all()
 
-# Extra SQL fragments
+# 额外的 SQL 片段
 users = await User.objects.extra(
     columns={"full_name": "first_name || ' ' || last_name"},
     where=["age > %s"],
     params=[18]
 ).all()
 
-# Cache control
+# 缓存控制
 users = await User.objects.no_cache().filter(
     User.status == "online"
 ).all()
 
-# Skip default ordering for performance
+# 跳过默认排序以提高性能
 count = await User.objects.skip_default_ordering().count()
 
-# Subquery creation
+# 子查询创建
 avg_age = User.objects.aggregate(
     avg_age=func.avg(User.age)
 ).subquery(query_type="scalar")
@@ -263,10 +263,10 @@ active_users = User.objects.filter(
 ).subquery("active_users")
 ```
 
-### Grouping and Aggregation
+### 分组和聚合
 
 ```python
-# Group by with having clause
+# 带有 having 子句的分组
 dept_stats = await User.objects.group_by("department").having(
     func.count() > 5
 ).aggregate(
@@ -274,7 +274,7 @@ dept_stats = await User.objects.group_by("department").having(
     avg_salary=func.avg(User.salary)
 )
 
-# Complex grouping
+# 复杂分组
 monthly_stats = await Sale.objects.group_by(
     func.extract("year", Sale.created_at),
     func.extract("month", Sale.created_at)
@@ -284,36 +284,36 @@ monthly_stats = await Sale.objects.group_by(
 )
 ```
 
-### Manual Joins and Locking
+### 手动连接和锁定
 
 ```python
-# Join types
-# Inner join (default)
+# 连接类型
+# 内连接（默认）
 posts = await Post.objects.join(
     User.__table__,
     Post.author_id == User.id
 ).all()
 
-# Left join
+# 左连接
 posts = await Post.objects.leftjoin(
     Comment.__table__,
     Comment.post_id == Post.id
 ).all()
 
-# Outer join
+# 外连接
 posts = await Post.objects.outerjoin(
     Tag.__table__,
     Tag.post_id == Post.id
 ).all()
 
-# Multiple joins
+# 多表连接
 posts = await Post.objects.join(
     User.__table__, Post.author_id == User.id
 ).leftjoin(
     Comment.__table__, Comment.post_id == Post.id
 ).all()
 
-# Complex join conditions
+# 复杂连接条件
 posts = await Post.objects.join(
     User.__table__,
     and_(
@@ -323,8 +323,8 @@ posts = await Post.objects.join(
     )
 ).all()
 
-# Pessimistic locking
-# FOR UPDATE locking
+# 悲观锁
+# FOR UPDATE 锁定
 users = await User.objects.select_for_update().filter(
     User.balance > 0
 ).all()
@@ -339,83 +339,83 @@ users = await User.objects.select_for_update(skip_locked=True).filter(
     User.processing_status == "pending"
 ).all()
 
-# Shared locking
-# FOR SHARE locking
+# 共享锁
+# FOR SHARE 锁定
 users = await User.objects.select_for_share().filter(
     User.is_active == True
 ).all()
 
-# FOR SHARE with options
+# 带选项的 FOR SHARE
 users = await User.objects.select_for_share(
     nowait=True,
     skip_locked=True
 ).filter(User.role == "admin").all()
 ```
 
-## Query Execution Methods
+## 查询执行方法
 
-### Additional Execution Methods
+### 其他执行方法
 
 ```python
-# Check existence
+# 检查存在性
 exists = await User.objects.filter(User.email == "test@example.com").exists()
 
-# Raw SQL execution
+# 原生 SQL 执行
 users = await User.objects.raw(
     "SELECT * FROM users WHERE age > :age",
     {"age": 18}
 )
 
-# First and last with ordering
+# 带排序的第一个和最后一个
 first_user = await User.objects.order_by("created_at").first()
 last_user = await User.objects.order_by("created_at").last()
 
-# Earliest and latest by specific fields
+# 按指定字段的最早和最晚
 earliest = await User.objects.earliest("created_at")
 latest = await User.objects.latest("updated_at")
 
-# Multiple fields for earliest/latest
+# 多字段的最早/最晚
 earliest = await User.objects.earliest("created_at", "id")
 latest = await User.objects.latest("updated_at", "username")
 
-# Values as dictionaries
+# 以字典形式返回值
 user_data = await User.objects.values("id", "username", "email")
-# Result: [{"id": 1, "username": "john", "email": "john@example.com"}]
+# 结果: [{"id": 1, "username": "john", "email": "john@example.com"}]
 
-# Values as tuples or flat list
+# 以元组或平坦列表形式返回值
 user_tuples = await User.objects.values_list("username", "email")
-# Result: [("john", "john@example.com"), ("alice", "alice@example.com")]
+# 结果: [("john", "john@example.com"), ("alice", "alice@example.com")]
 
 usernames = await User.objects.values_list("username", flat=True)
-# Result: ["john", "alice", "bob"]
+# 结果: ["john", "alice", "bob"]
 
-# Date and datetime extraction
+# 日期和日期时间提取
 signup_years = await User.objects.dates("created_at", "year", order="DESC")
-# Result: [date(2023, 1, 1), date(2022, 1, 1)]
+# 结果: [date(2023, 1, 1), date(2022, 1, 1)]
 
 login_hours = await User.objects.datetimes("last_login", "hour", order="ASC")
-# Result: [datetime(2023, 12, 1, 10, 0), datetime(2023, 12, 1, 11, 0)]
+# 结果: [datetime(2023, 12, 1, 10, 0), datetime(2023, 12, 1, 11, 0)]
 
-# Index and slice access
+# 索引和切片访问
 first_user = await User.objects.get_item(0)
 last_user = await User.objects.get_item(-1)
 users_slice = await User.objects.get_item(slice(10, 20))
 
-# Iterator for memory-efficient processing
+# 内存高效处理的迭代器
 async for user in User.objects.iterator(chunk_size=1000):
     await process_user(user)
 ```
 
-### Raw SQL Queries
+### 原生 SQL 查询
 
 ```python
-# Execute raw SQL with parameters
+# 使用参数执行原生 SQL
 users = await User.objects.raw(
     "SELECT * FROM users WHERE age > :age AND department = :dept",
     {"age": 18, "dept": "engineering"}
 )
 
-# Complex raw queries
+# 复杂原生查询
 results = await User.objects.raw(
     """
     SELECT u.*, COUNT(p.id) as post_count
@@ -429,12 +429,12 @@ results = await User.objects.raw(
 )
 ```
 
-## Advanced Queries
+## 高级查询
 
-### Subqueries
+### 子查询
 
 ```python
-# Scalar subqueries for single value comparisons
+# 标量子查询用于单值比较
 avg_salary = User.objects.aggregate(
     avg_salary=func.avg(User.salary)
 ).subquery(query_type="scalar")
@@ -443,7 +443,7 @@ high_earners = await User.objects.filter(
     User.salary > avg_salary
 ).all()
 
-# Multiple scalar subqueries
+# 多个标量子查询
 max_age = User.objects.aggregate(max_age=func.max(User.age)).subquery(query_type="scalar")
 min_age = User.objects.aggregate(min_age=func.min(User.age)).subquery(query_type="scalar")
 
@@ -451,14 +451,14 @@ users = await User.objects.filter(
     (User.age == max_age) | (User.age == min_age)
 ).all()
 
-# EXISTS subqueries for boolean conditions
+# EXISTS 子查询用于布尔条件
 has_posts = Post.objects.filter(
     Post.author_id == User.id
 ).subquery(query_type="exists")
 
 authors = await User.objects.filter(has_posts).all()
 
-# Complex EXISTS conditions
+# 复杂 EXISTS 条件
 has_recent_posts = Post.objects.filter(
     Post.author_id == User.id,
     Post.created_at >= datetime.now() - timedelta(days=30)
@@ -466,7 +466,7 @@ has_recent_posts = Post.objects.filter(
 
 active_authors = await User.objects.filter(has_recent_posts).all()
 
-# Table subqueries for complex joins
+# 表子查询用于复杂连接
 active_users = User.objects.filter(
     User.is_active == True
 ).subquery("active_users")
@@ -476,7 +476,7 @@ posts = await Post.objects.join(
     Post.author_id == active_users.c.id
 ).all()
 
-# Complex table subqueries
+# 复杂表子查询
 top_users = User.objects.annotate(
     post_count=func.count(User.posts)
 ).filter(
@@ -489,17 +489,17 @@ popular_posts = await Post.objects.join(
 ).all()
 ```
 
-### Complex Aggregation
+### 复杂聚合
 
 ```python
-# Department statistics
+# 部门统计
 dept_stats = await User.objects.group_by("department").aggregate(
     user_count=func.count(),
     avg_salary=func.avg(User.salary),
     max_salary=func.max(User.salary)
 )
 
-# Conditional aggregation
+# 条件聚合
 stats = await User.objects.aggregate(
     total_users=func.count(),
     active_users=func.sum(func.case([(User.is_active == True, 1)], else_=0)),
@@ -507,44 +507,44 @@ stats = await User.objects.aggregate(
 )
 ```
 
-### Raw SQL
+### 原生 SQL
 
 ```python
-# Raw SQL queries
+# 原生 SQL 查询
 users = await User.objects.raw(
     "SELECT * FROM users WHERE age > :min_age AND created_at > :date",
     {"min_age": 18, "date": datetime.now() - timedelta(days=30)}
 ).all()
 
-# Raw expressions
+# 原生表达式
 users = await User.objects.annotate(
     custom_field=text("CASE WHEN age >= 18 THEN 'adult' ELSE 'minor' END")
 ).all()
 ```
 
-## Relationship Queries
+## 关联查询
 
-### Loading Related Data
+### 加载相关数据
 
 ```python
-# Select related (JOIN) - uses string field names
+# select_related（JOIN）- 使用字符串字段名
 users = await User.objects.select_related("profile").all()
 
-# Prefetch related (separate queries) - uses string field names
+# prefetch_related（单独查询）- 使用字符串字段名
 users = await User.objects.prefetch_related("posts").all()
 
-# Multiple relationships
+# 多个关联
 users = await User.objects.select_related("profile").prefetch_related("posts", "groups").all()
 ```
 
-### Filtering by Related Fields
+### 按相关字段过滤
 
 ```python
-# Filter by related field
+# 按相关字段过滤
 users = await User.objects.filter(User.profile.bio.like("%developer%")).all()
 users = await User.objects.filter(User.posts.title.like("%python%")).all()
 
-# Count related objects
+# 统计相关对象
 users = await User.objects.annotate(
     post_count=func.count(User.posts)
 ).filter(
@@ -552,91 +552,91 @@ users = await User.objects.annotate(
 ).all()
 ```
 
-## Performance Optimization
+## 性能优化
 
-### Cache Control
+### 缓存控制
 
 ```python
-# Use cache for frequently accessed data
+# 为频繁访问的数据使用缓存
 users = await User.objects.filter(User.is_active == True).all()
 
-# Skip cache for real-time data
+# 为实时数据跳过缓存
 live_data = await User.objects.no_cache().filter(
     User.last_login > datetime.now() - timedelta(minutes=1)
 ).all()
 
-# Monitor cache performance
+# 监控缓存性能
 stats = User.objects.get_cache_stats()
 if stats["hit_rate"] < 0.5:
-    # Consider query optimization
+    # 考虑查询优化
     pass
 ```
 
-### Efficient Queries
+### 高效查询
 
 ```python
-# Use exists() instead of count() for boolean checks
+# 使用 exists() 而不是 count() 进行布尔检查
 has_users = await User.objects.filter(User.is_active == True).exists()
 
-# Use iterator for large datasets
+# 对大数据集使用迭代器
 async for user in User.objects.filter(User.is_active == True).iterator():
     await process_user(user)
 
-# Batch processing with memory cleanup
+# 带内存清理的批处理
 async for user in User.objects.iterator(
     chunk_size=1000,
     memory_cleanup_interval=10
 ):
     await process_user(user)
 
-# Skip default ordering for count operations
+# 对计数操作跳过默认排序
 count = await User.objects.skip_default_ordering().count()
 ```
 
-### Query Analysis
+### 查询分析
 
 ```python
-# Explain query execution
+# 解释查询执行
 explain_result = await User.objects.filter(User.age >= 18).explain(analyze=True)
 print(explain_result)
 
-# JSON format for programmatic analysis
+# 用于程序化分析的 JSON 格式
 explain_json = await User.objects.filter(User.age >= 18).explain(output="json")
 ```
 
-### QuerySet Shortcut Methods
+### QuerySet 快捷方法
 
-ObjectsManager provides direct access to all QuerySet methods:
+ObjectsManager 提供对所有 QuerySet 方法的直接访问：
 
 ```python
-# Distinct operations
+# 去重操作
 unique_departments = await User.objects.distinct("department").all()
 all_distinct = await User.objects.distinct().all()
 
-# Exclusion filtering
+# 排除过滤
 non_deleted = await User.objects.exclude(User.is_deleted == True).all()
 
-# Ordering
+# 排序
 users = await User.objects.order_by("username", "-created_at").all()
 
-# Pagination
+# 分页
 page_users = await User.objects.limit(10).offset(20).all()
 
-# Field selection
+# 字段选择
 users = await User.objects.only("id", "username").all()
 users = await User.objects.defer("large_field").all()
 
-# Empty queryset
-empty = await User.objects.none().all()  # Always returns []
+# 空查询集
+empty = await User.objects.none().all()  # 总是返回 []
 
-# Reverse ordering
+# 反转排序
 users = await User.objects.order_by("created_at").reverse().all()
 
-# Relationship loading
+# 关联加载
 users = await User.objects.select_related("profile").all()
 users = await User.objects.prefetch_related("posts").all()
 
-# Advanced prefetch with custom querysets
+# 使用自定义查询集的高级预取
 users = await User.objects.prefetch_related(
     recent_posts=Post.objects.filter(
         Post.created_at >= datetime.now() - timedelta(days=30)
@@ -644,64 +644,64 @@ users = await User.objects.prefetch_related(
 ).all()
 ```
 
-## Date and Time Queries
+## 日期和时间查询
 
-### Date Extraction
+### 日期提取
 
 ```python
-# Extract date parts with multi-database compatibility
+# 兼容多数据库的日期部分提取
 users_by_year = await User.objects.dates("created_at", "year", order="DESC")
 users_by_month = await User.objects.dates("created_at", "month", order="ASC")
 users_by_day = await User.objects.dates("created_at", "day")
 
-# DateTime extraction with precision levels
+# 带精度级别的日期时间提取
 login_times = await User.objects.datetimes("last_login", "hour", order="ASC")
 minute_logins = await User.objects.datetimes("last_login", "minute")
 second_logins = await User.objects.datetimes("last_login", "second")
 
-# Supported precision levels:
+# 支持的精度级别：
 # dates(): "year", "month", "day"
 # datetimes(): "year", "month", "day", "hour", "minute", "second"
 ```
 
-### Date Filtering
+### 日期过滤
 
 ```python
 from datetime import datetime, timedelta
 
-# Recent records
+# 最近记录
 recent_users = await User.objects.filter(
     User.created_at >= datetime.now() - timedelta(days=7)
 ).all()
 
-# Date ranges
+# 日期范围
 this_month_users = await User.objects.filter(
     User.created_at >= datetime.now().replace(day=1),
     User.created_at < datetime.now().replace(day=1) + timedelta(days=32)
 ).all()
 
-# Extract date parts in filtering
+# 在过滤中提取日期部分
 users_2023 = await User.objects.filter(
     func.extract("year", User.created_at) == 2023
 ).all()
 ```
 
-## Best Practices
+## 最佳实践
 
-### Query Optimization
+### 查询优化
 
 ```python
-# Use select_related for foreign keys
+# 对外键使用 select_related
 users = await User.objects.select_related("department").all()
 
-# Use prefetch_related for reverse foreign keys and many-to-many
+# 对反向外键和多对多关系使用 prefetch_related
 users = await User.objects.prefetch_related("posts", "groups").all()
 
-# Combine both for complex relationships
+# 为复杂关联结合两者
 users = await User.objects.select_related("department").prefetch_related("posts").all()
 ```
 
-### Error Handling
+### 错误处理
 
 ```python
 from sqlobjects.exceptions import DoesNotExist, MultipleObjectsReturned
@@ -709,31 +709,31 @@ from sqlobjects.exceptions import DoesNotExist, MultipleObjectsReturned
 try:
     user = await User.objects.get(User.username == "john")
 except DoesNotExist:
-    # Handle user not found
+    # 处理用户未找到
     user = None
 except MultipleObjectsReturned:
-    # Handle multiple users found
+    # 处理找到多个用户
     user = await User.objects.filter(User.username == "john").first()
 ```
 
-### Memory Management
+### 内存管理
 
 ```python
-# For large result sets, use iterator
+# 对大结果集，使用迭代器
 async for user in User.objects.filter(User.is_active == True).iterator():
-    # Process one user at a time
+    # 一次处理一个用户
     await process_user(user)
 
-# Or use pagination
+# 或使用分页
 page_size = 100
 offset = 0
 while True:
     users = await User.objects.offset(offset).limit(page_size).all()
     if not users:
         break
-    
+  
     for user in users:
         await process_user(user)
-    
+  
     offset += page_size
 ```
