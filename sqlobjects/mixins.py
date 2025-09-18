@@ -9,6 +9,10 @@ from .fields.utils import get_column_from_field, is_field_definition
 from .session import AsyncSession, get_session
 
 
+if TYPE_CHECKING:
+    from .metadata import ModelRegistry
+
+
 class _StateManager:
     """Unified state management for model instances."""
 
@@ -43,6 +47,7 @@ class BaseMixin:
 
     if TYPE_CHECKING:
         __table__: ClassVar[Table]
+        __registry__: ClassVar["ModelRegistry"]
 
     def __init__(self):
         """Initialize state manager if not already present."""
