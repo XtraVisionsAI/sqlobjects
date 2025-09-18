@@ -171,7 +171,7 @@ async def test_db(request):
     elif db_type == "mysql":
         db_url = os.getenv("MYSQL_TEST_URL", "mysql://test:test@localhost/test_db")
     
-    await init_db(db_url, create_tables=True)
+    await init_db(db_url)
     yield db_type
     await close_db()
 

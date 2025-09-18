@@ -174,37 +174,37 @@ class Database:
 
         return event.listens_for(target, event_name)
 
-    async def create_tables(self, metadata) -> None:
-        """Create all tables defined in the metadata
+    async def create_tables(self, base_class) -> None:
+        """Create all tables defined in the model registry of SQLObjects base class
 
         Creates all tables, indexes, and constraints defined in the provided
         SQLAlchemy metadata object using the database engine.
 
         Args:
-            metadata: SQLAlchemy metadata object containing table definitions
+            base_class: SQLObjects base class containing model registry
 
         Examples:
             >>> from sqlobjects.base import ObjectModel
-            >>> await db.create_tables(ObjectModel.__registry__)
+            >>> await db.create_tables(ObjectModel)
         """
         async with self.engine.begin() as conn:
-            await conn.run_sync(metadata.create_all)
+            await conn.run_sync(base_class.__registry__.create_all)
 
-    async def drop_tables(self, metadata) -> None:
-        """Drop all tables defined in the metadata
+    async def drop_tables(self, base_class) -> None:
+        """Drop all tables defined in the model registry of SQLObjects base class
 
         Drops all tables, indexes, and constraints defined in the provided
         SQLAlchemy metadata object from the database.
 
         Args:
-            metadata: SQLAlchemy metadata object containing table definitions
+            base_class: SQLObjects base class containing model registry
 
         Examples:
             >>> from sqlobjects.base import ObjectModel
-            >>> await db.drop_tables(ObjectModel.__registry__)
+            >>> await db.drop_tables(ObjectModel)
         """
         async with self.engine.begin() as conn:
-            await conn.run_sync(metadata.drop_all)
+            await conn.run_sync(base_class.__registry__.drop_all)
 
     async def disconnect(self) -> None:
         """Disconnect database and clean up resources
@@ -305,7 +305,7 @@ class _DatabaseManager:
             >>> await DatabaseManager.create_tables(ObjectModel, "analytics")
         """
         database = cls.get_database(db_name)
-        await database.create_tables(base_class.__registry__)
+        await database.create_tables(base_class)
 
     @classmethod
     async def drop_tables(cls, base_class, db_name: str | None = None) -> None:
@@ -327,7 +327,7 @@ class _DatabaseManager:
             >>> await DatabaseManager.drop_tables(ObjectModel, "analytics")
         """
         database = cls.get_database(db_name)
-        await database.drop_tables(base_class.__registry__)
+        await database.drop_tables(base_class)
 
     @classmethod
     async def close(cls, db_name: str | None = None, auto_default: bool = False) -> None:
