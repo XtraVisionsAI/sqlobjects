@@ -20,9 +20,36 @@ NullableT = TypeVar("NullableT")
 
 
 class Column(Generic[T]):
-    """Field descriptor for parameter collection and ColumnAttribute creation."""
+    """Field descriptor for parameter collection and ColumnAttribute creation.
+
+    This class serves as a field descriptor that collects field parameters during
+    class definition and creates the appropriate ColumnAttribute or relationship
+    descriptor when the field is accessed.
+
+    Type Parameters:
+        T: The Python type of the field value
+
+    Attributes:
+        name: Field name set by __set_name__
+        _params: Dictionary of field parameters
+        _column_attribute: Created ColumnAttribute instance
+        _relationship_descriptor: Created relationship descriptor (if applicable)
+        _is_relationship: Whether this is a relationship field
+        _nullable: Whether the field accepts None values
+
+    Example:
+        >>> class User(ObjectModel):
+        ...     name: Column[str] = StringColumn(length=50)
+        ...     age: Column[int] = IntegerColumn(nullable=True)
+    """
 
     def __init__(self, **params):
+        """Initialize field descriptor with parameters.
+
+        Args:
+            **params: Field configuration parameters including type, constraints,
+                     validation rules, and performance settings
+        """
         self._params = params
         self._column_attribute = None
         self._relationship_descriptor = None
@@ -32,6 +59,16 @@ class Column(Generic[T]):
         self._private_name = None
 
     def __set_name__(self, owner, name):
+        """Set field name and initialize appropriate descriptor.
+
+        Called automatically by Python when the field is assigned to a class.
+        Creates either a ColumnAttribute for database fields or a relationship
+        descriptor for relationship fields.
+
+        Args:
+            owner: The model class that owns this field
+            name: The field name
+        """
         self.name = name
         self._private_name = f"_{name}"
 
@@ -41,7 +78,12 @@ class Column(Generic[T]):
             self._setup_column(owner, name)
 
     def _setup_relationship(self, owner, name):
-        """Set relationship field"""
+        """Set up relationship field descriptor.
+
+        Args:
+            owner: The model class that owns this field
+            name: The field name
+        """
         from .relations.descriptors import RelationshipDescriptor
 
         relationship_property = self._params.get("relationship_property")
@@ -50,9 +92,17 @@ class Column(Generic[T]):
             self._relationship_descriptor.__set_name__(owner, name)
 
     def _setup_column(self, owner, name):
-        """Set database field"""
+        """Set up database column field.
+
+        Processes field parameters, applies defaults, and creates a ColumnAttribute
+        instance with proper type handling and parameter organization.
+
+        Args:
+            owner: The model class that owns this field
+            name: The field name
+        """
         params = self._params.copy()
-        foreign_key = params.pop("foreign_key", None)
+        fk = params.pop("foreign_key", None)
         type_name = params.pop("type", "auto")
 
         # Process extended parameters
@@ -111,7 +161,7 @@ class Column(Generic[T]):
 
         # Create ColumnAttribute
         self._column_attribute = ColumnAttribute(
-            name, enhanced_type, foreign_key=foreign_key, model_class=owner, **column_params
+            name, enhanced_type, foreign_key=fk, model_class=owner, **column_params
         )
 
     @overload
@@ -121,6 +171,18 @@ class Column(Generic[T]):
     def __get__(self, instance: Any, owner: type) -> T: ...
 
     def __get__(self, instance, owner):
+        """Get field value or ColumnAttribute.
+
+        Returns the ColumnAttribute when accessed on the class (for query building)
+        or the actual field value when accessed on an instance.
+
+        Args:
+            instance: Model instance or None if accessed on class
+            owner: The model class
+
+        Returns:
+            ColumnAttribute when accessed on class, field value when accessed on instance
+        """
         if self._is_relationship and self._relationship_descriptor:
             return self._relationship_descriptor.__get__(instance, owner)
 
@@ -136,6 +198,15 @@ class Column(Generic[T]):
                 return cast(T, value)
 
     def __set__(self, instance, value):
+        """Set field value on instance.
+
+        Args:
+            instance: Model instance to set value on
+            value: Value to set
+
+        Raises:
+            AttributeError: If trying to set value on class rather than instance
+        """
         if self._is_relationship:
             # Relationship fields may not support direct setting
             pass
@@ -147,18 +218,6 @@ class Column(Generic[T]):
 
 
 class ColumnAttribute(ColumnAttributeFunctionMixin, Generic[T]):
-    def __getattr__(self, name):
-        """Handle attribute access with proper priority
-
-        First check for SQLAlchemy column attributes, then delegate to function mixin.
-        """
-        # First try the underlying SQLAlchemy column for its own attributes
-        if hasattr(self.__column__, name):
-            return getattr(self.__column__, name)
-
-        # Then delegate to the function mixin for database functions
-        return super().__getattr__(name)
-
     """Enhanced column attribute with SQLAlchemy CoreColumn compatibility.
 
     Extends SQLAlchemy's Column with additional functionality for validation,
@@ -180,7 +239,38 @@ class ColumnAttribute(ColumnAttributeFunctionMixin, Generic[T]):
 
     inherit_cache = True  # make use of the cache key generated by the superclass from SQLAlchemy
 
+    def __getattr__(self, name):
+        """Handle attribute access with proper priority.
+
+        First checks for SQLAlchemy column attributes, then delegates to the
+        function mixin for database functions like like(), ilike(), etc.
+
+        Args:
+            name: Attribute name to access
+
+        Returns:
+            Attribute value from SQLAlchemy column or function mixin
+
+        Raises:
+            AttributeError: If attribute is not found
+        """
+        # First try the underlying SQLAlchemy column for its own attributes
+        if hasattr(self.__column__, name):
+            return getattr(self.__column__, name)
+
+        # Then delegate to the function mixin for database functions
+        return super().__getattr__(name)
+
     def __init__(self, name, type_, foreign_key=None, *, model_class, **kwargs):  # noqa
+        """Initialize ColumnAttribute with enhanced functionality.
+
+        Args:
+            name: Column name
+            type_: SQLAlchemy type instance
+            foreign_key: Foreign key constraint if applicable
+            model_class: The model class this column belongs to
+            **kwargs: Additional SQLAlchemy column parameters
+        """
         # Extract enhanced parameters from info dict
         info = kwargs.get("info", {})
         enhanced_params = info.get("_enhanced", {})
@@ -210,10 +300,26 @@ class ColumnAttribute(ColumnAttributeFunctionMixin, Generic[T]):
     # Validation related
     @property
     def validators(self) -> list[Any]:
+        """Get list of field validators.
+
+        Returns:
+            List of validation functions for this field
+        """
         return self._enhanced_params.get("validators", [])
 
     def validate_value(self, value: Any, field_name: str) -> Any:
-        """Validate field value using registered validators"""
+        """Validate field value using registered validators.
+
+        Args:
+            value: Value to validate
+            field_name: Name of the field being validated
+
+        Returns:
+            Validated value (may be transformed by validators)
+
+        Raises:
+            ValidationError: If validation fails
+        """
         validators = self.validators
         if validators:
             from ..validators import validate_field_value
@@ -223,16 +329,37 @@ class ColumnAttribute(ColumnAttributeFunctionMixin, Generic[T]):
 
     # Default value related
     def get_default_factory(self) -> Callable[[], Any] | None:
+        """Get default value factory function.
+
+        Returns:
+            Callable that generates default values, or None if not set
+        """
         return self._enhanced_params.get("default_factory")
 
     def get_insert_default(self) -> Any:
+        """Get insert-only default value.
+
+        Returns:
+            Default value used only for INSERT operations
+        """
         return self._enhanced_params.get("insert_default")
 
     def has_insert_default(self) -> bool:
+        """Check if field has insert-only default value.
+
+        Returns:
+            True if insert_default is configured, False otherwise
+        """
         return "insert_default" in self._enhanced_params
 
     def get_effective_default(self) -> Any:
-        """Get effective default value by priority order"""
+        """Get effective default value by priority order.
+
+        Checks default sources in priority order: default, default_factory, insert_default.
+
+        Returns:
+            The effective default value or callable, or None if no default is set
+        """
         if self.default is not None:
             return self.default
 
@@ -249,27 +376,59 @@ class ColumnAttribute(ColumnAttributeFunctionMixin, Generic[T]):
     # Performance optimization related
     @property
     def is_deferred(self) -> bool:
+        """Check if field is configured for deferred loading.
+
+        Returns:
+            True if field should be loaded lazily, False otherwise
+        """
         return self._performance_params.get("deferred", False)
 
     @property
     def deferred_group(self) -> str | None:
+        """Get deferred loading group name.
+
+        Returns:
+            Name of the deferred loading group, or None if not grouped
+        """
         return self._performance_params.get("deferred_group")
 
     @property
     def has_active_history(self) -> bool:
+        """Check if field tracks value changes.
+
+        Returns:
+            True if active history tracking is enabled, False otherwise
+        """
         return self._performance_params.get("active_history", False)
 
     @property
     def deferred_raiseload(self) -> bool | None:
+        """Check if accessing deferred field should raise an error.
+
+        Returns:
+            True to raise error, False to allow access, None for default behavior
+        """
         return self._performance_params.get("deferred_raiseload")
 
     # Code generation related
     @property
     def include_in_init(self) -> bool | None:
+        """Check if field should be included in __init__ method.
+
+        Returns:
+            True to include, False to exclude, None for default behavior
+        """
         return self._codegen_params.get("init")
 
     def create_table_column(self, name: str) -> CoreColumn:
-        """Create independent Column instance for Table to avoid binding conflicts"""
+        """Create independent SQLAlchemy Column for table creation.
+
+        Args:
+            name: Column name for the table
+
+        Returns:
+            New SQLAlchemy Column instance independent of this ColumnAttribute
+        """
         # Create new ForeignKey instance instead of reusing existing one
         foreign_keys = []
         if self.__column__.foreign_keys:
@@ -445,38 +604,81 @@ class ColumnAttribute(ColumnAttributeFunctionMixin, Generic[T]):
         return FunctionExpression(other % self.__column__)
 
     def __hash__(self):
-        """Delegate hash to underlying column for SQLAlchemy compatibility"""
+        """Delegate hash to underlying column for SQLAlchemy compatibility.
+
+        Returns:
+            Hash value from the underlying SQLAlchemy column
+        """
         return self.__column__.__hash__()
 
     @property
     def include_in_repr(self) -> bool | None:
+        """Check if field should be included in __repr__ method.
+
+        Returns:
+            True to include, False to exclude, None for default behavior
+        """
         return self._codegen_params.get("repr")
 
     @property
     def include_in_compare(self) -> bool | None:
+        """Check if field should be included in __eq__ method.
+
+        Returns:
+            True to include, False to exclude, None for default behavior
+        """
         return self._codegen_params.get("compare")
 
     @property
     def include_in_hash(self) -> bool | None:
+        """Check if field should be included in __hash__ method.
+
+        Returns:
+            True to include, False to exclude, None for default behavior
+        """
         return self._codegen_params.get("hash")
 
     @property
     def is_kw_only(self) -> bool | None:
+        """Check if field should be keyword-only in __init__ method.
+
+        Returns:
+            True for keyword-only, False for positional, None for default behavior
+        """
         return self._codegen_params.get("kw_only")
 
     # === General parameter access methods ===
 
     def get_param(self, category: str, name: str, default: Any = None) -> Any:
-        """Get parameter from specified category"""
+        """Get parameter from specified category.
+
+        Args:
+            category: Parameter category ('enhanced', 'performance', 'codegen')
+            name: Parameter name
+            default: Default value if parameter not found
+
+        Returns:
+            Parameter value or default
+        """
         param_dict = getattr(self, f"_{category}_params", {})
         return param_dict.get(name, default)
 
     def get_codegen_params(self) -> dict[str, Any]:
-        """Get code generation parameters"""
+        """Get code generation parameters.
+
+        Returns:
+            Dictionary of parameters controlling __init__, __repr__, etc. generation
+        """
         return self._codegen_params
 
     def get_python_type(self):
-        """Get Python type from class annotations, similar to SQLAlchemy's approach"""
+        """Get Python type from class annotations.
+
+        Extracts the type parameter from Column[T] annotations for type safety.
+
+        Returns:
+            Python type class or None if not found
+        """
         if not self.model_class or not self._field_name:
             return None
 
@@ -505,7 +707,12 @@ class ColumnAttribute(ColumnAttributeFunctionMixin, Generic[T]):
         return None
 
     def get_field_metadata(self) -> dict[str, Any]:
-        """Get complete field metadata information"""
+        """Get complete field metadata information.
+
+        Returns:
+            Dictionary containing all field metadata including type info,
+            constraints, and extended parameters
+        """
         metadata = {
             "name": self.name,
             "type": str(self.type),
@@ -569,11 +776,52 @@ def column(
     hash: bool | None = None,  # noqa
     kw_only: bool | None = None,
     # Foreign key constraint
-    foreign_key: ForeignKey | None = None,
+    foreign_key: ForeignKey | None = None,  # noqa  # shadows name
     # Type parameters (passed through **kwargs)
     **kwargs: Any,
 ) -> "Column[Any]":
-    """Create field descriptor with new unified architecture"""
+    """Create a database column with specified type and parameters.
+
+    Args:
+        type: SQLAlchemy type name (e.g., 'string', 'integer', 'datetime')
+        name: Column name (usually auto-detected from field name)
+        primary_key: Whether this is a primary key column
+        nullable: Whether the column accepts NULL values
+        default: Static default value
+        index: Whether to create an index on this column
+        unique: Whether values must be unique
+        autoincrement: Auto-increment behavior for integer primary keys
+        doc: Documentation string
+        key: Alternative key name for the column
+        onupdate: Value to set on UPDATE operations
+        comment: Database comment for the column
+        system: Whether this is a system column
+        server_default: Server-side default value
+        server_onupdate: Server-side update value
+        quote: Whether to quote the column name
+        info: Additional metadata dictionary
+        default_factory: Function to generate default values
+        validators: List of validation functions
+        deferred: Whether to defer loading this column
+        deferred_group: Group name for deferred loading
+        insert_default: Default value only for INSERT operations
+        init: Whether to include in __init__ method
+        repr: Whether to include in __repr__ method
+        compare: Whether to include in __eq__ method
+        active_history: Whether to track value changes
+        deferred_raiseload: Whether to raise error when accessing deferred field
+        hash: Whether to include in __hash__ method
+        kw_only: Whether parameter should be keyword-only in __init__
+        foreign_key: Foreign key constraint
+        **kwargs: Additional type-specific parameters
+
+    Returns:
+        Column descriptor configured with the specified parameters
+
+    Example:
+        >>> name: Column[str] = column(type="string", length=100, nullable=False)
+        >>> age: Column[int] = column(type="integer", default=0, validators=[validate_range(0, 150)])
+    """
     # Collect all parameters
     all_params = {
         "type": type,
@@ -617,7 +865,14 @@ def column(
 
 
 def _extract_column_params(kwargs: dict) -> dict:
-    """Extract SQLAlchemy Column parameters"""
+    """Extract parameters relevant to SQLAlchemy Column creation.
+
+    Args:
+        kwargs: All field parameters
+
+    Returns:
+        Dictionary containing only column-related parameters
+    """
     column_param_names = {
         "primary_key",
         "nullable",
@@ -639,7 +894,14 @@ def _extract_column_params(kwargs: dict) -> dict:
 
 
 def _extract_type_params(kwargs: dict) -> dict:
-    """Extract type-specific parameters"""
+    """Extract parameters relevant to SQLAlchemy type creation.
+
+    Args:
+        kwargs: All field parameters
+
+    Returns:
+        Dictionary containing only type-related parameters
+    """
     column_param_names = {
         "primary_key",
         "nullable",
@@ -661,7 +923,15 @@ def _extract_type_params(kwargs: dict) -> dict:
 
 
 def _apply_codegen_defaults(codegen_params: dict, column_kwargs: dict) -> dict:
-    """Apply default values for code generation parameters"""
+    """Apply intelligent defaults for code generation parameters.
+
+    Args:
+        codegen_params: User-specified code generation parameters
+        column_kwargs: Column configuration for determining defaults
+
+    Returns:
+        Complete code generation parameters with defaults applied
+    """
     defaults = {"init": True, "repr": True, "compare": False, "hash": None, "kw_only": False}
 
     # Primary key fields: don't participate in initialization, but participate in comparison and display
@@ -689,7 +959,16 @@ def _resolve_default_value(
     default_factory: Callable[[], Any] | None,
     insert_default: Any,
 ) -> Any:
-    """Resolve default value priority: default > default_factory > insert_default"""
+    """Resolve final default value from multiple sources.
+
+    Args:
+        default: Static default value
+        default_factory: Factory function for generating defaults
+        insert_default: Insert-only default value
+
+    Returns:
+        The resolved default value to use
+    """
     if default is not None:
         return default
 
