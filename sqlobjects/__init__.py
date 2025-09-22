@@ -4,6 +4,8 @@ A modern, type-safe ORM built on SQLAlchemy Core with Django-style API,
 designed for high performance and developer productivity.
 """
 
+from .cascade import CascadeOption, CascadePresets, CascadeType, OnDelete, OnDeleteType
+from .fields.relations import relationship
 from .model import ObjectModel
 from .objects import (
     BulkResult,
@@ -24,6 +26,14 @@ __all__ = [
     "ObjectsManager",
     "QuerySet",
     "Q",
+    # Field definitions
+    "relationship",
+    # Cascade operations
+    "OnDelete",
+    "CascadeOption",
+    "CascadePresets",
+    "OnDeleteType",
+    "CascadeType",
     # Bulk operations
     "BulkResult",
     "FailedRecord",

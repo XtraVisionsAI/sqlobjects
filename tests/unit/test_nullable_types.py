@@ -33,6 +33,9 @@ class TestNullableTypeAnnotations:
         class TestModel2(ObjectModel):
             name: Column[str | None] = StringColumn(nullable=True)
 
+            class Config:
+                table_name = "test_nullable_string_models"
+
         # Test functionality
         model = TestModel2(name="test")
         assert model.name == "test"
@@ -48,6 +51,9 @@ class TestNullableTypeAnnotations:
             id: Column[int] = IntegerColumn(nullable=False, primary_key=True)
             name: Column[str] = StringColumn(nullable=False)
 
+            class Config:
+                table_name = "test_non_nullable_models"
+
         # Test functionality
         model = TestModel3(name="test")
         assert model.name == "test"
@@ -60,6 +66,9 @@ class TestNullableTypeAnnotations:
             name: Column[str] = StringColumn(nullable=False)
             age: Column[int | None] = IntegerColumn(nullable=True)
             bio: Column[str | None] = StringColumn(nullable=True)
+
+            class Config:
+                table_name = "test_mixed_nullable_models"
 
         # Test functionality
         model = TestModel4(name="test", age=25, bio="test bio")

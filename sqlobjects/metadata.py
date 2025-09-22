@@ -247,9 +247,48 @@ class ModelRegistry(SqlAlchemyMetaData):
             if related_model:
                 descriptor.property.resolved_model = related_model
 
+                # Enhanced relationship type resolution with model context
+                self._resolve_relationship_type_with_context(descriptor)
+
                 descriptor.property.relationship_type = RelationshipResolver.resolve_relationship_type(
                     descriptor.property
                 )
+
+    def _resolve_relationship_type_with_context(self, descriptor: "RelationshipDescriptor") -> None:
+        """Resolve relationship type with model context.
+
+        Args:
+            descriptor: Relationship descriptor to resolve
+        """
+        property_ = descriptor.property
+
+        if property_.uselist is not None:
+            return
+
+        # Find current model
+        current_model_name = None
+        for model_name, relationships in self._relationships.items():
+            if descriptor in relationships.values():
+                current_model_name = model_name
+                break
+
+        if current_model_name and property_.resolved_model:
+            current_model = self._models.get(current_model_name)
+            if current_model and hasattr(current_model, "__table__"):
+                table = current_model.__table__
+                target_table_name = property_.resolved_model.__table__.name
+
+                # Check for foreign key to target model
+                for col in table.columns:
+                    for fk in col.foreign_keys:
+                        if fk.column.table.name == target_table_name:
+                            property_.uselist = False
+                            if not property_.foreign_keys:
+                                property_.foreign_keys = col.name
+                            return
+
+                # No FK found, assume one-to-many
+                property_.uselist = True
 
     # M2M table management
     def register_m2m_table(self, m2m_def: "M2MTable") -> None:
@@ -422,6 +461,9 @@ class ModelProcessor(type):
 
             # Process pending M2M tables
             registry.process_pending_m2m()
+
+            # Resolve relationships after all models are registered
+            registry.resolve_all_relationships()
 
         return cls
 
@@ -661,12 +703,16 @@ class ModelProcessor(type):
         """
         from sqlalchemy import Table
 
-        # Collect column definitions
+        # Collect column definitions and relationship fields
         columns = []
+        relationships = {}
+
         for name, field_def in mcs._get_fields(cls).items():
             if is_field_definition(field_def):
-                # Skip relationship fields
+                # Handle relationship fields
                 if hasattr(field_def, "_is_relationship") and field_def._is_relationship:  # noqa
+                    if hasattr(field_def, "_relationship_descriptor") and field_def._relationship_descriptor:  # noqa
+                        relationships[name] = field_def._relationship_descriptor  # noqa
                     continue
 
                 column_attr = get_column_from_field(field_def)
@@ -682,6 +728,10 @@ class ModelProcessor(type):
                         if column.name is None:
                             column.name = name  # type: ignore[reportAttributeAccessIssue]
                     columns.append(column)
+
+        # Store relationships on the class
+        if relationships:
+            cls._relationships = relationships
 
         # Build table arguments
         table_args = []

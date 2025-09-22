@@ -1,18 +1,15 @@
 """Core field classes for SQLObjects"""
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
+from typing import Any, Generic, TypeVar, cast, overload
 
 from sqlalchemy import Column as CoreColumn
 from sqlalchemy import ForeignKey
 from sqlalchemy.sql.elements import ColumnElement
 
+from ..cascade import OnDelete
 from ..expressions.mixins import ColumnAttributeFunctionMixin
 from .types import create_type_instance
-
-
-if TYPE_CHECKING:
-    pass
 
 
 T = TypeVar("T")
@@ -777,6 +774,7 @@ def column(
     kw_only: bool | None = None,
     # Foreign key constraint
     foreign_key: ForeignKey | None = None,  # noqa  # shadows name
+    on_delete: OnDelete = OnDelete.NO_ACTION,
     # Type parameters (passed through **kwargs)
     **kwargs: Any,
 ) -> "Column[Any]":
@@ -813,6 +811,7 @@ def column(
         hash: Whether to include in __hash__ method
         kw_only: Whether parameter should be keyword-only in __init__
         foreign_key: Foreign key constraint
+        on_delete: Behavior when referenced object is deleted (for foreign keys)
         **kwargs: Additional type-specific parameters
 
     Returns:
@@ -854,6 +853,7 @@ def column(
         "hash": hash,
         "kw_only": kw_only,
         "foreign_key": foreign_key,
+        "on_delete": on_delete,
         **kwargs,
     }
 

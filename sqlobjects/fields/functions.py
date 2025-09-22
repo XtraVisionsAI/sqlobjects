@@ -3,6 +3,7 @@ from typing import Any
 from sqlalchemy import ForeignKey
 from sqlalchemy.sql.elements import ColumnElement
 
+from ..cascade import OnDeleteType, normalize_ondelete
 from .core import Column, column
 from .shortcuts import ComputedColumn, IdentityColumn
 
@@ -66,26 +67,36 @@ def foreign_key(
     *,
     type: str = "integer",  # noqa
     nullable: bool = True,
+    ondelete: OnDeleteType = None,
     **kwargs: Any,
 ) -> Column[Any]:
-    """Create foreign key column with reference constraint.
+    """Create foreign key column with database constraint behavior.
 
     Args:
         reference: Foreign key reference in format "table.column"
         type: Column type (default: "integer")
         nullable: Whether column can be null
+        ondelete: Database constraint behavior when referenced object is deleted
         **kwargs: Additional column parameters
 
     Returns:
         Column descriptor with foreign key constraint
 
     Example:
-        author_id: Column[int] = foreign_key("users.id")
-        user_uuid: Column[str] = foreign_key("users.uuid", type="uuid")
-        category_id: Column[int] = foreign_key("categories.id", nullable=False)
+        # Type-safe enum usage
+        author_id: Column[int] = foreign_key("users.id", ondelete=OnDelete.CASCADE)
+
+        # String usage (SQLAlchemy compatible)
+        category_id: Column[int] = foreign_key("categories.id", ondelete="SET NULL")
+
+        # No constraint (default)
+        department_id: Column[int] = foreign_key("departments.id")
     """
-    # Create ForeignKey constraint
-    fk_constraint = ForeignKey(reference)
+    # Normalize ondelete parameter
+    ondelete_str = normalize_ondelete(ondelete)
+
+    # Create ForeignKey constraint with normalized ondelete
+    fk_constraint = ForeignKey(reference, ondelete=ondelete_str)
 
     # Use existing column() function with foreign key
     return column(

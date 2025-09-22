@@ -77,10 +77,22 @@ class RelationFieldProxy:
         self._is_loaded = False
 
     async def fetch(self) -> Any:
-        """Fetch relationship objects, auto-loading if not loaded."""
+        """Fetch relationship objects."""
         if not self._is_loaded:
-            await self._load_relationship()
-            self._cached_objects = self._get_cached_objects()
+            relationships = getattr(self.instance.__class__, "_relationships", {})
+            if self.field_name not in relationships:
+                return None
+
+            descriptor = relationships[self.field_name]
+            actual_proxy = descriptor.__get__(self.instance, self.instance.__class__)
+
+            if hasattr(actual_proxy, "all"):
+                self._cached_objects = await actual_proxy.all()
+            elif hasattr(actual_proxy, "get"):
+                self._cached_objects = await actual_proxy.get()
+            else:
+                self._cached_objects = actual_proxy
+
             self._is_loaded = True
         return self._cached_objects
 
@@ -90,28 +102,6 @@ class RelationFieldProxy:
 
     def is_deferred(self) -> bool:
         return not self.is_loaded()
-
-    async def _load_relationship(self) -> None:
-        """Load relationship using existing relationship loading logic."""
-        if not hasattr(self.instance.__class__, "_relationships"):
-            return
-
-        relationships = getattr(self.instance.__class__, "_relationships", {})
-        if self.field_name not in relationships:
-            return
-
-        relationship_desc = relationships[self.field_name]
-
-        from ..queryset import QuerySet
-
-        table = self.instance.get_table()
-        queryset = QuerySet(table, self.instance.__class__)
-
-        session = self.instance._get_session()  # noqa
-        if hasattr(queryset, "_prefetch_relationship") and relationship_desc.property.resolved_model:
-            await queryset._prefetch_relationship(  # noqa # type: ignore
-                [self.instance], relationship_desc, relationship_desc.property.resolved_model, session
-            )
 
     def _get_cached_objects(self) -> Any:
         cache_attr = f"_{self.field_name}_cache"

@@ -41,10 +41,10 @@ class RelatedObjectProxy:
     async def _load(self):
         """Load related object from database."""
         if self.property.foreign_keys and self.property.resolved_model:
-            # Handle foreign_keys as string or list
+            # Get foreign key field name
             fk_field = self.property.foreign_keys
             if isinstance(fk_field, list):
-                fk_field = fk_field[0]  # Use first foreign key
+                fk_field = fk_field[0]
 
             fk_value = getattr(self.instance, fk_field)
             if fk_value is not None:
@@ -52,12 +52,12 @@ class RelatedObjectProxy:
                 pk_col = list(related_table.primary_key.columns)[0]
 
                 query = select(related_table).where(pk_col == fk_value)  # noqa
-                session = self.instance._get_session()  # noqa
+                session = self.instance.get_session()
                 result = await session.execute(query)
                 row = result.first()
 
                 if row:
-                    self._cached_object = self.property.resolved_model(**dict(row._mapping))  # noqa
+                    self._cached_object = self.property.resolved_model.from_dict(dict(row._mapping), validate=False)
 
         self._loaded = True
 
@@ -114,20 +114,26 @@ class OneToManyCollection(BaseRelatedCollection):
         instance_pk = self.instance.id
         related_table = self.property.resolved_model.get_table()
 
-        # Handle foreign_keys as string or list
+        # Infer foreign key field name
         fk_name = self.property.foreign_keys
         if isinstance(fk_name, list):
-            fk_name = fk_name[0]  # Use first foreign key
+            fk_name = fk_name[0]
         elif fk_name is None:
-            fk_name = f"{self.instance.__class__.__name__.lower()}_id"
+            fk_name = (
+                f"{self.property.back_populates}_id"
+                if self.property.back_populates
+                else f"{self.instance.__class__.__name__.lower()}_id"
+            )
 
         fk_col = related_table.c[fk_name]
 
         query = select(related_table).where(fk_col == instance_pk)  # noqa
-        session = self.instance._get_session()  # noqa
+        session = self.instance.get_session()
         result = await session.execute(query)
 
-        self._cached_objects = [self.property.resolved_model(**dict(row._mapping)) for row in result]  # noqa
+        self._cached_objects = [
+            self.property.resolved_model.from_dict(dict(row._mapping), validate=False) for row in result
+        ]
         self._loaded = True
 
 
@@ -214,11 +220,13 @@ class M2MRelatedCollection(BaseRelatedCollection, M2MCollectionMixin):
             self._set_empty_result()
             return
 
-        session = self.instance._get_session()  # noqa
+        session = self.instance.get_session()
         result = await session.execute(query)
 
         if self.property.resolved_model:
-            self._cached_objects = [self.property.resolved_model(**dict(row._mapping)) for row in result]  # noqa
+            self._cached_objects = [
+                self.property.resolved_model.from_dict(dict(row._mapping), validate=False) for row in result
+            ]
         else:
             self._cached_objects = []
         self._loaded = True
@@ -235,7 +243,7 @@ class M2MRelatedCollection(BaseRelatedCollection, M2MCollectionMixin):
 
         from sqlalchemy import insert
 
-        session = self.instance._get_session(readonly=False)  # noqa
+        session = self.instance.get_session()
 
         if not (m2m_def.right_ref_field and m2m_def.left_field and m2m_def.right_field):
             return
@@ -262,7 +270,7 @@ class M2MRelatedCollection(BaseRelatedCollection, M2MCollectionMixin):
 
         from sqlalchemy import and_, delete
 
-        session = self.instance._get_session(readonly=False)  # noqa
+        session = self.instance.get_session()
 
         if not (m2m_def.right_ref_field and m2m_def.left_field and m2m_def.right_field):
             return

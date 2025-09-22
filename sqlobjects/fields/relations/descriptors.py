@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING, Any
 
+from ...cascade import OnDelete
+
 
 if TYPE_CHECKING:
     from ...model import ObjectModel
@@ -29,11 +31,12 @@ class RelationshipProperty:
         primaryjoin: str | None = None,
         secondaryjoin: str | None = None,
         order_by: str | list[str] | None = None,
-        cascade: str | None = None,
+        cascade: str | bool = False,
+        on_delete: OnDelete = OnDelete.NO_ACTION,
         passive_deletes: bool = False,
         **kwargs,
     ):
-        """Initialize relationship property.
+        """Initialize relationship property with cascade and deletion behavior.
 
         Args:
             argument: Target model class or string name
@@ -46,7 +49,8 @@ class RelationshipProperty:
             primaryjoin: Custom primary join condition
             secondaryjoin: Custom secondary join condition for M2M
             order_by: Default ordering for collections
-            cascade: Cascade options
+            cascade: Cascade behavior (bool for simple on/off, str for SQLAlchemy cascade options)
+            on_delete: Behavior when related object is deleted
             passive_deletes: Whether to use passive deletes
             **kwargs: Additional relationship options
         """
@@ -62,6 +66,7 @@ class RelationshipProperty:
         self.secondaryjoin = secondaryjoin
         self.order_by = order_by
         self.cascade = cascade
+        self.on_delete = on_delete
         self.passive_deletes = passive_deletes
         self.name: str | None = None
         self.resolved_model: type[ObjectModel] | None = None

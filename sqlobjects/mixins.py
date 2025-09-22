@@ -18,7 +18,11 @@ class _StateManager:
 
     def __init__(self):
         """Initialize empty state dictionary."""
-        self._state: dict[str, Any] = {}
+        self._state: dict[str, Any] = {
+            "dirty_fields": set(),
+            "cascade_relationships": {},  # Store relationship objects for cascade save
+            "needs_cascade_save": False,  # Flag for cascade save requirement
+        }
 
     def get(self, key: str, default=None):
         """Get state value by key.
@@ -133,6 +137,9 @@ class PrimaryKeyMixin(SessionMixin):
             True if all primary key fields have non-None values
         """
         pk_values = self._get_primary_key_values()
+        # Handle case where model has no primary key fields
+        if not pk_values:
+            return False
         return all(value is not None for value in pk_values.values())
 
     def _build_pk_conditions(self) -> list:
@@ -411,7 +418,11 @@ class DataConversionMixin(DeferredLoadingMixin):
                 else:
                     non_init_data[field_name] = value
             else:
-                init_data[field_name] = value
+                # For fields without codegen_params, check if it's an identity field
+                if field_name == "id" and hasattr(field_attr, "column") and hasattr(field_attr.column, "autoincrement"):  # type: ignore[reportOptionalSubscript]
+                    non_init_data[field_name] = value
+                else:
+                    init_data[field_name] = value
 
         instance = cls(**init_data)  # noqa
 
@@ -507,6 +518,31 @@ class FieldCacheMixin(DataConversionMixin):
         if hasattr(cls, cache_attr):
             delattr(cls, cache_attr)
 
+    def __setattr__(self, name: str, value):
+        """Override setattr to handle relationship field assignments."""
+        if hasattr(self, "_get_relationship_fields") and name in self._get_relationship_fields():
+            self._handle_relationship_assignment(name, value)
+        else:
+            super().__setattr__(name, value)
+
+    def _handle_relationship_assignment(self, field_name: str, value):
+        """Handle assignment of relationship objects for cascade save."""
+        if not hasattr(self, "_state_manager"):
+            return
+
+        # Store relationship objects
+        cascade_relationships = self._state_manager.get("cascade_relationships", {})
+        cascade_relationships[field_name] = value if isinstance(value, list) else [value]  # type: ignore[reportOptionalSubscript]
+        self._state_manager.set("cascade_relationships", cascade_relationships)
+
+        # Mark for cascade save
+        self._state_manager.set("needs_cascade_save", True)
+
+    def _get_relationship_fields(self) -> set[str]:
+        """Get relationship field names from model metadata."""
+        relationships = getattr(self.__class__, "_relationships", {})
+        return set(relationships.keys())
+
     def __getattribute__(self, name: str):
         """Optimized attribute access using automatic field cache.
 
@@ -538,6 +574,8 @@ class FieldCacheMixin(DataConversionMixin):
             "validate_field",
             "load_deferred_field",
             "is_from_database",
+            "_handle_relationship_assignment",
+            "_get_relationship_fields",
         ):
             return super().__getattribute__(name)
 

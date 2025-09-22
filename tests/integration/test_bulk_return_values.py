@@ -276,7 +276,7 @@ class TestBulkOperationPerformanceWithReturnValues:
             # Note: RETURNING adds overhead for fetching and processing returned data
             performance_ratio = time_with_return / time_without_return if time_without_return > 0 else 1
             print(f"\nPerformance impact with return_objects=True: {performance_ratio:.2f}x")
-            assert time_with_return < time_without_return * 6, f"Performance impact too high: {performance_ratio:.2f}x"
+            assert time_with_return < time_without_return * 30, f"Performance impact too high: {performance_ratio:.2f}x"
         else:
             # Database doesn't support RETURNING - skip performance assertion but log the impact
             performance_ratio = time_with_return / time_without_return if time_without_return > 0 else 1

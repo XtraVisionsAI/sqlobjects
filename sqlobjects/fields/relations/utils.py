@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Column, ForeignKey, Table
 
+from ...cascade import CascadeType, normalize_cascade
 from .descriptors import RelationshipProperty, RelationshipType
 
 
@@ -82,17 +83,22 @@ class RelationshipResolver:
         Returns:
             String representing the relationship type
         """
+        # Handle explicit uselist setting
         if property_.uselist is False:
             return RelationshipType.MANY_TO_ONE if property_.foreign_keys else RelationshipType.ONE_TO_ONE
         elif property_.uselist:
             return RelationshipType.MANY_TO_MANY if property_.secondary else RelationshipType.ONE_TO_MANY
 
+        # Auto-infer based on parameters
         if property_.secondary:
             property_.is_many_to_many = True
+            property_.uselist = True
             return RelationshipType.MANY_TO_MANY
         elif property_.foreign_keys:
+            property_.uselist = False
             return RelationshipType.MANY_TO_ONE
         else:
+            property_.uselist = True
             return RelationshipType.ONE_TO_MANY
 
 
@@ -108,11 +114,11 @@ def relationship(
     primaryjoin: str | None = None,
     secondaryjoin: str | None = None,
     order_by: str | list[str] | None = None,
-    cascade: str | None = None,
+    cascade: CascadeType = None,
     passive_deletes: bool = False,
     **kwargs: Any,
 ):
-    """Define model relationship using unified Column syntax.
+    """Define model relationship with SQLAlchemy-compatible cascade behavior.
 
     Args:
         argument: Target model class or string name
@@ -125,20 +131,33 @@ def relationship(
         primaryjoin: Custom primary join condition
         secondaryjoin: Custom secondary join condition for M2M
         order_by: Default ordering for collections
-        cascade: Cascade options
+        cascade: Application-layer cascade behavior (SQLAlchemy compatible)
         passive_deletes: Whether to use passive deletes
         **kwargs: Additional relationship options
 
     Returns:
-        Column instance marked as relationship field
+        Column instance marked as relationship field with cascade configuration
 
     Raises:
         ValueError: If both back_populates and backref are specified
+
+    Example:
+        # Type-safe enum usage
+        posts = relationship("Post", cascade={CascadeOption.ALL, CascadeOption.DELETE_ORPHAN})
+
+        # Preset constants
+        comments = relationship("Comment", cascade=CascadePresets.ALL_DELETE_ORPHAN)
+
+        # SQLAlchemy string format
+        tags = relationship("Tag", cascade="all, delete-orphan")
     """
 
     # Validate mutually exclusive parameters
     if back_populates and backref:
         raise ValueError("Cannot specify both 'back_populates' and 'backref'")
+
+    # Normalize cascade parameter to SQLAlchemy string format
+    cascade_str = normalize_cascade(cascade)
 
     # Handle M2M table definition
     secondary_table_name = None
@@ -161,7 +180,7 @@ def relationship(
         primaryjoin=primaryjoin,
         secondaryjoin=secondaryjoin,
         order_by=order_by,
-        cascade=cascade,
+        cascade=cascade_str,  # Use normalized string
         passive_deletes=passive_deletes,
         **kwargs,
     )
