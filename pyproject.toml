@@ -1,6 +1,6 @@
 [project]
 name = "sqlobjects"
-version = "1.0.1"
+version = "1.0.2"
 description = "Django-style async ORM library based on SQLAlchemy with chainable queries, Q objects, and relationship loading"
 readme = "README.md"
 license = { text = "MIT" }
@@ -65,6 +65,13 @@ test = [
 name = "tsinghua"
 url = "https://pypi.tuna.tsinghua.edu.cn/simple/"
 default = true
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "$version"
+version_scheme = "pep440"
+version_provider = "uv"
+update_changelog_on_bump = true
 
 [tool.pyright]
 include = ["sqlobjects", "tests"]
