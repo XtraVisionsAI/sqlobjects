@@ -49,7 +49,7 @@ Changelog = "https://github.com/XtraVisionsAI/sqlobjects/blob/main/CHANGELOG.md"
 dev = [
     "pre-commit>=4.3.0",
     "pyright>=1.1.405",
-    "ruff>=0.13.0",
+    "ruff>=0.13.1",
     "setuptools>=80.9.0",
 ]
 test = [

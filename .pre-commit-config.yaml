@@ -1,16 +1,16 @@
 repos:
 
-- repo: https://github.com/RobertCraigie/pyright-python
-  rev: v1.1.403
-  hooks:
-    - id: pyright
-      additional_dependencies:
-        - sqlalchemy[asyncio]
-        - pytest-asyncio
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.405
+    hooks:
+      - id: pyright
+        additional_dependencies:
+          - sqlalchemy[asyncio]
+          - pytest-asyncio
 
-- repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.12.1
-  hooks:
-    - id: ruff
-      args: [ --fix ]
-    - id: ruff-format
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.13.1
+    hooks:
+      - id: ruff
+        args: [ --fix ]
+      - id: ruff-format
