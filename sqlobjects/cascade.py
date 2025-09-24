@@ -14,21 +14,33 @@ if TYPE_CHECKING:
 
 __all__ = [
     "OnDelete",
+    "OnUpdate",
     "CascadeOption",
     "CascadePresets",
     "OnDeleteType",
+    "OnUpdateType",
     "CascadeType",
     "CyclicDependencyError",
     "DependencyResolver",
     "CascadeExecutor",
     "ForeignKeyInferrer",
     "normalize_ondelete",
+    "normalize_onupdate",
     "normalize_cascade",
 ]
 
 
 class OnDelete(Enum):
     """Database foreign key constraint behaviors."""
+
+    CASCADE = "CASCADE"
+    SET_NULL = "SET NULL"
+    RESTRICT = "RESTRICT"
+    NO_ACTION = "NO ACTION"
+
+
+class OnUpdate(Enum):
+    """Database foreign key update behaviors."""
 
     CASCADE = "CASCADE"
     SET_NULL = "SET NULL"
@@ -60,6 +72,7 @@ class CascadePresets:
 
 # Type aliases for better IDE support
 OnDeleteType = Union[OnDelete, Literal["CASCADE", "SET NULL", "RESTRICT", "NO ACTION"], None]  # noqa: UP007
+OnUpdateType = Union[OnUpdate, Literal["CASCADE", "SET NULL", "RESTRICT", "NO ACTION"], None]  # noqa: UP007
 CascadeType = Union[CascadeOption, set[CascadeOption], str, None]  # noqa: UP007
 
 
@@ -77,6 +90,22 @@ def normalize_ondelete(ondelete: OnDeleteType) -> str | None:
         raise ValueError(f"Invalid ondelete value: {ondelete}. Must be one of {valid_values}")
 
     raise TypeError(f"ondelete must be OnDelete enum or string, got {type(ondelete)}")
+
+
+def normalize_onupdate(onupdate: OnUpdateType) -> str | None:
+    """Normalize onupdate parameter to SQLAlchemy string format."""
+    if onupdate is None:
+        return "NO ACTION"  # Default value
+    if isinstance(onupdate, OnUpdate):
+        return onupdate.value
+    if isinstance(onupdate, str):
+        valid_values = {"CASCADE", "SET NULL", "RESTRICT", "NO ACTION"}
+        onupdate_upper = onupdate.upper()
+        if onupdate_upper in valid_values:
+            return onupdate_upper
+        raise ValueError(f"Invalid onupdate value: {onupdate}. Must be one of {valid_values}")
+
+    raise TypeError(f"onupdate must be OnUpdate enum or string, got {type(onupdate)}")
 
 
 def normalize_cascade(cascade: CascadeType) -> str:

@@ -6,6 +6,7 @@ import sqlalchemy as sa
 from sqlobjects.expressions import func
 from sqlobjects.fields import (
     BooleanColumn,
+    Column,
     IntegerColumn,
     StringColumn,
     column,
@@ -120,7 +121,7 @@ class TestAdvancedFields:
         """Test foreign_key() shortcut"""
 
         class TestModel7(TestModel):
-            fk_field = foreign_key("users.id")
+            fk_field: Column[int] = foreign_key("users.id")
 
         fk_col = get_column_from_field(TestModel7.fk_field)
         assert fk_col is not None
@@ -128,6 +129,65 @@ class TestAdvancedFields:
         fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
         # Check the column specification instead
         assert fk._colspec == "users.id"  # type: ignore[attr-defined]
+
+    def test_enhanced_foreign_key_fields(self):
+        """Test enhanced foreign_key() with additional parameters"""
+
+        class TestModel7Enhanced(TestModel):
+            # Auto type inference
+            user_id: Column[int] = foreign_key("users.id")
+
+            # Complete constraint configuration
+            author_id: Column[int] = foreign_key("users.id", ondelete="CASCADE", onupdate="CASCADE", nullable=False)
+
+            # Deferred constraint
+            parent_id: Column[int] = foreign_key("users.id", deferrable=True, initially="DEFERRED")
+
+        # Test auto type inference
+        user_id_col = get_column_from_field(TestModel7Enhanced.user_id)
+        assert user_id_col is not None
+        assert isinstance(user_id_col.type, sa.Integer)  # type: ignore[attr-defined]
+
+        # Test complete constraint configuration
+        author_id_col = get_column_from_field(TestModel7Enhanced.author_id)
+        assert author_id_col is not None
+        assert author_id_col.nullable is False  # type: ignore[attr-defined]
+        fk = list(author_id_col.foreign_keys)[0]  # type: ignore[attr-defined]
+        assert fk.ondelete == "CASCADE"
+        assert fk.onupdate == "CASCADE"
+
+        # Test deferred constraint
+        parent_id_col = get_column_from_field(TestModel7Enhanced.parent_id)
+        assert parent_id_col is not None
+        fk = list(parent_id_col.foreign_keys)[0]  # type: ignore[attr-defined]
+        assert fk.deferrable is True
+        assert fk.initially == "DEFERRED"
+
+    def test_foreign_key_auto_type_inference(self):
+        """Test automatic type inference for foreign keys"""
+
+        class TestModelAutoType(TestModel):
+            # Should infer integer for id fields
+            user_id: Column[int] = foreign_key("users.id")
+            post_id: Column[int] = foreign_key("posts.id")
+
+            # Should infer string for string fields
+            username: Column[str] = foreign_key("users.username")
+
+        # Test id field inference
+        user_id_col = get_column_from_field(TestModelAutoType.user_id)
+        assert user_id_col is not None
+        assert isinstance(user_id_col.type, sa.Integer)  # type: ignore[attr-defined]
+
+        # Test post id field inference
+        post_id_col = get_column_from_field(TestModelAutoType.post_id)
+        assert post_id_col is not None
+        assert isinstance(post_id_col.type, sa.Integer)  # type: ignore[attr-defined]
+
+        # Test string field inference
+        username_col = get_column_from_field(TestModelAutoType.username)
+        assert username_col is not None
+        assert isinstance(username_col.type, sa.String)  # type: ignore[attr-defined]
 
     def test_deferred_fields(self):
         """Test deferred loading configuration"""

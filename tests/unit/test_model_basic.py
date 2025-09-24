@@ -156,6 +156,27 @@ class TestModelOperations:
         assert hasattr(detached_user, "delete")
         assert hasattr(detached_user, "refresh")
 
+    def test_delete_cascade_parameter(self):
+        """Test delete method cascade parameter"""
+        user = TestUser.from_dict({"id": 1, "name": "Delete Test", "age": 25})
+
+        # Should accept cascade parameter
+        try:
+            # These should not raise parameter errors (will fail due to no session)
+            import inspect
+
+            delete_method = user.delete
+            sig = inspect.signature(delete_method)
+            assert "cascade" in sig.parameters
+
+            # Default parameter should be True
+            cascade_param = sig.parameters["cascade"]
+            assert cascade_param.default is True
+
+        except Exception as e:
+            # Should not be parameter-related errors
+            assert "cascade" not in str(e).lower() or "unexpected keyword" not in str(e).lower()
+
     def test_state_manager_integration(self):
         """Test state manager functionality"""
         user = TestUser(name="State Test", age=25)

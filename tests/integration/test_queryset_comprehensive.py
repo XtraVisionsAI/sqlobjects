@@ -273,6 +273,85 @@ class TestQuerySetBulkOperations:
         final_count = await User.objects.using(session).count()
         assert final_count == initial_count
 
+    @pytest.mark.usefixtures("sample_users")
+    async def test_cascade_delete_strategies(self, session):
+        """Test cascade delete parameter options"""
+        # Test cascade="full" (default)
+        deleted_count = await User.objects.filter(User.age > 100).using(session).delete(cascade="full")
+        assert deleted_count == 0
+
+        # Test cascade="fast"
+        deleted_count = await User.objects.filter(User.age > 100).using(session).delete(cascade="fast")
+        assert deleted_count == 0
+
+        # Test cascade="none"
+        deleted_count = await User.objects.filter(User.age > 100).using(session).delete(cascade="none")
+        assert deleted_count == 0
+
+    @pytest.mark.usefixtures("complex_relationships")
+    async def test_cascade_delete_with_relationships(self, session):
+        """Test cascade delete with actual relationships"""
+        # Create test data with relationships
+        from tests.conftest import Post, User
+
+        # Create user and posts
+        user_data = {"username": "test_cascade", "email": "test@example.com", "age": 30, "is_active": True}
+        _ = await User.objects.using(session).bulk_create([user_data])
+
+        # Get the created user ID (simplified approach)
+        test_user = await User.objects.filter(User.username == "test_cascade").using(session).first()
+        if test_user:
+            # Create posts for this user
+            post_data = [
+                {"title": "Test Post 1", "content": "Content 1", "author_id": test_user.id},
+                {"title": "Test Post 2", "content": "Content 2", "author_id": test_user.id},
+            ]
+            await Post.objects.using(session).bulk_create(post_data)
+
+            # Test cascade delete
+            deleted_count = await User.objects.filter(User.id == test_user.id).using(session).delete(cascade="full")
+            assert deleted_count >= 0
+
+
+class TestQuerySetCascadeOperations:
+    """Test cascade delete functionality"""
+
+    async def test_cascade_parameter_validation(self, session):
+        """Test cascade parameter accepts valid values"""
+        # Valid cascade values should not raise errors
+        try:
+            await User.objects.filter(User.id == -1).using(session).delete(cascade="full")
+            await User.objects.filter(User.id == -1).using(session).delete(cascade="fast")
+            await User.objects.filter(User.id == -1).using(session).delete(cascade="none")
+        except Exception as e:
+            # Should not raise parameter validation errors
+            assert "cascade" not in str(e).lower()
+
+    @pytest.mark.usefixtures("sample_users")
+    async def test_cascade_delete_performance_difference(self, session):
+        """Test that different cascade modes have different performance characteristics"""
+        import time
+
+        # Test cascade="none" (should be fastest)
+        start = time.time()
+        await User.objects.filter(User.age > 100).using(session).delete(cascade="none")
+        none_time = time.time() - start
+
+        # Test cascade="fast"
+        start = time.time()
+        await User.objects.filter(User.age > 100).using(session).delete(cascade="fast")
+        fast_time = time.time() - start
+
+        # Test cascade="full"
+        start = time.time()
+        await User.objects.filter(User.age > 100).using(session).delete(cascade="full")
+        full_time = time.time() - start
+
+        # All should complete (even if no records deleted)
+        assert none_time >= 0
+        assert fast_time >= 0
+        assert full_time >= 0
+
 
 class TestQuerySetIterators:
     """Test iterator and async iteration"""

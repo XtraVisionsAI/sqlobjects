@@ -1068,14 +1068,209 @@ class QuerySet(Generic[T]):
         return result if isinstance(result, int) else 0
 
     @emit_signals(Operation.DELETE, is_bulk=True)
-    async def delete(self) -> int:
-        """Perform bulk delete on objects matching query conditions."""
+    async def delete(self, cascade: str = "full") -> int:
+        """Perform bulk delete on objects matching query conditions.
+
+        Args:
+            cascade: Cascade deletion strategy
+                - "full" (default): Complete cascade deletion
+                  * Load all matching instances into memory
+                  * Trigger all signals and lifecycle events
+                  * Process all relationship cascades (including delete-orphan)
+                  * Slowest but most complete functionality
+
+                - "fast": Fast cascade deletion
+                  * Only fetch referenced field values
+                  * Process foreign key relationships with bulk DELETE
+                  * Trigger bulk delete signals for related tables
+                  * Balance performance and cascade functionality
+
+                - "none": No cascade deletion
+                  * Execute direct SQL DELETE statement
+                  * Rely on database foreign key constraints for cascading
+                  * Fastest but no ORM cascade functionality
+
+        Returns:
+            Number of deleted records
+        """
+        if cascade == "full":
+            return await self._delete_with_full_cascade()
+        elif cascade == "fast":
+            return await self._delete_with_fast_cascade()
+        else:  # "none"
+            return await self._delete_with_no_cascade()
+
+    async def _delete_with_full_cascade(self) -> int:
+        """Execute complete cascade deletion with full ORM functionality.
+
+        Returns:
+            Number of deleted records
+        """
+        total_count = await self.count()
+        if total_count == 0:
+            return 0
+
+        batch_size = 50 if total_count > 100 else total_count
+        deleted_count = 0
+        offset = 0
+
+        while True:
+            batch = await self.offset(offset).limit(batch_size).all()
+            if not batch:
+                break
+
+            for instance in batch:
+                await instance.delete(cascade=False)  # Avoid recursion  # type: ignore[reportAttributeAccessIssue]
+                deleted_count += 1
+
+            offset += batch_size
+
+        return deleted_count
+
+    async def _delete_with_fast_cascade(self) -> int:
+        """Execute fast cascade deletion with minimal ORM processing.
+
+        Returns:
+            Number of deleted records
+        """
+        # Get all referenced field values
+        referenced_values = await self._get_referenced_field_values()
+        if not any(referenced_values.values()):
+            return 0
+
+        # Process necessary foreign key relationships
+        await self._process_fast_cascade_relationships(referenced_values)
+
+        # Execute bulk delete
         query = self._builder.build(self._table)
         result = await self._executor.execute(query, "delete")
         return result if isinstance(result, int) else 0
 
-    # ========================================
-    # Subquery Methods - Convert QuerySet to subquery expressions
+    async def _delete_with_no_cascade(self) -> int:
+        """Execute direct SQL deletion without ORM cascade processing.
+
+        Returns:
+            Number of deleted records
+        """
+        query = self._builder.build(self._table)
+        result = await self._executor.execute(query, "delete")
+        return result if isinstance(result, int) else 0
+
+    def _get_primary_key_field(self) -> str | None:
+        """Get primary key field name for the model.
+
+        Returns:
+            Primary key field name or None if not found
+        """
+        for column in self._table.columns:  # noqa
+            if column.primary_key:
+                return column.name
+        return None
+
+    async def _get_referenced_field_values(self) -> dict[str, list]:
+        """Get all referenced field values for cascade deletion.
+
+        Returns:
+            Dict mapping referenced field name -> list of values
+        """
+        relationships = self._find_referencing_relationships()
+
+        # Find all referenced fields
+        referenced_fields = set()
+        for _, _, referenced_column in relationships:
+            referenced_fields.add(referenced_column)
+
+        # Get values for each referenced field
+        field_values = {}
+        for field in referenced_fields:
+            try:
+                values = await self.values_list(field, flat=True)
+                field_values[field] = values
+            except Exception:  # noqa
+                field_values[field] = []
+
+        return field_values
+
+    def _find_referencing_relationships(self) -> list[tuple[Table, str, str]]:
+        """Find all foreign key relationships that reference this table.
+
+        Returns:
+            List of (referencing_table, fk_column_name, referenced_column_name) tuples
+        """
+        relationships = []
+
+        if hasattr(self._table, "metadata"):
+            for table in self._table.metadata.tables.values():
+                for column in table.columns:
+                    for fk in column.foreign_keys:
+                        # Check if this foreign key points to our table
+                        if fk.column.table == self._table:
+                            relationships.append(
+                                (
+                                    table,  # referencing table
+                                    column.name,  # foreign key column name
+                                    fk.column.name,  # referenced column name
+                                )
+                            )
+
+        return relationships
+
+    async def _process_fast_cascade_relationships(self, referenced_values: dict[str, list]) -> None:
+        """Process necessary foreign key relationships for fast cascade.
+
+        Args:
+            referenced_values: Dict mapping referenced field name -> list of values
+        """
+        relationships = self._find_referencing_relationships()
+
+        for ref_table, fk_column, referenced_column in relationships:
+            # Get values for this specific relationship
+            values = referenced_values.get(referenced_column, [])
+            if values:
+                await self._cascade_delete_related_records(ref_table, fk_column, values)
+
+    async def _cascade_delete_related_records(self, ref_table: Table, fk_column: str, values: list) -> None:
+        """Delete related records in referencing table using ORM methods.
+
+        Args:
+            ref_table: The table that references our table
+            fk_column: The foreign key column name
+            values: List of values being deleted
+        """
+        if not values:
+            return
+
+        # Find the model class for the referencing table
+        related_model_class = self._find_model_class_for_table(ref_table)
+        if not related_model_class:
+            return
+
+        # Create QuerySet for the related model and delete using ORM
+        related_queryset = QuerySet(ref_table, related_model_class, self._db_or_session)  # noqa
+
+        # Build filter condition for foreign key values
+        fk_column_obj = ref_table.c[fk_column]
+        filter_condition = fk_column_obj.in_(values)
+
+        # Use ORM delete with cascade=none to avoid infinite recursion
+        await related_queryset.filter(filter_condition).delete(cascade="none")
+
+    def _find_model_class_for_table(self, table: Table) -> type | None:
+        """Find the model class associated with a table from registry.
+
+        Args:
+            table: SQLAlchemy table
+
+        Returns:
+            Model class if found, None otherwise
+        """
+        # Get registry from model class and use native method
+        if hasattr(self._model_class, "__registry__"):
+            registry = self._model_class.__registry__  # type: ignore[reportAttributeAccessIssue]
+            return registry.get_model_by_table(table.name)
+
+        return None
+
     # ========================================
 
     def subquery(
