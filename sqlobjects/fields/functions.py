@@ -3,7 +3,7 @@ from typing import Any
 from sqlalchemy import ForeignKey
 from sqlalchemy.sql.elements import ColumnElement
 
-from ..cascade import OnDeleteType, normalize_ondelete
+from ..cascade import OnDeleteType, OnUpdateType, normalize_ondelete, normalize_onupdate  # pyright: ignore
 from .core import Column, column
 from .shortcuts import ComputedColumn, IdentityColumn
 
@@ -65,38 +65,65 @@ def computed(
 def foreign_key(
     reference: str,
     *,
-    type: str = "integer",  # noqa
+    type: str = "auto",  # noqa
     nullable: bool = True,
     ondelete: OnDeleteType = None,
+    onupdate: OnUpdateType = None,
+    deferrable: bool = False,
+    initially: str = "IMMEDIATE",
     **kwargs: Any,
 ) -> Column[Any]:
     """Create foreign key column with database constraint behavior.
 
     Args:
         reference: Foreign key reference in format "table.column"
-        type: Column type (default: "integer")
+        type: Column type, "auto" for automatic type inference
         nullable: Whether column can be null
         ondelete: Database constraint behavior when referenced object is deleted
+        onupdate: Database constraint behavior when referenced object is updated
+        deferrable: Whether constraint checking can be deferred
+        initially: Initial constraint state ("IMMEDIATE" or "DEFERRED")
         **kwargs: Additional column parameters
 
     Returns:
         Column descriptor with foreign key constraint
 
-    Example:
-        # Type-safe enum usage
-        author_id: Column[int] = foreign_key("users.id", ondelete=OnDelete.CASCADE)
+    Examples:
+        # Basic usage with auto type inference
+        author_id: Column[int] = foreign_key("users.id")
 
-        # String usage (SQLAlchemy compatible)
-        category_id: Column[int] = foreign_key("categories.id", ondelete="SET NULL")
+        # Complete constraint configuration
+        author_id: Column[int] = foreign_key(
+            "users.id",
+            ondelete="CASCADE",
+            onupdate="CASCADE",
+            nullable=False
+        )
 
-        # No constraint (default)
-        department_id: Column[int] = foreign_key("departments.id")
+        # Deferred constraint for circular references
+        parent_id: Column[int] = foreign_key(
+            "categories.id",
+            deferrable=True,
+            initially="DEFERRED"
+        )
     """
-    # Normalize ondelete parameter
-    ondelete_str = normalize_ondelete(ondelete)
 
-    # Create ForeignKey constraint with normalized ondelete
-    fk_constraint = ForeignKey(reference, ondelete=ondelete_str)
+    # Normalize constraint parameters
+    ondelete_str = normalize_ondelete(ondelete)
+    onupdate_str = normalize_onupdate(onupdate) if onupdate else None
+
+    # Build foreign key constraint parameters
+    fk_kwargs = {}
+    if ondelete_str:
+        fk_kwargs["ondelete"] = ondelete_str
+    if onupdate_str:
+        fk_kwargs["onupdate"] = onupdate_str
+    if deferrable:
+        fk_kwargs["deferrable"] = True
+        fk_kwargs["initially"] = initially
+
+    # Create ForeignKey constraint
+    fk_constraint = ForeignKey(reference, **fk_kwargs)
 
     # Use existing column() function with foreign key
     return column(

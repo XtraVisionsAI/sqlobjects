@@ -1,7 +1,7 @@
 """Core field classes for SQLObjects"""
 
 from collections.abc import Callable
-from typing import Any, Generic, TypeVar, cast, overload
+from typing import Any, Generic, TypeVar, Union, cast, get_args, get_origin, overload
 
 from sqlalchemy import Column as CoreColumn
 from sqlalchemy import ForeignKey
@@ -101,6 +101,23 @@ class Column(Generic[T]):
         params = self._params.copy()
         fk = params.pop("foreign_key", None)
         type_name = params.pop("type", "auto")
+
+        # Resolve auto type before creating ColumnAttribute
+        if type_name == "auto":
+            annotations = getattr(owner, "__annotations__", {})
+            if name in annotations:
+                annotation = annotations[name]
+                inferred_type, inferred_params = _infer_type_from_annotation(annotation)
+                type_name = inferred_type
+                # Merge inferred params with existing params
+                for key, value in inferred_params.items():
+                    if key not in params:
+                        params[key] = value
+            # else:
+            #     # Fallback: if no annotation found, use string type
+            #     type_name = "string"
+            #     if "length" not in params:
+            #         params["length"] = 255
 
         # Process extended parameters
         info = params.pop("info", None) or {}
@@ -981,3 +998,53 @@ def _resolve_default_value(
         return insert_default
 
     return None
+
+
+def _infer_type_from_annotation(annotation) -> tuple[str, dict[str, Any]]:
+    """Infer type name and parameters from Column[T] annotation.
+
+    Args:
+        annotation: Type annotation to analyze
+
+    Returns:
+        Tuple of (type_name, parameters_dict)
+    """
+    if get_origin(annotation) is Column:
+        args = get_args(annotation)
+        if args:
+            python_type = args[0]
+            return _map_python_type_to_sqlalchemy(python_type)
+
+    return "string", {}
+
+
+def _map_python_type_to_sqlalchemy(python_type) -> tuple[str, dict[str, Any]]:
+    """Map Python types to SQLAlchemy type names and parameters.
+
+    Args:
+        python_type: Python type to map
+
+    Returns:
+        Tuple of (type_name, parameters_dict)
+    """
+    # Handle Optional[T] -> Union[T, None]
+    if get_origin(python_type) is Union:
+        union_args = get_args(python_type)
+        if len(union_args) == 2 and type(None) in union_args:
+            # Optional[T] case
+            non_none_type = union_args[0] if union_args[1] is type(None) else union_args[1]
+            type_name, params = _map_python_type_to_sqlalchemy(non_none_type)
+            params["nullable"] = True
+            return type_name, params
+
+    # Handle list[T] -> ARRAY
+    if get_origin(python_type) is list:
+        list_args = get_args(python_type)
+        if list_args:
+            item_type_name, _ = _map_python_type_to_sqlalchemy(list_args[0])
+            return "array", {"item_type": item_type_name}
+
+    # Use Python type name directly as SQLAlchemy type name
+    # Registry alias system will handle mapping in create_type_instance()
+    type_name = python_type.__name__ if hasattr(python_type, "__name__") else "string"
+    return type_name, {}

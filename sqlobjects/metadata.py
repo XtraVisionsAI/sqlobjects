@@ -1,13 +1,12 @@
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Union, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Union, cast
 
 from sqlalchemy import CheckConstraint, Index, UniqueConstraint
 from sqlalchemy import MetaData as SqlAlchemyMetaData
 
-from .fields import Column, ColumnAttribute
+from .fields import ColumnAttribute
 from .fields.relations import M2MTable, RelationshipDescriptor, RelationshipResolver
-from .fields.types import Auto, create_type_instance
 from .fields.utils import get_column_from_field, is_field_definition
 from .utils.naming import to_snake_case
 from .utils.pattern import pluralize
@@ -77,56 +76,6 @@ class ModelConfig:
     custom: dict[str, Any] = field(default_factory=dict)
     field_validators: dict[str, list[Any]] = field(default_factory=dict)
     field_metadata: dict[str, dict[str, Any]] = field(default_factory=dict)
-
-
-def _infer_type_from_annotation(annotation) -> tuple[str, dict[str, Any]]:
-    """Infer type name and parameters from Column[T] annotation.
-
-    Args:
-        annotation: Type annotation to analyze
-
-    Returns:
-        Tuple of (type_name, parameters_dict)
-    """
-    if get_origin(annotation) is Column:
-        args = get_args(annotation)
-        if args:
-            python_type = args[0]
-            return _map_python_type_to_sqlalchemy(python_type)
-
-    return "string", {}
-
-
-def _map_python_type_to_sqlalchemy(python_type) -> tuple[str, dict[str, Any]]:
-    """Map Python types to SQLAlchemy type names and parameters.
-
-    Args:
-        python_type: Python type to map
-
-    Returns:
-        Tuple of (type_name, parameters_dict)
-    """
-    # Handle Optional[T] -> Union[T, None]
-    if get_origin(python_type) is Union:
-        union_args = get_args(python_type)
-        if len(union_args) == 2 and type(None) in union_args:
-            # Optional[T] case
-            non_none_type = union_args[0] if union_args[1] is type(None) else union_args[1]
-            type_name, params = _map_python_type_to_sqlalchemy(non_none_type)
-            params["nullable"] = True
-            return type_name, params
-
-    # Handle list[T] -> ARRAY
-    if get_origin(python_type) is list:
-        list_args = get_args(python_type)
-        if list_args:
-            item_type_name, _ = _map_python_type_to_sqlalchemy(list_args[0])
-            return "array", {"item_type": item_type_name}
-
-    # Use Python type name directly as SQLAlchemy type name
-    # Registry alias system will handle mapping in create_type_instance()
-    type_name = python_type.__name__ if hasattr(python_type, "__name__") else "string"
-    return type_name, {}
 
 
 class ModelRegistry(SqlAlchemyMetaData):
@@ -279,7 +228,7 @@ class ModelRegistry(SqlAlchemyMetaData):
                 target_table_name = property_.resolved_model.__table__.name
 
                 # Check for foreign key to target model
-                for col in table.columns:
+                for col in table.columns:  # noqa
                     for fk in col.foreign_keys:
                         if fk.column.table.name == target_table_name:
                             property_.uselist = False
@@ -396,28 +345,6 @@ class ModelProcessor(type):
                     break
             if registry is None:
                 registry = ModelRegistry()
-
-        # Handle type inference
-        annotations = namespace.get("__annotations__", {})
-
-        for field_name, annotation in annotations.items():
-            field_value = namespace.get(field_name)
-
-            if field_value is not None:
-                core_column = get_column_from_field(field_value)
-
-                if core_column is not None and isinstance(core_column.type, Auto):
-                    # Infer actual type from annotation
-                    inferred_type, inferred_params = _infer_type_from_annotation(annotation)
-
-                    # Create new type instance and replace
-                    new_type_instance = create_type_instance(inferred_type, inferred_params)
-                    core_column.type = new_type_instance
-
-                    # If nullable=True inferred, update column attribute
-                    if inferred_params.get("nullable"):
-                        core_column.nullable = True
-
         # Create class
         cls = super().__new__(mcs, name, bases, namespace, **kwargs)
 
