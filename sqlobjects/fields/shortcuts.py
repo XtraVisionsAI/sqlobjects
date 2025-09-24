@@ -15,6 +15,7 @@ class StringColumn(Column[Any]):
         self,
         *,
         length: int | None = None,
+        type: Literal["string", "text"] = "string",  # noqa
         # SQLAlchemy Column parameters
         name: str | None = None,
         primary_key: bool = False,
@@ -47,7 +48,7 @@ class StringColumn(Column[Any]):
         kw_only: bool | None = None,
         foreign_key: ForeignKey | None = None,
     ):
-        params: dict = {"type": "string", **locals()}
+        params: dict = {"type": type, **locals()}
         params.pop("self")
         if length is not None:
             params["length"] = length
