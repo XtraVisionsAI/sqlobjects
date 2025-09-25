@@ -417,7 +417,7 @@ class DataConversionMixin(DeferredLoadingMixin):
         for field_name, value in non_init_data.items():
             # Apply default value if value is None
             if value is None:
-                default_value = instance._get_field_default_value(field_name)  # noqa # type: ignore[reportAttributeAccessIssue]
+                default_value = instance._get_field_default_value(field_name)  # noqa
                 if default_value is not None:
                     value = default_value
             setattr(instance, field_name, value)
@@ -431,6 +431,46 @@ class DataConversionMixin(DeferredLoadingMixin):
             instance.validate_all_fields()
 
         return instance
+
+    def _apply_default_values(self, kwargs: dict):
+        """Apply default values for fields not provided in kwargs.
+
+        Args:
+            kwargs: Dictionary of provided field values (will be modified)
+        """
+        for field_name in self._get_field_names():
+            if field_name not in kwargs or kwargs[field_name] is None:
+                default_value = self._get_field_default_value(field_name)
+                if default_value is not None:
+                    kwargs[field_name] = default_value
+
+    def _get_field_default_value(self, field_name: str):
+        """Get default value for a field.
+
+        Args:
+            field_name: Name of the field
+
+        Returns:
+            Default value or None if no default
+        """
+        field_attr = getattr(self.__class__, field_name, None)
+        if field_attr is None:
+            return None
+
+        # Priority: default_factory > SQLAlchemy default
+        if hasattr(field_attr, "get_default_factory"):
+            factory = field_attr.get_default_factory()
+            if factory and callable(factory):
+                return factory()
+
+        if hasattr(field_attr, "default") and field_attr.default is not None:
+            default_value = field_attr.default
+            if callable(default_value):
+                return default_value()
+            else:
+                return default_value
+
+        return None
 
 
 class FieldCacheMixin(DataConversionMixin):
@@ -592,6 +632,13 @@ class FieldCacheMixin(DataConversionMixin):
 
         relationship_fields = field_cache.get("relationship_fields", set())
         if isinstance(relationship_fields, set) and name in relationship_fields:
+            # Check cascade_relationships first (manually assigned values)
+            if hasattr(self, "_state_manager"):
+                cascade_relationships: dict = self._state_manager.get("cascade_relationships", {})  # type: ignore[reportAssignmentType]
+                if name in cascade_relationships:
+                    return cascade_relationships[name]
+
+            # Check preloaded cache
             cache_name = f"_{name}_cache"
             try:
                 if hasattr(self, cache_name):
@@ -601,6 +648,7 @@ class FieldCacheMixin(DataConversionMixin):
             except AttributeError:
                 pass
 
+            # Only create proxy if relationship is not loaded
             proxy_cache = self._state_manager.get("proxy_cache", {})
             if isinstance(proxy_cache, dict) and name not in proxy_cache:
                 proxy_cache[name] = RelationFieldProxy(self, name)
