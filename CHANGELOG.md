@@ -1,3 +1,18 @@
+## 1.0.4 (2025-09-25)
+
+### Feat
+
+- remove unnecessary exception catching
+- implement insert or update using database upsert
+
+### Fix
+
+- use pk column name instead of column instance for pgsql upsert
+
+### Refactor
+
+- move field default value related methods to DataConversionMixin
+
 ## 1.0.3 (2025-09-25)
 
 ### Fix
