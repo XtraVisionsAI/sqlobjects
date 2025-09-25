@@ -969,18 +969,21 @@ class ModelProcessor(type):
         """
 
         fields = {}
-        for name in dir(cls):
-            if name.startswith("_"):
-                continue
-            try:
-                attr = getattr(cls, name)
-                if is_field_definition(attr):
-                    fields[name] = attr
-            except AttributeError:
-                # Attribute not accessible, skip silently
-                continue
-            except Exception as e:
-                raise RuntimeError(f"Unexpected error accessing {name} on {cls.__name__}: {e}") from e
+
+        for base in reversed(cls.__mro__):
+            for name, _ in getattr(base, "__dict__", {}).items():
+                if name.startswith("_"):
+                    continue
+                try:
+                    attr = getattr(cls, name)
+                    if is_field_definition(attr):
+                        fields[name] = attr
+                except AttributeError:
+                    # Attribute not accessible, skip silently
+                    continue
+                except Exception as e:
+                    raise RuntimeError(f"Unexpected error accessing {name} on {cls.__name__}: {e}") from e
+
         return fields
 
 
