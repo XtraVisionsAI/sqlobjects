@@ -114,11 +114,13 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         """Construct UPSERT statement based on database dialect."""
         dialect = self.get_session().bind.dialect.name
 
+        pk_columns = list(table.primary_key.columns)
+
         if dialect == "postgresql":
             from sqlalchemy.dialects.postgresql import insert
 
             stmt = insert(table).values(**data)
-            return stmt.on_conflict_do_update(index_elements=[table.primary_key], set_=data)
+            return stmt.on_conflict_do_update(index_elements=pk_columns, set_=data)
 
         elif dialect == "mysql":
             from sqlalchemy.dialects.mysql import insert
@@ -130,7 +132,7 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
             from sqlalchemy.dialects.sqlite import insert
 
             stmt = insert(table).values(**data)
-            return stmt.on_conflict_do_update(index_elements=[table.primary_key], set_=data)
+            return stmt.on_conflict_do_update(index_elements=pk_columns, set_=data)
 
         else:
             # Return None for unsupported dialects to trigger fallback
@@ -475,23 +477,18 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         from .cascade import OnDelete
 
         relationships = getattr(self.__class__, "_relationships", {})
-        print(f"DEBUG: _has_on_delete_relations checking {len(relationships)} relationships")
-        for rel_name, rel_descriptor in relationships.items():
-            print(f"DEBUG: Checking relationship {rel_name}")
+
+        for _, rel_descriptor in relationships.items():
             if hasattr(rel_descriptor, "property") and hasattr(rel_descriptor.property, "cascade"):
                 cascade_str = rel_descriptor.property.cascade
-                print(f"DEBUG: Cascade string: {cascade_str}")
                 if cascade_str and ("delete" in cascade_str or "all" in cascade_str):
-                    print(f"DEBUG: Found delete cascade relationship: {rel_name}")
                     return True
             if (
                 hasattr(rel_descriptor, "property")
                 and hasattr(rel_descriptor.property, "on_delete")
                 and rel_descriptor.property.on_delete != OnDelete.NO_ACTION
             ):
-                print(f"DEBUG: Found on_delete relationship: {rel_name}")
                 return True
-        print("DEBUG: No on_delete relations found")
         return False
 
     def _get_primary_key_field(self) -> str:
@@ -546,46 +543,6 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         """Get relationship field names from model metadata."""
         relationships = getattr(self.__class__, "_relationships", {})
         return set(relationships.keys())
-
-    def _apply_default_values(self, kwargs: dict):
-        """Apply default values for fields not provided in kwargs.
-
-        Args:
-            kwargs: Dictionary of provided field values (will be modified)
-        """
-        for field_name in self._get_field_names():
-            if field_name not in kwargs or kwargs[field_name] is None:
-                default_value = self._get_field_default_value(field_name)
-                if default_value is not None:
-                    kwargs[field_name] = default_value
-
-    def _get_field_default_value(self, field_name: str):
-        """Get default value for a field.
-
-        Args:
-            field_name: Name of the field
-
-        Returns:
-            Default value or None if no default
-        """
-        field_attr = getattr(self.__class__, field_name, None)
-        if field_attr is None:
-            return None
-
-        # Priority: default_factory > SQLAlchemy default
-        if hasattr(field_attr, "get_default_factory"):
-            factory = field_attr.get_default_factory()
-            if factory and callable(factory):
-                return factory()
-
-        if hasattr(field_attr, "default") and field_attr.default is not None:
-            default_value = field_attr.default
-            if callable(default_value):
-                return default_value()
-            else:
-                return default_value
-
-        return None
 
 
 class ObjectModel(ModelMixin, metaclass=ModelProcessor):
