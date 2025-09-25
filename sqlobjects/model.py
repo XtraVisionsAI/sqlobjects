@@ -56,6 +56,9 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         if hasattr(self, "_history_initialized"):
             self._history_initialized = False
 
+        # Generate default values for fields not provided in kwargs
+        self._apply_default_values(kwargs)
+
         # Set field values
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -499,6 +502,46 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         """Get relationship field names from model metadata."""
         relationships = getattr(self.__class__, "_relationships", {})
         return set(relationships.keys())
+
+    def _apply_default_values(self, kwargs: dict):
+        """Apply default values for fields not provided in kwargs.
+
+        Args:
+            kwargs: Dictionary of provided field values (will be modified)
+        """
+        for field_name in self._get_field_names():
+            if field_name not in kwargs or kwargs[field_name] is None:
+                default_value = self._get_field_default_value(field_name)
+                if default_value is not None:
+                    kwargs[field_name] = default_value
+
+    def _get_field_default_value(self, field_name: str):
+        """Get default value for a field.
+
+        Args:
+            field_name: Name of the field
+
+        Returns:
+            Default value or None if no default
+        """
+        field_attr = getattr(self.__class__, field_name, None)
+        if field_attr is None:
+            return None
+
+        # Priority: default_factory > SQLAlchemy default
+        if hasattr(field_attr, "get_default_factory"):
+            factory = field_attr.get_default_factory()
+            if factory and callable(factory):
+                return factory()
+
+        if hasattr(field_attr, "default") and field_attr.default is not None:
+            default_value = field_attr.default
+            if callable(default_value):
+                return default_value()
+            else:
+                return default_value
+
+        return None
 
 
 class ObjectModel(ModelMixin, metaclass=ModelProcessor):

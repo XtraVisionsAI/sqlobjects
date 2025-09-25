@@ -392,19 +392,7 @@ class DataConversionMixin(DeferredLoadingMixin):
         all_fields = set(cls._get_field_names())
         filtered_data = {k: v for k, v in data.items() if k in all_fields}
 
-        table = cls.get_table()
-        for col in table.columns:  # noqa
-            if col.name not in filtered_data:
-                field_attr = getattr(cls, col.name, None)
-                if field_attr is not None and hasattr(field_attr, "get_default_factory"):
-                    factory = field_attr.get_default_factory()
-                    if factory and callable(factory):
-                        filtered_data[col.name] = factory()
-                        continue
-
-                if col.default is not None:
-                    if hasattr(col.default, "is_scalar") and col.default.is_scalar:
-                        filtered_data[col.name] = getattr(col.default, "arg", None)
+        # Default values will be handled by __init__ method
 
         init_data = {}
         non_init_data = {}
@@ -427,6 +415,11 @@ class DataConversionMixin(DeferredLoadingMixin):
         instance = cls(**init_data)  # noqa
 
         for field_name, value in non_init_data.items():
+            # Apply default value if value is None
+            if value is None:
+                default_value = instance._get_field_default_value(field_name)  # noqa # type: ignore[reportAttributeAccessIssue]
+                if default_value is not None:
+                    value = default_value
             setattr(instance, field_name, value)
 
         # Clear dirty fields since this is initial creation from dict
