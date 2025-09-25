@@ -1,3 +1,9 @@
+## 1.0.5 (2025-09-25)
+
+### Fix
+
+- generate DDL using column definition order
+
 ## 1.0.4 (2025-09-25)
 
 ### Feat
