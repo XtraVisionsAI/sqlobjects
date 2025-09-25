@@ -323,19 +323,16 @@ class BulkOperationHandler:
         exec_session = session or self.session
 
         if return_columns and self.supports_returning(operation):
-            try:
-                stmt_with_returning = stmt.returning(*return_columns)
-                # For INSERT operations, use the data directly as parameters
-                if operation == "insert" and isinstance(parameters, list):
-                    result = await exec_session.execute(stmt_with_returning, parameters)
-                elif parameters:
-                    result = await exec_session.execute(stmt_with_returning, parameters)
-                else:
-                    result = await exec_session.execute(stmt_with_returning)
-                objects = self.create_objects_from_rows(result.fetchall(), return_fields)
-                return objects, result.rowcount or 0, True
-            except Exception:  # noqa
-                pass  # Fall through to regular execution
+            stmt_with_returning = stmt.returning(*return_columns)
+            # For INSERT operations, use the data directly as parameters
+            if operation == "insert" and isinstance(parameters, list):
+                result = await exec_session.execute(stmt_with_returning, parameters)
+            elif parameters:
+                result = await exec_session.execute(stmt_with_returning, parameters)
+            else:
+                result = await exec_session.execute(stmt_with_returning)
+            objects = self.create_objects_from_rows(result.fetchall(), return_fields)
+            return objects, result.rowcount or 0, True
 
         # Regular execution without RETURNING
         if parameters is not None and isinstance(parameters, list) and len(parameters) > 1:
