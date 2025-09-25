@@ -110,8 +110,34 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
             if i < len(pk_values):
                 setattr(self, col.name, pk_values[i])
 
+    def _get_upsert_statement(self, table, data):
+        """Construct UPSERT statement based on database dialect."""
+        dialect = self.get_session().bind.dialect.name
+
+        if dialect == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+
+            stmt = insert(table).values(**data)
+            return stmt.on_conflict_do_update(index_elements=[table.primary_key], set_=data)
+
+        elif dialect == "mysql":
+            from sqlalchemy.dialects.mysql import insert
+
+            stmt = insert(table).values(**data)
+            return stmt.on_duplicate_key_update(**data)
+
+        elif dialect == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert
+
+            stmt = insert(table).values(**data)
+            return stmt.on_conflict_do_update(index_elements=[table.primary_key], set_=data)
+
+        else:
+            # Return None for unsupported dialects to trigger fallback
+            return None
+
     async def _save_internal(self, validate: bool = True, session=None):
-        """Internal save operation without cascade or signal emission.
+        """Internal save operation using UPSERT with fallback to query-then-save.
 
         This method contains the core save logic that can be reused by both
         the public save() method and the cascade executor without triggering
@@ -135,17 +161,37 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         if validate:
             self.validate_all_fields()
 
+        data = self._get_all_data()
+
+        # Try UPSERT for supported databases
+        upsert_stmt = self._get_upsert_statement(table, data)
+        if upsert_stmt is not None:
+            try:
+                result = await session.execute(upsert_stmt)
+                if result.inserted_primary_key:
+                    self._set_primary_key_values(result.inserted_primary_key)
+                # Clear dirty fields after successful save
+                dirty_fields = self._state_manager.get("dirty_fields", set())
+                if isinstance(dirty_fields, set):
+                    dirty_fields.clear()
+                return self
+            except Exception as e:
+                raise PrimaryKeyError(f"Upsert operation failed: {e}") from e
+
+        # Fallback: query database to determine INSERT or UPDATE
         try:
-            if self._has_primary_key_values():
-                # UPDATE operation
-                pk_conditions = self._build_pk_conditions()
+            pk_conditions = self._build_pk_conditions()
+            existing = await session.execute(select(table).where(and_(*pk_conditions)))
+
+            if existing.first():
+                # Record exists, perform UPDATE
                 update_data = self._get_dirty_data()
                 if update_data:
                     stmt = update(table).where(and_(*pk_conditions)).values(**update_data)
                     await session.execute(stmt)
             else:
-                # INSERT operation
-                stmt = insert(table).values(**self._get_all_data())
+                # Record does not exist, perform INSERT
+                stmt = insert(table).values(**data)
                 result = await session.execute(stmt)
                 if result.inserted_primary_key:
                     self._set_primary_key_values(result.inserted_primary_key)
@@ -219,8 +265,8 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         for rel_name, new_related_objects in cascade_relationships.items():
             await self._process_relationship_update(rel_name, new_related_objects, session)
 
-        # Clear cascade state
-        self._state_manager.set("cascade_relationships", {})
+        # keep cascade_relationships
+        # self._state_manager.set("cascade_relationships", {})
         self._state_manager.set("needs_cascade_save", False)
 
     async def _process_relationship_update(self, rel_name: str, new_related_objects, session):
@@ -261,32 +307,30 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
 
     async def _fetch_current_related_objects(self, rel_name: str, session) -> list:
         """Fetch current related objects from database."""
-        # Simple implementation for common patterns
-        relationship_mappings = {
-            "posts": ("CascadePost", "author_id"),
-            "profile": ("CascadeProfile", "user_id"),
-        }
-
-        if rel_name not in relationship_mappings:
+        relationships = getattr(self.__class__, "_relationships", {})
+        if rel_name not in relationships:
             return []
 
-        related_model_name, fk_field = relationship_mappings[rel_name]
-
-        # Import model class
-        if related_model_name == "CascadePost":
-            from tests.integration.test_cascade_integration import CascadePost as RelatedModel
-        elif related_model_name == "CascadeProfile":
-            from tests.integration.test_cascade_integration import CascadeProfile as RelatedModel
-        else:
+        rel_descriptor = relationships[rel_name]
+        if not hasattr(rel_descriptor.property, "resolved_model") or not rel_descriptor.property.resolved_model:
             return []
 
-        # Query current objects
+        related_model = rel_descriptor.property.resolved_model
+        foreign_keys = rel_descriptor.property.foreign_keys
+
+        if not foreign_keys:
+            return []
+
+        # fetch foreign keys
+        fk_field = foreign_keys if isinstance(foreign_keys, str) else foreign_keys[0]
+
+        # get pk
         pk_value = getattr(self, self._get_primary_key_field())
         if pk_value is None:
             return []
 
         current_objects = (
-            await RelatedModel.objects.using(session).filter(getattr(RelatedModel, fk_field) == pk_value).all()
+            await related_model.objects.using(session).filter(getattr(related_model, fk_field) == pk_value).all()
         )
 
         return current_objects
