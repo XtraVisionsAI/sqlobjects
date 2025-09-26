@@ -193,7 +193,7 @@ class TestDeferredFieldPerformance:
         loaded_user = (
             await PerformanceTestUser.objects.using(session).defer("small_bio").get(PerformanceTestUser.id == user.id)
         )
-        loaded_user._state_manager.set("is_from_db", True)
+        loaded_user._state_manager._set("is_from_db", True)
 
         # Measure proxy creation time
         start_time = time.perf_counter()
@@ -414,7 +414,7 @@ class TestDeferredFieldScalability:
         loaded_user = (
             await PerformanceTestUser.objects.using(session).defer("small_bio").get(PerformanceTestUser.id == user.id)
         )
-        loaded_user._state_manager.set("is_from_db", True)
+        loaded_user._state_manager._set("is_from_db", True)
 
         # Benchmark first proxy access (creation)
         start_time = time.perf_counter()

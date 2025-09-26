@@ -290,7 +290,7 @@ class TestDeferredFieldIntegration:
         loaded_user = await DeferredTestUser.objects.using(session).defer("bio").get(DeferredTestUser.id == user.id)
 
         # Mark as from database to trigger proxy creation
-        loaded_user._state_manager.set("is_from_db", True)
+        loaded_user._state_manager.mark_from_database(True)
 
         # Accessing deferred field should return proxy
         bio_proxy = loaded_user.bio
@@ -405,12 +405,10 @@ class TestRelationFieldIntegration:
         proxy = RelationFieldProxy(user, "posts")
 
         # Test cache storage in state manager
-        proxy_cache = user._state_manager.get("proxy_cache", {})
-        proxy_cache["posts"] = proxy  # type: ignore
-        user._state_manager.set("proxy_cache", proxy_cache)
+        user._state_manager.update_object_cache("posts", proxy)
 
         # Verify cache retrieval
-        cached_proxy = user._state_manager.get("proxy_cache", {}).get("posts")  # type: ignore
+        cached_proxy = user._state_manager.get_object_cache().get("posts")
         assert cached_proxy is proxy
 
 

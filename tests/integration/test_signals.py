@@ -196,9 +196,7 @@ class TestSignalContext:
         await user.using(session).save()
 
         # Clear dirty fields to avoid issues with method override
-        dirty_fields = user._state_manager.get("dirty_fields", set())
-        if isinstance(dirty_fields, set):
-            dirty_fields.clear()
+        user._state_manager.clear_dirty_fields()
 
         # Override the before_save method for this instance using setattr to avoid dirty field tracking
         async def capture_context(context: SignalContext):

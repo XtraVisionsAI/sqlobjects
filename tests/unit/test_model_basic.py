@@ -97,8 +97,8 @@ class TestInstanceCreation:
         assert isinstance(user.created_at, datetime)
 
         # Verify dirty fields are cleared after from_dict
-        dirty_fields = user._state_manager.get("dirty_fields", set())
-        assert len(dirty_fields) == 0  # type: ignore
+        dirty_fields = user._state_manager.get_dirty_fields()
+        assert len(dirty_fields) == 0
 
     def test_partial_from_dict(self):
         """Test from_dict with partial data"""
@@ -115,18 +115,18 @@ class TestInstanceCreation:
         user = TestUser(name="Original", age=25)
 
         # Constructor should mark fields as dirty
-        dirty_fields = user._state_manager.get("dirty_fields", set())
-        assert "name" in dirty_fields  # type: ignore
-        assert "age" in dirty_fields  # type: ignore
+        dirty_fields = user._state_manager.get_dirty_fields()
+        assert "name" in dirty_fields
+        assert "age" in dirty_fields
 
         # Clear dirty fields
-        user._state_manager.get("dirty_fields").clear()  # type: ignore
+        user._state_manager.clear_dirty_fields()
 
         # Modifying field should mark as dirty
         user.name = "Modified"
-        dirty_fields = user._state_manager.get("dirty_fields", set())
-        assert "name" in dirty_fields  # type: ignore
-        assert "age" not in dirty_fields  # type: ignore
+        dirty_fields = user._state_manager.get_dirty_fields()
+        assert "name" in dirty_fields
+        assert "age" not in dirty_fields
 
 
 class TestModelOperations:
@@ -185,13 +185,13 @@ class TestModelOperations:
         assert hasattr(user, "_state_manager")
 
         # Should track dirty fields
-        dirty_fields = user._state_manager.get("dirty_fields", set())
+        dirty_fields = user._state_manager.get_dirty_fields()
         assert isinstance(dirty_fields, set)
         assert len(dirty_fields) > 0
 
         # Should support state operations
-        user._state_manager.set("test_key", "test_value")
-        assert user._state_manager.get("test_key") == "test_value"
+        user._state_manager._set("test_key", "test_value")
+        assert user._state_manager._get("test_key", None) == "test_value"
 
 
 class TestDataclassIntegration:

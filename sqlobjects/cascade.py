@@ -445,8 +445,10 @@ class CascadeExecutor:
                     await related_obj.using(session).save(cascade=False)
 
         # Clear cascade state
-        root_instance._state_manager._set("cascade_relationships", {})  # noqa
-        root_instance._state_manager.clear_cascade_save_flag()  # noqa
+        cascade_relationships = root_instance._state_manager.get_cascade_relationships()
+        for rel_name in cascade_relationships:
+            root_instance._state_manager.clear_cache_entry(rel_name)
+        root_instance._state_manager.clear_cascade_save_flag()
 
     async def _cascade_save_with_relationships(self, root_instance: "ObjectModel", session: "AsyncSession") -> None:
         """Handle cascade save with automatic foreign key setup."""

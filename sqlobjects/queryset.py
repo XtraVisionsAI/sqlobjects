@@ -1138,7 +1138,11 @@ class QuerySet(Generic[T]):
                 break
 
             for instance in batch:
-                await instance.delete(cascade=False)  # Avoid recursion  # type: ignore[reportAttributeAccessIssue]
+                # Get session from QuerySet's db_or_session
+                if self._db_or_session:
+                    await instance.using(self._db_or_session).delete(cascade=False)  # type: ignore[reportAttributeAccessIssue]
+                else:
+                    await instance.delete(cascade=False)  # type: ignore[reportAttributeAccessIssue]
                 deleted_count += 1
 
             offset += batch_size

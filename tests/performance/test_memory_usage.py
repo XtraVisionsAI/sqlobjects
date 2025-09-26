@@ -200,12 +200,13 @@ class TestBulkOperationMemoryUsage(MemoryTestBase):
         """Test bulk create memory usage"""
         dataset_sizes = [1000, 5000, 10000]
 
-        for size in dataset_sizes:
+        for i, size in enumerate(dataset_sizes):
             memory_before = self.get_memory_usage()
 
-            # Prepare data
+            # Prepare data with unique usernames
             users_data = [
-                {"username": f"bulk_mem_user_{i}", "email": f"bulk_mem{i}@example.com", "age": 25} for i in range(size)
+                {"username": f"bulk_mem_{i}_{j}", "email": f"bulk_mem{i}_{j}@example.com", "age": 25}
+                for j in range(size)
             ]
 
             # Bulk create

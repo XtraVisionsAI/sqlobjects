@@ -100,8 +100,8 @@ class TestCRUDLifecycle:
         user = User.from_dict(data)
 
         # Should have clean state after creation
-        dirty_fields = user._state_manager.get("dirty_fields", set())
-        assert dirty_fields is not None and len(dirty_fields) == 0
+        dirty_fields = user._state_manager.get_dirty_fields()
+        assert len(dirty_fields) == 0
 
         # Should be able to save without issues
         await user.using(session).save()

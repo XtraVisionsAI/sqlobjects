@@ -216,7 +216,7 @@ class TestDeferredFieldDatabaseOperations:
         loaded_user = await DeferredUser.objects.using(session).defer("bio").get(DeferredUser.id == user.id)
 
         # Mark as from database to enable proxy behavior
-        loaded_user._state_manager.set("is_from_db", True)
+        loaded_user._state_manager.mark_from_database(True)
 
         # Accessing deferred field should return proxy
         bio_proxy = loaded_user.bio
@@ -235,7 +235,9 @@ class TestDeferredFieldDatabaseOperations:
         user = DeferredUser(username="no_pk_user", email="test@example.com")
 
         # Mark field as deferred
-        user._state_manager.get("deferred_fields").add("bio")  # type: ignore
+        deferred_fields = user._state_manager.get_deferred_fields()
+        deferred_fields.add("bio")
+        user._state_manager.set_deferred_fields(deferred_fields)
 
         # Should raise error when trying to load without primary key
         with pytest.raises(PrimaryKeyError):
@@ -404,12 +406,10 @@ class TestRelationshipFieldProxyIntegration:
 
         # Create and cache proxy
         proxy1 = RelationFieldProxy(user, "posts")
-        proxy_cache = user._state_manager.get("proxy_cache", {})
-        proxy_cache["posts"] = proxy1  # type: ignore
-        user._state_manager.set("proxy_cache", proxy_cache)
+        user._state_manager.update_object_cache("posts", proxy1)
 
         # Accessing again should return cached proxy
-        cached_proxy = user._state_manager.get("proxy_cache", {}).get("posts")  # type: ignore
+        cached_proxy = user._state_manager.get_object_cache().get("posts")
         assert cached_proxy is proxy1
 
     def test_relationship_proxy_error_handling(self):

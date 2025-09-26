@@ -79,24 +79,41 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         pass
 
     def _get_all_data(self) -> dict:
-        """Get all field data.
+        """Get all field data, excluding deferred field proxies.
 
         Returns:
             Dictionary mapping field names to their current values
         """
-        return {name: getattr(self, name, None) for name in self._get_field_names()}
+        from .fields.proxies import DeferredFieldProxy, RelationFieldProxy
+
+        data = {}
+        for name in self._get_field_names():
+            value = getattr(self, name, None)
+            # Skip proxy objects to avoid serialization issues
+            if not isinstance(value, (DeferredFieldProxy, RelationFieldProxy)):
+                data[name] = value
+        return data
 
     def _get_dirty_data(self) -> dict:
-        """Get modified field data.
+        """Get modified field data, excluding deferred field proxies.
 
         Returns:
             Dictionary mapping dirty field names to their current values,
             or all field data if no dirty fields are tracked
         """
+        from .fields.proxies import DeferredFieldProxy, RelationFieldProxy
+
         dirty_fields = self._state_manager.get_dirty_fields()
         if not dirty_fields:
             return self._get_all_data()
-        return {name: getattr(self, name, None) for name in dirty_fields}
+
+        data = {}
+        for name in dirty_fields:
+            value = getattr(self, name, None)
+            # Skip proxy objects to avoid serialization issues
+            if not isinstance(value, (DeferredFieldProxy, RelationFieldProxy)):
+                data[name] = value
+        return data
 
     def _set_primary_key_values(self, pk_values):
         """Set primary key values.
@@ -314,11 +331,40 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         related_model = rel_descriptor.property.resolved_model
         foreign_keys = rel_descriptor.property.foreign_keys
 
+        # For reverse relationships (one-to-many), foreign_keys will be None
+        # We need to infer the foreign key field name
         if not foreign_keys:
-            return []
+            # Try to get foreign key field from back_populates relationship
+            back_populates = rel_descriptor.property.back_populates
+            if back_populates and hasattr(related_model, back_populates):
+                back_attr = getattr(related_model, back_populates)
+                if hasattr(back_attr, "property") and hasattr(back_attr.property, "foreign_keys"):
+                    back_fk = back_attr.property.foreign_keys
+                    if back_fk:
+                        fk_field = back_fk if isinstance(back_fk, str) else back_fk[0]
+                    else:
+                        # Fallback to convention
+                        fk_field = f"{back_populates}_id"
+                else:
+                    # Fallback to convention
+                    fk_field = f"{self.__class__.__name__.lower()}_id"
+            else:
+                # Fallback to convention
+                fk_field = f"{self.__class__.__name__.lower()}_id"
+        else:
+            # For forward relationships, use the specified foreign key
+            fk_field = foreign_keys if isinstance(foreign_keys, str) else foreign_keys[0]
 
-        # fetch foreign keys
-        fk_field = foreign_keys if isinstance(foreign_keys, str) else foreign_keys[0]
+        # Check if the foreign key field exists on the related model
+        if not hasattr(related_model, fk_field):
+            # Try alternative field names
+            alt_fields = [f"{self.__class__.__name__.lower()}_id", "author_id", "user_id", "parent_id"]
+            for alt_field in alt_fields:
+                if hasattr(related_model, alt_field):
+                    fk_field = alt_field
+                    break
+            else:
+                return []
 
         # get pk
         pk_value = getattr(self, self._get_primary_key_field())
@@ -339,11 +385,11 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         current_by_id = {getattr(obj, "id", None): obj for obj in current_objects if getattr(obj, "id", None)}
         new_by_id = {getattr(obj, "id", None): obj for obj in new_objects if getattr(obj, "id", None)}
 
-        # Find objects to remove (orphans)
+        # Find objects to remove (orphans) - this is the key fix
         if has_delete_orphan:
             for obj_id, obj in current_by_id.items():
                 if obj_id and obj_id not in new_by_id:
-                    # This object is no longer in the relationship - delete it
+                    # This object is no longer in the relationship - delete it as orphan
                     await obj.using(session).delete(cascade=False)
 
         # Process existing objects for updates
@@ -383,22 +429,40 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         if not self._has_primary_key_values():
             raise PrimaryKeyError("Cannot delete instance without primary key values")
 
-        # Use cascade executor if cascade is enabled
-        if cascade:
-            executor = CascadeExecutor()
-            await executor.execute_cascade_operation(self, "delete")  # type: ignore[reportArgumentType]
-            return
-
-        # Standard delete operation without cascade
         session = self.get_session()
         table = self.get_table()
 
+        # Handle cascade deletion first if enabled
+        if cascade:
+            await self._delete_related_objects(session)
+
+        # Delete this instance
         try:
             pk_conditions = self._build_pk_conditions()
             stmt = delete(table).where(and_(*pk_conditions))
             await session.execute(stmt)
         except Exception as e:
             raise PrimaryKeyError(f"Delete operation failed: {e}") from e
+
+    async def _delete_related_objects(self, session):
+        """Delete related objects based on cascade configuration."""
+        relationships = getattr(self.__class__, "_relationships", {})
+
+        for rel_name, rel_descriptor in relationships.items():
+            if not (hasattr(rel_descriptor, "property") and hasattr(rel_descriptor.property, "cascade")):
+                continue
+
+            cascade_str = rel_descriptor.property.cascade or ""
+            if "delete" not in cascade_str and "all" not in cascade_str:
+                continue
+
+            # Get related objects from database
+            related_objects = await self._fetch_current_related_objects(rel_name, session)
+
+            # Delete related objects
+            for related_obj in related_objects:
+                if hasattr(related_obj, "delete"):
+                    await related_obj.using(session).delete(cascade=True)
 
     async def refresh(self, fields: list[str] | None = None, include_deferred: bool = True):
         """Refresh this instance with the latest data from the database.

@@ -24,9 +24,8 @@ class _StateManager:
             "loaded_deferred_fields": set(),
             "is_from_db": False,
             "bound_session": None,
-            "cascade_relationships": {},
+            "object_cache": {},
             "needs_cascade_save": False,
-            "proxy_cache": {},
         }
 
     def _get(self, key: str, default):
@@ -40,17 +39,15 @@ class _StateManager:
     # Dirty fields management
     def get_dirty_fields(self) -> set[str]:
         """Get dirty fields set."""
-        return self._get("dirty_fields", set())
+        return self._state["dirty_fields"]
 
     def add_dirty_field(self, field_name: str):
         """Add field to dirty fields."""
-        dirty_fields = self.get_dirty_fields()
-        dirty_fields.add(field_name)
-        self._set("dirty_fields", dirty_fields)
+        self._state["dirty_fields"].add(field_name)
 
     def clear_dirty_fields(self):
         """Clear all dirty fields."""
-        self._set("dirty_fields", set())
+        self._state["dirty_fields"].clear()
 
     # Deferred fields management
     def get_deferred_fields(self) -> set[str]:
@@ -89,22 +86,22 @@ class _StateManager:
         """Set bound session."""
         self._set("bound_session", session)
 
-    # Proxy cache management
-    def get_proxy_cache(self) -> dict[str, Any]:
-        """Get proxy cache dictionary."""
-        return self._get("proxy_cache", {})
+    # Object cache management
+    def get_object_cache(self) -> dict[str, Any]:
+        """Get object cache dictionary."""
+        return self._get("object_cache", {})
 
-    def update_proxy_cache(self, name: str, value: Any):
-        """Update proxy cache entry."""
-        cache = self.get_proxy_cache()
+    def update_object_cache(self, name: str, value: Any):
+        """Update object cache entry."""
+        cache = self.get_object_cache()
         cache[name] = value
-        self._set("proxy_cache", cache)
+        self._set("object_cache", cache)
 
-    def clear_proxy_cache_entry(self, name: str):
-        """Clear specific proxy cache entry."""
-        cache = self.get_proxy_cache()
+    def clear_cache_entry(self, name: str):
+        """Clear specific cache entry."""
+        cache = self.get_object_cache()
         cache.pop(name, None)
-        self._set("proxy_cache", cache)
+        self._set("object_cache", cache)
 
     # Cascade relationships management
     def get_cascade_relationships(self) -> dict[str, Any]:
@@ -113,9 +110,9 @@ class _StateManager:
 
     def set_cascade_relationship(self, field_name: str, value: Any):
         """Set cascade relationship value."""
-        relationships = self.get_cascade_relationships()
-        relationships[field_name] = value
-        self._set("cascade_relationships", relationships)
+        cascade_relationships = self.get_cascade_relationships()
+        cascade_relationships[field_name] = value
+        self._set("cascade_relationships", cascade_relationships)
         self._set("needs_cascade_save", True)
 
     def needs_cascade_save(self) -> bool:
@@ -398,7 +395,7 @@ class DeferredLoadingMixin(ValidationMixin):
             for i, field in enumerate(valid_fields):
                 value = row[i]
                 # Store actual value in proxy_cache (replaces proxy object)
-                self._state_manager.update_proxy_cache(field, value)
+                self._state_manager.update_object_cache(field, value)
                 self._state_manager.add_loaded_deferred_field(field)
 
 
@@ -544,77 +541,23 @@ class FieldCacheMixin(DataConversionMixin):
 
     @classmethod
     def _get_field_cache(cls):
-        """Auto-initialize and cache field information.
+        """Get field cache from metadata system.
 
         Returns:
             Dictionary containing categorized field information
         """
-        cache_attr = "_cached_field_info"
-        if not hasattr(cls, cache_attr):
-            setattr(cls, cache_attr, cls._build_field_cache())
-        return getattr(cls, cache_attr)
-
-    @classmethod
-    def _build_field_cache(cls):
-        """Build field cache with error handling.
-
-        Returns:
-            Dictionary with field categories: deferred_fields, relationship_fields, regular_fields
-        """
-        cache = {"deferred_fields": set(), "relationship_fields": set(), "regular_fields": set()}
-
-        try:
-            if hasattr(cls, "__table__"):
-                table = getattr(cls, "__table__", None)
-                if table is not None:
-                    for col_name in table.columns.keys():
-                        cls._categorize_field(col_name, cache)
-
-            if hasattr(cls, "_relationships"):
-                relationships = getattr(cls, "_relationships", {})
-                cache["relationship_fields"].update(relationships.keys())
-        except Exception:  # noqa
-            pass
-
-        return cache
-
-    @classmethod
-    def _categorize_field(cls, field_name, cache):
-        """Categorize a single field into cache.
-
-        Args:
-            field_name: Name of the field to categorize
-            cache: Cache dictionary to update
-        """
-        try:
-            attr = getattr(cls, field_name, None)
-            if attr is not None and is_field_definition(attr):
-                # Check if this is a relationship field
-                if hasattr(attr, "_is_relationship") and attr._is_relationship:  # noqa
-                    cache["relationship_fields"].add(field_name)
-                    return
-
-                # Handle database field
-                column = get_column_from_field(attr)
-                if column is not None and hasattr(column, "info") and column.info is not None:
-                    performance_params = column.info.get("_performance", {})
-                    if performance_params.get("deferred", False):
-                        cache["deferred_fields"].add(field_name)
-                    else:
-                        cache["regular_fields"].add(field_name)
-                else:
-                    cache["regular_fields"].add(field_name)
-        except (AttributeError, TypeError):
-            cache["regular_fields"].add(field_name)
+        return getattr(
+            cls, "_field_cache", {"deferred_fields": set(), "relationship_fields": set(), "regular_fields": set()}
+        )
 
     def _update_cache(self, name: str, value: Any):
-        """Update proxy cache entry.
+        """Update object cache entry.
 
         Args:
             name: Field name
             value: Value to cache
         """
-        self._state_manager.update_proxy_cache(name, value)
+        self._state_manager.update_object_cache(name, value)
 
     def _clear_cache_entry(self, name: str):
         """Clear specific cache entry.
@@ -622,7 +565,7 @@ class FieldCacheMixin(DataConversionMixin):
         Args:
             name: Field name to clear
         """
-        self._state_manager.clear_proxy_cache_entry(name)
+        self._state_manager.clear_cache_entry(name)
 
     def _get_relationship_fields(self) -> set[str]:
         """Get relationship field names from model metadata."""
@@ -673,10 +616,10 @@ class FieldCacheMixin(DataConversionMixin):
         ):
             return super().__getattribute__(name)
 
-        # Check unified proxy cache first
-        proxy_cache = self._state_manager.get_proxy_cache()
-        if name in proxy_cache:
-            return proxy_cache[name]  # May be actual value, prefetch data, or proxy object
+        # Check object cache first
+        object_cache = self._state_manager.get_object_cache()
+        if name in object_cache:
+            return object_cache[name]  # May be actual value, prefetch data, or proxy object
 
         model_class = super().__getattribute__("__class__")
         field_cache = model_class._get_field_cache()
