@@ -122,16 +122,17 @@ class ObjectsManager(Generic[T]):
     # 3. Query Building Methods - Return QuerySet
     # ========================================
 
-    def filter(self, *args) -> QuerySet[T]:
+    def filter(self, *args, **kwargs) -> QuerySet[T]:
         """Filter objects using Q objects SQLAlchemy expressions and keyword arguments.
 
         Args:
             *args: Q objects or SQLAlchemy expressions for complex conditions
+            **kwargs: Field name to value mappings
 
         Returns:
             QuerySet with filter conditions applied
         """
-        return QuerySet(self._table, self._model_class, db_or_session=self._db_or_session).filter(*args)
+        return QuerySet(self._table, self._model_class, db_or_session=self._db_or_session).filter(*args, **kwargs)
 
     def defer(self, *fields) -> QuerySet[T]:
         """Defer loading of specified fields until accessed.
@@ -297,11 +298,12 @@ class ObjectsManager(Generic[T]):
         """
         return self.filter().all()
 
-    async def get(self, *args) -> T:
+    async def get(self, *args, **kwargs) -> T:
         """Get a single object matching the given conditions.
 
         Args:
             *args: Q objects or SQLAlchemy expressions for complex conditions
+            **kwargs: Field name to value mappings
 
         Returns:
             Single model instance
@@ -310,7 +312,7 @@ class ObjectsManager(Generic[T]):
             DoesNotExist: If no object matches the conditions
             MultipleObjectsReturned: If multiple objects match the conditions
         """
-        results = await self.filter(*args).limit(2).all()
+        results = await self.filter(*args, **kwargs).limit(2).all()
         if not results:
             raise DoesNotExist(f"{self._model_class.__name__} matching query does not exist")
         if len(results) > 1:
@@ -605,16 +607,17 @@ class ObjectsManager(Generic[T]):
         """
         return self.filter().distinct(*fields)
 
-    def exclude(self, *args) -> QuerySet[T]:
+    def exclude(self, *args, **kwargs) -> QuerySet[T]:
         """Exclude objects matching the given conditions.
 
         Args:
             *args: Q objects or SQLAlchemy expressions for complex conditions
+            **kwargs: Field name to value mappings
 
         Returns:
             QuerySet with exclusion conditions applied
         """
-        return self.filter().exclude(*args)
+        return self.filter().exclude(*args, **kwargs)
 
     def order_by(self, *fields) -> QuerySet[T]:
         """Order results by the specified fields.

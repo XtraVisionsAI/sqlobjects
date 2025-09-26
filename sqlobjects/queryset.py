@@ -77,13 +77,21 @@ class Q:
         Q(User.name == "John") & (User.age > 25)
     """
 
-    def __init__(self, *expressions: Any):
-        """Initialize Q object with SQLAlchemy expressions.
+    def __init__(self, *expressions: Any, **kwargs):
+        """Initialize Q object with SQLAlchemy expressions and kwargs.
 
         Args:
             *expressions: SQLAlchemy expressions to combine with AND logic
+            **kwargs: Field name to value mappings
         """
         self.expressions = list(expressions)
+
+        # Handle kwargs
+        if kwargs:
+            for field_name, value in kwargs.items():
+                # Store as special tuple for later processing
+                self.expressions.append(("__FIELD_LOOKUP__", field_name, value))
+
         self.connector = "AND"
         self.negated = False
         self.children: list[Q] = []
@@ -163,9 +171,14 @@ class Q:
         # Handle direct expressions
         if self.expressions:
             for expr in self.expressions:
-                if hasattr(expr, "resolve"):
+                if isinstance(expr, tuple) and expr[0] == "__FIELD_LOOKUP__":
+                    # Handle kwargs field lookup
+                    _, field_name, value = expr
+                    field_column = table.c[field_name]
+                    conditions.append(field_column == value)
+                elif hasattr(expr, "resolve"):
                     # Resolve SQLObjects expressions
-                    conditions.append(expr.resolve(table))
+                    conditions.append(expr.resolve(table))  # type: ignore[reportAttributeAccessIssue]
                 else:
                     # Direct SQLAlchemy expressions
                     conditions.append(expr)
@@ -320,13 +333,18 @@ class QuerySet(Generic[T]):
         new_qs._executor = self._executor
         return new_qs
 
-    def filter(self, *conditions) -> "QuerySet[T]":
+    def filter(self, *conditions, **kwargs) -> "QuerySet[T]":
         """Filter QuerySet to include only objects matching conditions."""
-        new_builder = self._builder.add_filter(*conditions)
+        new_builder = self._builder.add_filter(*conditions, **kwargs)
         return self._create_new_queryset(new_builder)
 
-    def exclude(self, *conditions) -> "QuerySet[T]":
+    def exclude(self, *conditions, **kwargs) -> "QuerySet[T]":
         """Exclude objects matching conditions from QuerySet."""
+        # Handle kwargs by converting to Q object
+        if kwargs:
+            q_kwargs = Q(**kwargs)
+            conditions = list(conditions) + [q_kwargs]
+
         # Convert conditions to negated conditions
         negated_conditions = [not_(cond) for cond in conditions]
         new_builder = self._builder.add_filter(*negated_conditions)
@@ -718,10 +736,10 @@ class QuerySet(Generic[T]):
         """
         return AllExpression(self._builder, self._model_class, self._executor)
 
-    async def get(self, *conditions) -> T:
+    async def get(self, *conditions, **kwargs) -> T:
         """Get single object matching conditions."""
-        if conditions:
-            queryset = self.filter(*conditions)
+        if conditions or kwargs:
+            queryset = self.filter(*conditions, **kwargs)
         else:
             queryset = self
 

@@ -51,17 +51,20 @@ class QueryBuilder:
         self.is_reversed: bool = False
         self.prefetch_configs: dict[str, Any] = {}
 
-    def add_filter(self, *conditions):
+    def add_filter(self, *conditions, **kwargs):
         """Add WHERE conditions to the query.
 
         Args:
             *conditions: SQLAlchemy expressions or Q objects
+            **kwargs: Field name to value mappings
 
         Returns:
             New QueryBuilder instance with added conditions
         """
         new_builder = self.copy()
         new_builder.conditions.extend(conditions)
+        if kwargs:
+            new_builder.conditions.append(("__KWARGS_MARKER__", kwargs))
         return new_builder
 
     def add_ordering(self, *fields):
@@ -490,9 +493,18 @@ class QueryBuilder:
             # Convert FunctionExpression to underlying SQLAlchemy expressions
             processed_conditions = []
             for condition in self.conditions:
-                if hasattr(condition, "expression"):
+                if isinstance(condition, tuple) and condition[0] == "__KWARGS_MARKER__":
+                    # Process kwargs
+                    kwargs_dict = condition[1]
+                    for field_name, value in kwargs_dict.items():
+                        field = getattr(self.model_class, field_name)
+                        processed_conditions.append(field == value)
+                elif hasattr(condition, "_to_sqlalchemy"):
+                    # This is a Q object
+                    processed_conditions.append(condition._to_sqlalchemy(table))  # noqa # type: ignore[reportAttributeAccessIssue]
+                elif hasattr(condition, "expression"):
                     # This is a FunctionExpression, use its underlying expression
-                    processed_conditions.append(condition.expression)
+                    processed_conditions.append(condition.expression)  # type: ignore[reportAttributeAccessIssue]
                 else:
                     processed_conditions.append(condition)
             query = query.where(and_(*processed_conditions))
