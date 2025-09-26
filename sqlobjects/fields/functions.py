@@ -3,7 +3,7 @@ from typing import Any
 from sqlalchemy import ForeignKey
 from sqlalchemy.sql.elements import ColumnElement
 
-from ..cascade import OnDeleteType, OnUpdateType, normalize_ondelete, normalize_onupdate  # pyright: ignore
+from ..cascade import OnDeleteType, OnUpdateType, normalize_ondelete, normalize_onupdate
 from .core import Column, column
 from .shortcuts import ComputedColumn, IdentityColumn
 

@@ -346,9 +346,8 @@ class QueryExecutor:
         instance = model_class.from_dict(main_data, validate=False)
 
         # Set deferred field state
-        instance._state_manager.set("deferred_fields", actual_deferred_fields)  # noqa
-        instance._state_manager.set("is_from_db", True)  # noqa
-        instance._state_manager.set("loaded_deferred_fields", set())  # noqa
+        instance._state_manager.set_deferred_fields(actual_deferred_fields)  # noqa
+        instance._state_manager.mark_from_database(True)  # noqa
 
         # Create and attach related objects
         if related_data and relationships:
@@ -435,18 +434,22 @@ class QueryExecutor:
         return grouped
 
     async def _handle_prefetch_relationships(self, instances, prefetch_relationships):
-        """Handle prefetch_related relationships (placeholder implementation).
+        """Handle prefetch_related relationships using PrefetchHandler.
 
         Args:
             instances: List of model instances
             prefetch_relationships: Set of relationship names to prefetch
 
         Returns:
-            List of instances (unchanged for now)
+            List of instances with prefetched relationships attached
         """
-        # TODO: Implement actual prefetch_related logic
-        # For now, just return instances unchanged to avoid errors
-        return instances
+        from ..fields.relations.prefetch import PrefetchHandler
+
+        if not instances or not prefetch_relationships:
+            return instances
+
+        prefetch_handler = PrefetchHandler(self.session)
+        return await prefetch_handler.handle_prefetch_relationships(instances, prefetch_relationships)
 
     @staticmethod
     def _find_related_model_class(model_class, relation_name):
@@ -459,39 +462,9 @@ class QueryExecutor:
         Returns:
             Related model class or None if not found
         """
-        try:
-            # Look for foreign key field
-            fk_field_name = f"{relation_name}_id"
-            table = model_class.get_table()
+        from ..fields.relations.utils import RelationshipAnalyzer
 
-            if fk_field_name not in table.c:
-                return None
-
-            fk_column = table.c[fk_field_name]
-
-            if not fk_column.foreign_keys:
-                return None
-
-            # Get the referenced table name
-            fk = list(fk_column.foreign_keys)[0]
-            referenced_table_name = fk.column.table.name
-
-            # Find model class by table name
-            # This is a simplified approach - in a real implementation,
-            # you'd maintain a registry of model classes
-            from ..model import ObjectModel
-
-            # Search through all ObjectModel subclasses
-            for subclass in ObjectModel.__subclasses__():
-                try:
-                    if hasattr(subclass, "get_table"):
-                        subclass_table = subclass.get_table()
-                        if subclass_table.name == referenced_table_name:
-                            return subclass
-                except Exception:
-                    continue
-
-            return None
-
-        except Exception:
-            return None
+        relationship_info = RelationshipAnalyzer.analyze_relationship(model_class, relation_name)
+        if relationship_info:
+            return relationship_info["related_model"]
+        return None

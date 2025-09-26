@@ -431,7 +431,7 @@ class CascadeExecutor:
         if not hasattr(root_instance, "_state_manager"):
             return
 
-        cascade_relationships = root_instance._state_manager.get("cascade_relationships", {})  # noqa
+        cascade_relationships = root_instance._state_manager.get_cascade_relationships()  # noqa
         if not cascade_relationships:
             return
 
@@ -445,8 +445,8 @@ class CascadeExecutor:
                     await related_obj.using(session).save(cascade=False)
 
         # Clear cascade state
-        root_instance._state_manager.set("cascade_relationships", {})  # noqa
-        root_instance._state_manager.set("needs_cascade_save", False)  # noqa
+        root_instance._state_manager._set("cascade_relationships", {})  # noqa
+        root_instance._state_manager.clear_cascade_save_flag()  # noqa
 
     async def _cascade_save_with_relationships(self, root_instance: "ObjectModel", session: "AsyncSession") -> None:
         """Handle cascade save with automatic foreign key setup."""

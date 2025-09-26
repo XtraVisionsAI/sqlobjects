@@ -20,30 +20,111 @@ class _StateManager:
         """Initialize empty state dictionary."""
         self._state: dict[str, Any] = {
             "dirty_fields": set(),
-            "cascade_relationships": {},  # Store relationship objects for cascade save
-            "needs_cascade_save": False,  # Flag for cascade save requirement
+            "deferred_fields": set(),
+            "loaded_deferred_fields": set(),
+            "is_from_db": False,
+            "bound_session": None,
+            "cascade_relationships": {},
+            "needs_cascade_save": False,
+            "proxy_cache": {},
         }
 
-    def get(self, key: str, default=None):
-        """Get state value by key.
-
-        Args:
-            key: State key to retrieve
-            default: Default value if key not found
-
-        Returns:
-            State value or default
-        """
+    def _get(self, key: str, default):
+        """Internal method to get state value."""
         return self._state.get(key, default)
 
-    def set(self, key: str, value):
-        """Set state value by key.
-
-        Args:
-            key: State key to set
-            value: Value to store
-        """
+    def _set(self, key: str, value):
+        """Internal method to set state value."""
         self._state[key] = value
+
+    # Dirty fields management
+    def get_dirty_fields(self) -> set[str]:
+        """Get dirty fields set."""
+        return self._get("dirty_fields", set())
+
+    def add_dirty_field(self, field_name: str):
+        """Add field to dirty fields."""
+        dirty_fields = self.get_dirty_fields()
+        dirty_fields.add(field_name)
+        self._set("dirty_fields", dirty_fields)
+
+    def clear_dirty_fields(self):
+        """Clear all dirty fields."""
+        self._set("dirty_fields", set())
+
+    # Deferred fields management
+    def get_deferred_fields(self) -> set[str]:
+        """Get deferred fields set."""
+        return self._get("deferred_fields", set())
+
+    def set_deferred_fields(self, fields: set[str]):
+        """Set deferred fields."""
+        self._set("deferred_fields", fields)
+
+    def get_loaded_deferred_fields(self) -> set[str]:
+        """Get loaded deferred fields set."""
+        return self._get("loaded_deferred_fields", set())
+
+    def add_loaded_deferred_field(self, field_name: str):
+        """Mark deferred field as loaded."""
+        loaded_fields = self.get_loaded_deferred_fields()
+        loaded_fields.add(field_name)
+        self._set("loaded_deferred_fields", loaded_fields)
+
+    # Database state management
+    def is_from_database(self) -> bool:
+        """Check if instance was loaded from database."""
+        return bool(self._get("is_from_db", False))
+
+    def mark_from_database(self, from_db: bool = True):
+        """Mark instance as loaded from database."""
+        self._set("is_from_db", from_db)
+
+    # Session management
+    def get_bound_session(self):
+        """Get bound session."""
+        return self._get("bound_session", None)
+
+    def set_bound_session(self, session):
+        """Set bound session."""
+        self._set("bound_session", session)
+
+    # Proxy cache management
+    def get_proxy_cache(self) -> dict[str, Any]:
+        """Get proxy cache dictionary."""
+        return self._get("proxy_cache", {})
+
+    def update_proxy_cache(self, name: str, value: Any):
+        """Update proxy cache entry."""
+        cache = self.get_proxy_cache()
+        cache[name] = value
+        self._set("proxy_cache", cache)
+
+    def clear_proxy_cache_entry(self, name: str):
+        """Clear specific proxy cache entry."""
+        cache = self.get_proxy_cache()
+        cache.pop(name, None)
+        self._set("proxy_cache", cache)
+
+    # Cascade relationships management
+    def get_cascade_relationships(self) -> dict[str, Any]:
+        """Get cascade relationships dictionary."""
+        return self._get("cascade_relationships", {})
+
+    def set_cascade_relationship(self, field_name: str, value: Any):
+        """Set cascade relationship value."""
+        relationships = self.get_cascade_relationships()
+        relationships[field_name] = value
+        self._set("cascade_relationships", relationships)
+        self._set("needs_cascade_save", True)
+
+    def needs_cascade_save(self) -> bool:
+        """Check if cascade save is needed."""
+        return bool(self._get("needs_cascade_save", False))
+
+    def clear_cascade_save_flag(self):
+        """Clear cascade save flag."""
+        self._set("needs_cascade_save", False)
 
 
 class BaseMixin:
@@ -87,7 +168,7 @@ class SessionMixin(BaseMixin):
         Returns:
             AsyncSession instance for database operations
         """
-        bound_session = self._state_manager.get("bound_session")
+        bound_session = self._state_manager.get_bound_session()
         if isinstance(bound_session, str):
             return get_session(bound_session)
         return bound_session or get_session()
@@ -101,7 +182,7 @@ class SessionMixin(BaseMixin):
         Returns:
             Self with bound session for method chaining
         """
-        self._state_manager.set("bound_session", db_or_session)
+        self._state_manager.set_bound_session(db_or_session)
         return self
 
 
@@ -215,22 +296,13 @@ class ValidationMixin(PrimaryKeyMixin):
 class DeferredLoadingMixin(ValidationMixin):
     """Deferred loading functionality - Layer 4."""
 
-    def __init__(self):
-        """Initialize deferred loading state."""
-        super().__init__()
-        self._state_manager.set("deferred_fields", set())
-        self._state_manager.set("loaded_deferred_fields", set())
-        self._state_manager.set("is_from_db", False)
-
     @property
     def _deferred_fields(self) -> set[str]:
-        result = self._state_manager.get("deferred_fields", set())
-        return result if isinstance(result, set) else set()
+        return self._state_manager.get_deferred_fields()
 
     @property
     def _loaded_deferred_fields(self) -> set[str]:
-        result = self._state_manager.get("loaded_deferred_fields", set())
-        return result if isinstance(result, set) else set()
+        return self._state_manager.get_loaded_deferred_fields()
 
     def get_deferred_fields(self) -> set[str]:
         """Get all deferred fields.
@@ -238,7 +310,7 @@ class DeferredLoadingMixin(ValidationMixin):
         Returns:
             Set of field names that are deferred
         """
-        return self._deferred_fields.copy()
+        return self._state_manager.get_deferred_fields().copy()
 
     def get_loaded_deferred_fields(self) -> set[str]:
         """Get loaded deferred fields.
@@ -246,7 +318,7 @@ class DeferredLoadingMixin(ValidationMixin):
         Returns:
             Set of deferred field names that have been loaded
         """
-        return self._loaded_deferred_fields.copy()
+        return self._state_manager.get_loaded_deferred_fields().copy()
 
     def is_field_deferred(self, field_name: str) -> bool:
         """Check if field is deferred.
@@ -278,8 +350,7 @@ class DeferredLoadingMixin(ValidationMixin):
         Returns:
             True if instance was loaded from database
         """
-        result = self._state_manager.get("is_from_db", False)
-        return bool(result)
+        return self._state_manager.is_from_database()
 
     async def load_deferred_field(self, field_name: str) -> None:
         """Load a single deferred field.
@@ -324,11 +395,11 @@ class DeferredLoadingMixin(ValidationMixin):
         row = result.first()
 
         if row:
-            loaded_fields = self._state_manager.get("loaded_deferred_fields", set())
-            if isinstance(loaded_fields, set):
-                for i, field in enumerate(valid_fields):
-                    setattr(self, field, row[i])
-                    loaded_fields.add(field)
+            for i, field in enumerate(valid_fields):
+                value = row[i]
+                # Store actual value in proxy_cache (replaces proxy object)
+                self._state_manager.update_proxy_cache(field, value)
+                self._state_manager.add_loaded_deferred_field(field)
 
 
 class DataConversionMixin(DeferredLoadingMixin):
@@ -406,7 +477,6 @@ class DataConversionMixin(DeferredLoadingMixin):
                 else:
                     non_init_data[field_name] = value
             else:
-                # For fields without codegen_params, check if it's an identity field
                 if field_name == "id" and hasattr(field_attr, "column") and hasattr(field_attr.column, "autoincrement"):  # type: ignore[reportOptionalSubscript]
                     non_init_data[field_name] = value
                 else:
@@ -415,34 +485,19 @@ class DataConversionMixin(DeferredLoadingMixin):
         instance = cls(**init_data)  # noqa
 
         for field_name, value in non_init_data.items():
-            # Apply default value if value is None
             if value is None:
-                default_value = instance._get_field_default_value(field_name)  # noqa
+                default_value = instance._get_field_default_value(field_name)
                 if default_value is not None:
                     value = default_value
             setattr(instance, field_name, value)
 
         # Clear dirty fields since this is initial creation from dict
-        dirty_fields = instance._state_manager.get("dirty_fields", set())
-        if isinstance(dirty_fields, set):
-            dirty_fields.clear()
+        instance._state_manager.clear_dirty_fields()
 
         if validate:
             instance.validate_all_fields()
 
         return instance
-
-    def _apply_default_values(self, kwargs: dict):
-        """Apply default values for fields not provided in kwargs.
-
-        Args:
-            kwargs: Dictionary of provided field values (will be modified)
-        """
-        for field_name in self._get_field_names():
-            if field_name not in kwargs or kwargs[field_name] is None:
-                default_value = self._get_field_default_value(field_name)
-                if default_value is not None:
-                    kwargs[field_name] = default_value
 
     def _get_field_default_value(self, field_name: str):
         """Get default value for a field.
@@ -457,7 +512,6 @@ class DataConversionMixin(DeferredLoadingMixin):
         if field_attr is None:
             return None
 
-        # Priority: default_factory > SQLAlchemy default
         if hasattr(field_attr, "get_default_factory"):
             factory = field_attr.get_default_factory()
             if factory and callable(factory):
@@ -471,6 +525,18 @@ class DataConversionMixin(DeferredLoadingMixin):
                 return default_value
 
         return None
+
+    def _apply_default_values(self, kwargs: dict):
+        """Apply default values for fields not provided in kwargs.
+
+        Args:
+            kwargs: Dictionary of provided field values (will be modified)
+        """
+        for field_name in self._get_field_names():
+            if field_name not in kwargs or kwargs[field_name] is None:
+                default_value = self._get_field_default_value(field_name)
+                if default_value is not None:
+                    kwargs[field_name] = default_value
 
 
 class FieldCacheMixin(DataConversionMixin):
@@ -541,15 +607,27 @@ class FieldCacheMixin(DataConversionMixin):
         except (AttributeError, TypeError):
             cache["regular_fields"].add(field_name)
 
-    @classmethod
-    def _invalidate_field_cache(cls):
-        """Manually invalidate field cache.
+    def _update_cache(self, name: str, value: Any):
+        """Update proxy cache entry.
 
-        Use this when field definitions change at runtime.
+        Args:
+            name: Field name
+            value: Value to cache
         """
-        cache_attr = "_cached_field_info"
-        if hasattr(cls, cache_attr):
-            delattr(cls, cache_attr)
+        self._state_manager.update_proxy_cache(name, value)
+
+    def _clear_cache_entry(self, name: str):
+        """Clear specific cache entry.
+
+        Args:
+            name: Field name to clear
+        """
+        self._state_manager.clear_proxy_cache_entry(name)
+
+    def _get_relationship_fields(self) -> set[str]:
+        """Get relationship field names from model metadata."""
+        relationships = getattr(self.__class__, "_relationships", {})
+        return set(relationships.keys())
 
     def __setattr__(self, name: str, value):
         """Override setattr to handle relationship field assignments."""
@@ -563,31 +641,17 @@ class FieldCacheMixin(DataConversionMixin):
         if not hasattr(self, "_state_manager"):
             return
 
-        # Store relationship objects
-        cascade_relationships = self._state_manager.get("cascade_relationships", {})
-        cascade_relationships[field_name] = value if isinstance(value, list) else [value]  # type: ignore[reportOptionalSubscript]
-        self._state_manager.set("cascade_relationships", cascade_relationships)
-
-        # Mark for cascade save
-        self._state_manager.set("needs_cascade_save", True)
-
-    def _get_relationship_fields(self) -> set[str]:
-        """Get relationship field names from model metadata."""
-        relationships = getattr(self.__class__, "_relationships", {})
-        return set(relationships.keys())
+        relationship_value = value if isinstance(value, list) else [value]
+        self._state_manager.set_cascade_relationship(field_name, relationship_value)
 
     def __getattribute__(self, name: str):
-        """Optimized attribute access using automatic field cache.
-
-        Provides intelligent attribute access with proxy objects for
-        deferred and relationship fields. Skips optimization for
-        special attributes and methods to avoid recursion.
+        """Optimized attribute access using unified proxy cache.
 
         Args:
             name: Attribute name to access
 
         Returns:
-            Attribute value or proxy object
+            Attribute value, cached data, or proxy object
         """
         if name.startswith("_") or name in (
             "get_table",
@@ -602,58 +666,45 @@ class FieldCacheMixin(DataConversionMixin):
             "is_field_deferred",
             "is_field_loaded",
             "get_deferred_fields",
-            "_get_field_cache",
             "get_session",
             "validate_field",
             "load_deferred_field",
             "is_from_database",
-            "_handle_relationship_assignment",
-            "_get_relationship_fields",
         ):
             return super().__getattribute__(name)
 
-        model_class = super().__getattribute__("__class__")
-        field_cache = model_class._get_field_cache()  # noqa
+        # Check unified proxy cache first
+        proxy_cache = self._state_manager.get_proxy_cache()
+        if name in proxy_cache:
+            return proxy_cache[name]  # May be actual value, prefetch data, or proxy object
 
+        model_class = super().__getattribute__("__class__")
+        field_cache = model_class._get_field_cache()
+
+        # Handle deferred fields
         deferred_fields = field_cache.get("deferred_fields", set())
         if isinstance(deferred_fields, set) and name in deferred_fields:
             if (
-                hasattr(self, "_state_manager")
-                and self._state_manager.get("is_from_db", False)
-                and name in self._deferred_fields
+                name in self._deferred_fields
                 and not self.is_field_loaded(name)
+                and self._state_manager.is_from_database()
             ):
-                proxy_cache = self._state_manager.get("proxy_cache", {})
-                if isinstance(proxy_cache, dict) and name not in proxy_cache:
-                    proxy_cache[name] = DeferredFieldProxy(self, name)
-                    self._state_manager.set("proxy_cache", proxy_cache)
-                if isinstance(proxy_cache, dict):
-                    return proxy_cache[name]
+                # Create and cache deferred field proxy
+                proxy = DeferredFieldProxy(self, name)
+                self._update_cache(name, proxy)
+                return proxy
 
+        # Handle relationship fields
         relationship_fields = field_cache.get("relationship_fields", set())
         if isinstance(relationship_fields, set) and name in relationship_fields:
-            # Check cascade_relationships first (manually assigned values)
-            if hasattr(self, "_state_manager"):
-                cascade_relationships: dict = self._state_manager.get("cascade_relationships", {})  # type: ignore[reportAssignmentType]
-                if name in cascade_relationships:
-                    return cascade_relationships[name]
+            # Check cascade_relationships (manually assigned values)
+            cascade_relationships = self._state_manager.get_cascade_relationships()
+            if name in cascade_relationships:
+                return cascade_relationships[name]
 
-            # Check preloaded cache
-            cache_name = f"_{name}_cache"
-            try:
-                if hasattr(self, cache_name):
-                    cached_value = super().__getattribute__(cache_name)
-                    if cached_value is not None:
-                        return cached_value
-            except AttributeError:
-                pass
-
-            # Only create proxy if relationship is not loaded
-            proxy_cache = self._state_manager.get("proxy_cache", {})
-            if isinstance(proxy_cache, dict) and name not in proxy_cache:
-                proxy_cache[name] = RelationFieldProxy(self, name)
-                self._state_manager.set("proxy_cache", proxy_cache)
-            if isinstance(proxy_cache, dict):
-                return proxy_cache[name]
+            # Create and cache relationship proxy
+            proxy = RelationFieldProxy(self, name)
+            self._update_cache(name, proxy)
+            return proxy
 
         return super().__getattribute__(name)

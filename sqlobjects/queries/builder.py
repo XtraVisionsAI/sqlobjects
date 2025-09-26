@@ -499,12 +499,12 @@ class QueryBuilder:
                     for field_name, value in kwargs_dict.items():
                         field = getattr(self.model_class, field_name)
                         processed_conditions.append(field == value)
+                elif hasattr(condition, "expression") and hasattr(condition, "resolve"):
+                    # This is a FunctionExpression, use its underlying expression
+                    processed_conditions.append(condition.expression)  # type: ignore[reportAttributeAccessIssue]
                 elif hasattr(condition, "_to_sqlalchemy"):
                     # This is a Q object
                     processed_conditions.append(condition._to_sqlalchemy(table))  # noqa # type: ignore[reportAttributeAccessIssue]
-                elif hasattr(condition, "expression"):
-                    # This is a FunctionExpression, use its underlying expression
-                    processed_conditions.append(condition.expression)  # type: ignore[reportAttributeAccessIssue]
                 else:
                     processed_conditions.append(condition)
             query = query.where(and_(*processed_conditions))

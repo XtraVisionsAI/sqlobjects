@@ -194,3 +194,141 @@ def relationship(
     from ..core import Column
 
     return Column[Any](is_relationship=True, relationship_property=property_)
+
+
+class RelationshipAnalyzer:
+    """Analyze model relationships and extract metadata for prefetch operations."""
+
+    @staticmethod
+    def analyze_relationship(model_class, relationship_name):
+        """Analyze relationship type and extract related information.
+
+        Args:
+            model_class: Main model class
+            relationship_name: Relationship field name
+
+        Returns:
+            dict: Relationship info dict with type, related model, field mappings
+        """
+        try:
+            # Check explicit relationship definition
+            if hasattr(model_class, relationship_name):
+                field_attr = getattr(model_class, relationship_name)
+                if hasattr(field_attr, "property"):
+                    return RelationshipAnalyzer._extract_relationship_info(model_class, field_attr.property)
+
+            # Infer reverse relationship
+            return RelationshipAnalyzer._infer_reverse_relationship(model_class, relationship_name)
+        except Exception:  # noqa
+            return None
+
+    @staticmethod
+    def _extract_relationship_info(model_class, prop):
+        """Extract information from relationship property."""
+        related_model = RelationshipAnalyzer._resolve_model_class(prop.argument)
+        if not related_model:
+            return None
+
+        if prop.secondary:  # Many-to-many relationship
+            m2m_def = getattr(prop, "m2m_definition", None)
+            if m2m_def:
+                return {
+                    "type": "many_to_many",
+                    "related_model": related_model,
+                    "through_table": prop.secondary,
+                    "left_field": m2m_def.left_field,
+                    "right_field": m2m_def.right_field,
+                    "left_ref_field": m2m_def.left_ref_field,
+                    "right_ref_field": m2m_def.right_ref_field,
+                }
+            else:
+                # String-only secondary table - cannot determine field mappings without M2MTable definition
+                return None
+
+        elif prop.foreign_keys:  # Many-to-one (forward foreign key)
+            return {
+                "type": "many_to_one",
+                "related_model": related_model,
+                "foreign_key_field": prop.foreign_keys,
+                "ref_field": RelationshipAnalyzer._extract_ref_field(prop.foreign_keys),
+            }
+
+        else:  # One-to-many or one-to-one (reverse relationship)
+            # Try to find the correct foreign key field from back_populates
+            foreign_key_field = f"{model_class.__name__.lower()}_id"  # Default
+
+            if prop.back_populates:
+                # Look for the corresponding relationship in the related model
+                if hasattr(related_model, prop.back_populates):
+                    back_attr = getattr(related_model, prop.back_populates)
+                    if hasattr(back_attr, "property") and back_attr.property.foreign_keys:
+                        foreign_key_field = back_attr.property.foreign_keys
+
+            # Determine if it's one-to-one or one-to-many based on uselist
+            rel_type = "one_to_one" if prop.uselist is False else "reverse_fk"
+
+            return {
+                "type": rel_type,
+                "related_model": related_model,
+                "foreign_key_field": foreign_key_field,
+                "ref_field": "id",
+            }
+
+    @staticmethod
+    def _extract_ref_field(foreign_key_spec):
+        """Extract reference field from foreign key specification."""
+        if isinstance(foreign_key_spec, str) and "." in foreign_key_spec:
+            return foreign_key_spec.split(".", 1)[1]
+        return "id"  # Default to primary key
+
+    @staticmethod
+    def _infer_reverse_relationship(model_class, relationship_name):
+        """Infer reverse relationship (e.g., User.posts)."""
+        # posts -> Post, comments -> Comment
+        related_model_name = relationship_name.rstrip("s").capitalize()
+        related_model = RelationshipAnalyzer._resolve_model_class(related_model_name)
+
+        if related_model:
+            # Check if related model has foreign key pointing to current model
+            foreign_key_field = f"{model_class.__name__.lower()}_id"
+            try:
+                if hasattr(related_model, foreign_key_field):
+                    return {
+                        "type": "reverse_fk",
+                        "related_model": related_model,
+                        "foreign_key_field": foreign_key_field,
+                        "ref_field": "id",
+                    }
+            except Exception:  # noqa
+                pass
+
+        return None
+
+    @staticmethod
+    def _resolve_model_class(argument):
+        """Resolve model class from string or class argument."""
+        if isinstance(argument, str):
+            from ...model import ObjectModel
+
+            # Try to get any ObjectModel subclass to access the registry
+            for subclass in ObjectModel.__subclasses__():
+                if hasattr(subclass, "__registry__"):
+                    try:
+                        return subclass.__registry__.get_model(argument)
+                    except Exception:
+                        continue
+
+            # Fallback to recursive search if registry lookup fails
+            def find_subclass(base_class):
+                """Recursively find subclass by name."""
+                for subclass in base_class.__subclasses__():
+                    if subclass.__name__ == argument:
+                        return subclass
+                    # Recursively search in subclasses
+                    found = find_subclass(subclass)
+                    if found:
+                        return found
+                return None
+
+            return find_subclass(ObjectModel)
+        return argument

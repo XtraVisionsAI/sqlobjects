@@ -50,7 +50,7 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
             **kwargs: Field values to set on the instance
         """
         super().__init__()
-        self._state_manager.set("dirty_fields", set())
+        self._state_manager.clear_dirty_fields()
 
         # Set history initialization flag before setting values
         if hasattr(self, "_history_initialized"):
@@ -93,7 +93,7 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
             Dictionary mapping dirty field names to their current values,
             or all field data if no dirty fields are tracked
         """
-        dirty_fields = self._state_manager.get("dirty_fields", set())
+        dirty_fields = self._state_manager.get_dirty_fields()
         if not dirty_fields:
             return self._get_all_data()
         return {name: getattr(self, name, None) for name in dirty_fields}
@@ -173,9 +173,7 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
                 if result.inserted_primary_key:
                     self._set_primary_key_values(result.inserted_primary_key)
                 # Clear dirty fields after successful save
-                dirty_fields = self._state_manager.get("dirty_fields", set())
-                if isinstance(dirty_fields, set):
-                    dirty_fields.clear()
+                self._state_manager.clear_dirty_fields()
                 return self
             except Exception as e:
                 raise PrimaryKeyError(f"Upsert operation failed: {e}") from e
@@ -201,9 +199,7 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
             raise PrimaryKeyError(f"Save operation failed: {e}") from e
 
         # Clear dirty fields after successful save
-        dirty_fields = self._state_manager.get("dirty_fields", set())
-        if isinstance(dirty_fields, set):
-            dirty_fields.clear()
+        self._state_manager.clear_dirty_fields()
         return self
 
     @emit_signals(Operation.SAVE)
@@ -231,9 +227,7 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
             session = self.get_session()
 
         # Check if we need to process cascade relationships
-        needs_cascade = (
-            self._state_manager.get("needs_cascade_save", False) if hasattr(self, "_state_manager") else False
-        )
+        needs_cascade = self._state_manager.needs_cascade_save() if hasattr(self, "_state_manager") else False
 
         if needs_cascade and cascade is not False:
             await self._process_cascade_relationships(session)
@@ -256,7 +250,7 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         if not hasattr(self, "_state_manager"):
             return
 
-        cascade_relationships = self._state_manager.get("cascade_relationships", {})
+        cascade_relationships = self._state_manager.get_cascade_relationships()
         if not cascade_relationships:
             return
 
@@ -269,7 +263,7 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
 
         # keep cascade_relationships
         # self._state_manager.set("cascade_relationships", {})
-        self._state_manager.set("needs_cascade_save", False)
+        self._state_manager.clear_cascade_save_flag()
 
     async def _process_relationship_update(self, rel_name: str, new_related_objects, session):
         """Process complete relationship update: add, remove, modify."""
@@ -441,18 +435,16 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         fresh_data = result.first()
 
         if fresh_data:
-            loaded_deferred_fields = self._state_manager.get("loaded_deferred_fields", set())
-            if isinstance(loaded_deferred_fields, set):
-                if fields:
-                    for i, field in enumerate(fields):
-                        setattr(self, field, fresh_data[i])
-                        if field in self._deferred_fields:
-                            loaded_deferred_fields.add(field)
-                else:
-                    for col_name, value in fresh_data._mapping.items():  # noqa
-                        setattr(self, col_name, value)
-                        if col_name in self._deferred_fields:
-                            loaded_deferred_fields.add(col_name)
+            if fields:
+                for i, field in enumerate(fields):
+                    setattr(self, field, fresh_data[i])
+                    if field in self._deferred_fields:
+                        self._state_manager.add_loaded_deferred_field(field)
+            else:
+                for col_name, value in fresh_data._mapping.items():  # noqa
+                    setattr(self, col_name, value)
+                    if col_name in self._deferred_fields:
+                        self._state_manager.add_loaded_deferred_field(col_name)
 
         return self
 
@@ -521,9 +513,7 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         if hasattr(self, "_get_relationship_fields") and name in self._get_relationship_fields():
             self._handle_relationship_assignment(name, value)
         elif not name.startswith("_") and hasattr(self, "_state_manager"):
-            dirty_fields = self._state_manager.get("dirty_fields", set())
-            if isinstance(dirty_fields, set):
-                dirty_fields.add(name)
+            self._state_manager.add_dirty_field(name)
         super().__setattr__(name, value)
 
     def _handle_relationship_assignment(self, field_name: str, value):
@@ -531,13 +521,9 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         if not hasattr(self, "_state_manager"):
             return
 
-        # Store relationship objects
-        cascade_relationships = self._state_manager.get("cascade_relationships", {})
-        cascade_relationships[field_name] = value if isinstance(value, list) else [value]  # type: ignore[reportOptionalSubscript]
-        self._state_manager.set("cascade_relationships", cascade_relationships)
-
-        # Mark for cascade save
-        self._state_manager.set("needs_cascade_save", True)
+        # Store relationship objects and mark for cascade save
+        relationship_value = value if isinstance(value, list) else [value]
+        self._state_manager.set_cascade_relationship(field_name, relationship_value)
 
     def _get_relationship_fields(self) -> set[str]:
         """Get relationship field names from model metadata."""
