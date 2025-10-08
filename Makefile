@@ -20,27 +20,6 @@ test-integration:  ## Run integration tests only
 test-performance:  ## Run performance tests only
 	uv run python run_tests.py --performance
 
-test-quick:  ## Run quick smoke tests
-	uv run python run_tests.py --quick
-
-test-ci:  ## Run tests in CI mode with coverage
-	uv run python run_tests.py --ci
-
-test-coverage:  ## Run tests with coverage report
-	uv run python run_tests.py --all --coverage
-
-test-deferred:  ## Run deferred field tests
-	uv run python run_tests.py --deferred
-
-test-bulk:  ## Run bulk operation tests
-	uv run python run_tests.py --bulk
-
-test-relationships:  ## Run relationship tests
-	uv run python run_tests.py --relationships
-
-test-signals:  ## Run signal tests
-	uv run python run_tests.py --signals
-
 # Code quality commands
 lint:  ## Run linting with ruff
 	uv run ruff check sqlobjects tests
@@ -70,5 +49,3 @@ pre-commit:  ## Run pre-commit checks
 
 # Combined commands
 check: lint type-check test-quick  ## Run all code quality checks and quick tests
-
-ci: lint type-check test-ci  ## Run full CI pipeline
