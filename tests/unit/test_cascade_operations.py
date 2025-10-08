@@ -249,35 +249,37 @@ class TestCascadeExecutor:
             mock_delete.assert_called_once_with(cascade=False)
 
     @pytest.mark.asyncio
-    async def test_execute_cascade_operation_save(self):
-        """Test execute_cascade_operation with save operation."""
+    async def test_execute_save_operation(self):
+        """Test execute_save_operation method."""
         executor = CascadeExecutor()
         user = MockUser(username="test")
 
-        with patch.object(executor, "_cascade_save_with_relationships", new_callable=AsyncMock) as mock_save:
-            await executor.execute_cascade_operation(user, "save")
+        with patch.object(user, "_save_internal", new_callable=AsyncMock) as mock_save:
+            result = await executor.execute_save_operation(user)
             mock_save.assert_called_once()
+            assert result == user
 
     @pytest.mark.asyncio
-    async def test_execute_cascade_operation_delete(self):
-        """Test execute_cascade_operation with delete operation."""
+    async def test_execute_delete_operation(self):
+        """Test execute_delete_operation method."""
         executor = CascadeExecutor()
         user = MockUser(username="test")
         user.id = 1
 
-        with patch.object(executor, "_cascade_delete_with_relationships", new_callable=AsyncMock) as mock_delete:
-            await executor.execute_cascade_operation(user, "delete")
+        with patch.object(user, "_delete_internal", new_callable=AsyncMock) as mock_delete:
+            result = await executor.execute_delete_operation(user)
             mock_delete.assert_called_once()
+            assert result == 1
 
-    def test_execute_cascade_operation_invalid(self):
-        """Test execute_cascade_operation with invalid operation."""
-        executor = CascadeExecutor()
-        user = MockUser(username="test")
+    @pytest.mark.asyncio
+    async def test_execute_update_operation(self):
+        """Test execute_update_operation method."""
+        mock_queryset = Mock()
+        mock_queryset._builder.build.return_value = Mock()
+        mock_queryset._executor.execute = AsyncMock(return_value=5)
 
-        with pytest.raises(ValueError, match="Unsupported cascade operation"):
-            import asyncio
-
-            asyncio.run(executor.execute_cascade_operation(user, "invalid"))
+        result = await CascadeExecutor.execute_update_operation(mock_queryset, {"status": "updated"})
+        assert result == 5
 
 
 class TestCyclicDependencyError:

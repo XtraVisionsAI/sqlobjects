@@ -221,7 +221,7 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
 
     @emit_signals(Operation.SAVE)
     async def save(self, validate: bool = True, cascade: bool | None = None, session=None):
-        """Optimized save operation with cascade support and better error handling.
+        """Save operation with cascade support and automatic operation detection.
 
         Automatically determines whether to INSERT or UPDATE based on
         primary key presence. Uses dirty field tracking for efficient
@@ -243,178 +243,17 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         if session is None:
             session = self.get_session()
 
-        # Check if we need to process cascade relationships
-        needs_cascade = self._state_manager.needs_cascade_save() if hasattr(self, "_state_manager") else False
-
-        if needs_cascade and cascade is not False:
-            await self._process_cascade_relationships(session)
-
-        # Determine if cascade should be used - only auto-detect if None
+        # Determine if cascade should be used
         if cascade is None:
             cascade = self._has_cascade_relations()
 
-        # Use cascade executor only if explicitly requested or auto-detected
+        # Use cascade executor for cascade operations
         if cascade:
             executor = CascadeExecutor()
-            await executor.execute_cascade_operation(self, "save", session)  # type: ignore[reportArgumentType]
-            return self
+            return await executor.execute_save_operation(self, validate=validate, session=session)  # type: ignore[reportArgumentType]
 
-        # Standard save operation using internal method
+        # Direct save operation without cascade
         return await self._save_internal(validate=validate, session=session)
-
-    async def _process_cascade_relationships(self, session):
-        """Process cascade relationships for this instance."""
-        if not hasattr(self, "_state_manager"):
-            return
-
-        cascade_relationships = self._state_manager.get_cascade_relationships()
-        if not cascade_relationships:
-            return
-
-        # Save self first to get primary key
-        await self._save_internal(session=session)
-
-        # Process each relationship with full update logic
-        for rel_name, new_related_objects in cascade_relationships.items():
-            await self._process_relationship_update(rel_name, new_related_objects, session)
-
-        # keep cascade_relationships
-        # self._state_manager.set("cascade_relationships", {})
-        self._state_manager.clear_cascade_save_flag()
-
-    async def _process_relationship_update(self, rel_name: str, new_related_objects, session):
-        """Process complete relationship update: add, remove, modify."""
-        from .cascade import ForeignKeyInferrer
-
-        # Get relationship configuration
-        relationships = getattr(self.__class__, "_relationships", {})
-        if rel_name not in relationships:
-            return
-
-        rel_descriptor = relationships[rel_name]
-        if not (hasattr(rel_descriptor, "property") and hasattr(rel_descriptor.property, "cascade")):
-            return
-
-        cascade_str = rel_descriptor.property.cascade or ""
-        has_delete_orphan = "delete-orphan" in cascade_str
-
-        # Get current related objects from database
-        current_objects = await self._fetch_current_related_objects(rel_name, session)
-
-        # Convert to lists for processing
-        if new_related_objects is None:
-            new_objects = []
-        elif isinstance(new_related_objects, list):
-            new_objects = new_related_objects
-        else:
-            new_objects = [new_related_objects]
-
-        # Process updates
-        await self._update_relationship_objects(current_objects, new_objects, has_delete_orphan, session)
-
-        # Set foreign keys for new/updated objects
-        for obj in new_objects:
-            if hasattr(obj, "save"):
-                ForeignKeyInferrer.set_foreign_key(self, obj)
-                await obj.using(session).save(cascade=False)
-
-    async def _fetch_current_related_objects(self, rel_name: str, session) -> list:
-        """Fetch current related objects from database."""
-        relationships = getattr(self.__class__, "_relationships", {})
-        if rel_name not in relationships:
-            return []
-
-        rel_descriptor = relationships[rel_name]
-        if not hasattr(rel_descriptor.property, "resolved_model") or not rel_descriptor.property.resolved_model:
-            return []
-
-        related_model = rel_descriptor.property.resolved_model
-        foreign_keys = rel_descriptor.property.foreign_keys
-
-        # For reverse relationships (one-to-many), foreign_keys will be None
-        # We need to infer the foreign key field name
-        if not foreign_keys:
-            # Try to get foreign key field from back_populates relationship
-            back_populates = rel_descriptor.property.back_populates
-            if back_populates and hasattr(related_model, back_populates):
-                back_attr = getattr(related_model, back_populates)
-                if hasattr(back_attr, "property") and hasattr(back_attr.property, "foreign_keys"):
-                    back_fk = back_attr.property.foreign_keys
-                    if back_fk:
-                        fk_field = back_fk if isinstance(back_fk, str) else back_fk[0]
-                    else:
-                        # Fallback to convention
-                        fk_field = f"{back_populates}_id"
-                else:
-                    # Fallback to convention
-                    fk_field = f"{self.__class__.__name__.lower()}_id"
-            else:
-                # Fallback to convention
-                fk_field = f"{self.__class__.__name__.lower()}_id"
-        else:
-            # For forward relationships, use the specified foreign key
-            fk_field = foreign_keys if isinstance(foreign_keys, str) else foreign_keys[0]
-
-        # Check if the foreign key field exists on the related model
-        if not hasattr(related_model, fk_field):
-            # Try alternative field names
-            alt_fields = [f"{self.__class__.__name__.lower()}_id", "author_id", "user_id", "parent_id"]
-            for alt_field in alt_fields:
-                if hasattr(related_model, alt_field):
-                    fk_field = alt_field
-                    break
-            else:
-                return []
-
-        # get pk
-        pk_value = getattr(self, self._get_primary_key_field())
-        if pk_value is None:
-            return []
-
-        current_objects = (
-            await related_model.objects.using(session).filter(getattr(related_model, fk_field) == pk_value).all()
-        )
-
-        return current_objects
-
-    async def _update_relationship_objects(
-        self, current_objects: list, new_objects: list, has_delete_orphan: bool, session
-    ):
-        """Update relationship objects: handle add, remove, modify."""
-        # Create ID mappings
-        current_by_id = {getattr(obj, "id", None): obj for obj in current_objects if getattr(obj, "id", None)}
-        new_by_id = {getattr(obj, "id", None): obj for obj in new_objects if getattr(obj, "id", None)}
-
-        # Find objects to remove (orphans) - this is the key fix
-        if has_delete_orphan:
-            for obj_id, obj in current_by_id.items():
-                if obj_id and obj_id not in new_by_id:
-                    # This object is no longer in the relationship - delete it as orphan
-                    await obj.using(session).delete(cascade=False)
-
-        # Process existing objects for updates
-        for obj in new_objects:
-            obj_id = getattr(obj, "id", None)
-            if obj_id and obj_id in current_by_id:
-                # This is an existing object - check if it needs updating
-                current_obj = current_by_id[obj_id]
-                if self._object_has_changes(obj, current_obj):
-                    # Object has changes - it will be saved in the main loop
-                    pass
-
-    @staticmethod
-    def _object_has_changes(new_obj, current_obj) -> bool:
-        """Check if object has changes by comparing field values."""
-        # Simple implementation - compare key fields
-        field_names = getattr(new_obj, "_get_field_names", lambda: [])() or []
-        for field_name in field_names:
-            if field_name.startswith("_"):
-                continue
-            new_value = getattr(new_obj, field_name, None)
-            current_value = getattr(current_obj, field_name, None)
-            if new_value != current_value:
-                return True
-        return False
 
     @emit_signals(Operation.DELETE)
     async def delete(self, cascade: bool = True):
@@ -430,39 +269,28 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
             raise PrimaryKeyError("Cannot delete instance without primary key values")
 
         session = self.get_session()
-        table = self.get_table()
 
-        # Handle cascade deletion first if enabled
+        # Use cascade executor for cascade operations
         if cascade:
-            await self._delete_related_objects(session)
+            executor = CascadeExecutor()
+            await executor.execute_delete_operation(self, session=session)
+            return
 
-        # Delete this instance
+        # Direct delete operation without cascade
+        await self._delete_internal(session=session)
+
+    async def _delete_internal(self, session=None):
+        """Internal delete operation without cascade handling."""
+        if session is None:
+            session = self.get_session()
+
+        table = self.get_table()
         try:
             pk_conditions = self._build_pk_conditions()
             stmt = delete(table).where(and_(*pk_conditions))
             await session.execute(stmt)
         except Exception as e:
             raise PrimaryKeyError(f"Delete operation failed: {e}") from e
-
-    async def _delete_related_objects(self, session):
-        """Delete related objects based on cascade configuration."""
-        relationships = getattr(self.__class__, "_relationships", {})
-
-        for rel_name, rel_descriptor in relationships.items():
-            if not (hasattr(rel_descriptor, "property") and hasattr(rel_descriptor.property, "cascade")):
-                continue
-
-            cascade_str = rel_descriptor.property.cascade or ""
-            if "delete" not in cascade_str and "all" not in cascade_str:
-                continue
-
-            # Get related objects from database
-            related_objects = await self._fetch_current_related_objects(rel_name, session)
-
-            # Delete related objects
-            for related_obj in related_objects:
-                if hasattr(related_obj, "delete"):
-                    await related_obj.using(session).delete(cascade=True)
 
     async def refresh(self, fields: list[str] | None = None, include_deferred: bool = True):
         """Refresh this instance with the latest data from the database.
@@ -516,8 +344,15 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         """Check if this model has any relationships configured for cascade operations.
 
         Returns:
-            True if any relationship has cascade=True, False otherwise
+            True if any relationship has cascade operations, False otherwise
         """
+        # Check for cascade relationships in state manager
+        if hasattr(self, "_state_manager"):
+            cascade_relationships = self._state_manager.get_cascade_relationships()
+            if cascade_relationships:
+                return True
+
+        # Check for configured cascade relationships
         relationships = getattr(self.__class__, "_relationships", {})
         for rel_descriptor in relationships.values():
             if hasattr(rel_descriptor, "property") and rel_descriptor.property.cascade:
@@ -586,7 +421,7 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
             return
 
         # Store relationship objects and mark for cascade save
-        relationship_value = value if isinstance(value, list) else [value]
+        relationship_value = value if isinstance(value, list) else [value] if value is not None else []
         self._state_manager.set_cascade_relationship(field_name, relationship_value)
 
     def _get_relationship_fields(self) -> set[str]:

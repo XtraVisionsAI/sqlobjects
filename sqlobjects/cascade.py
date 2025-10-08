@@ -76,10 +76,10 @@ OnUpdateType = Union[OnUpdate, Literal["CASCADE", "SET NULL", "RESTRICT", "NO AC
 CascadeType = Union[CascadeOption, set[CascadeOption], str, None]  # noqa: UP007
 
 
-def normalize_ondelete(ondelete: OnDeleteType) -> str | None:
+def normalize_ondelete(ondelete: OnDeleteType) -> str:
     """Normalize ondelete parameter to SQLAlchemy string format."""
     if ondelete is None:
-        return "NO ACTION"  # Default value
+        return "NO ACTION"
     if isinstance(ondelete, OnDelete):
         return ondelete.value
     if isinstance(ondelete, str):
@@ -89,13 +89,14 @@ def normalize_ondelete(ondelete: OnDeleteType) -> str | None:
             return ondelete_upper
         raise ValueError(f"Invalid ondelete value: {ondelete}. Must be one of {valid_values}")
 
+    # This should never be reached due to type constraints, but kept for safety
     raise TypeError(f"ondelete must be OnDelete enum or string, got {type(ondelete)}")
 
 
-def normalize_onupdate(onupdate: OnUpdateType) -> str | None:
+def normalize_onupdate(onupdate: OnUpdateType) -> str:
     """Normalize onupdate parameter to SQLAlchemy string format."""
     if onupdate is None:
-        return "NO ACTION"  # Default value
+        return "NO ACTION"
     if isinstance(onupdate, OnUpdate):
         return onupdate.value
     if isinstance(onupdate, str):
@@ -105,6 +106,7 @@ def normalize_onupdate(onupdate: OnUpdateType) -> str | None:
             return onupdate_upper
         raise ValueError(f"Invalid onupdate value: {onupdate}. Must be one of {valid_values}")
 
+    # This should never be reached due to type constraints, but kept for safety
     raise TypeError(f"onupdate must be OnUpdate enum or string, got {type(onupdate)}")
 
 
@@ -303,6 +305,53 @@ class CascadeExecutor:
     def __init__(self):
         self.resolver = DependencyResolver()
 
+    async def execute_save_operation(
+        self, instance: "ObjectModel", validate: bool = True, session: "AsyncSession | None" = None
+    ) -> "ObjectModel":
+        """Execute save operation with cascade handling."""
+        if session is None:
+            session = get_session()
+
+        # Save root instance first to get primary key
+        await instance._save_internal(validate=validate, session=session)  # noqa
+
+        # Process cascade relationships if needed
+        if hasattr(instance, "_state_manager"):
+            cascade_relationships = instance._state_manager.get_cascade_relationships()  # noqa
+            if cascade_relationships:
+                await self._process_cascade_relationships(instance, session)
+
+        return instance
+
+    async def execute_delete_operation(
+        self, target, cascade_strategy: str = "full", session: "AsyncSession | None" = None
+    ) -> int:
+        """Execute delete operation with cascade handling."""
+        if session is None:
+            session = get_session()
+
+        # Handle QuerySet deletion
+        if hasattr(target, "_table") and hasattr(target, "_model_class"):
+            return await self._execute_queryset_delete(target, cascade_strategy, session)
+
+        # Handle single instance deletion
+        await self._delete_related_objects(target, session)
+        await target._delete_internal(session=session)  # noqa
+        return 1
+
+    @staticmethod
+    async def execute_update_operation(queryset, values: dict, session: "AsyncSession | None" = None) -> int:
+        """Execute update operation with cascade handling."""
+        # Use the provided session or get from queryset's executor
+        if session is not None:
+            # Create a new queryset with the specified session
+            queryset = queryset.using(session)
+
+        # Execute the update operation
+        query = queryset._builder.build(queryset._table)  # noqa
+        result = await queryset._executor.execute(query, "update", values=values)  # noqa
+        return result if isinstance(result, int) else 0
+
     @staticmethod
     async def cascade_save_optimized(instances: list["ObjectModel"], session: "AsyncSession | None" = None) -> None:
         """Optimized cascade save using bulk operations."""
@@ -407,96 +456,310 @@ class CascadeExecutor:
                     setattr(instance, field, value)
             await instance.using(session).save(cascade=False)
 
-    async def execute_cascade_operation(
-        self, root_instance: "ObjectModel", operation: str, session: "AsyncSession | None" = None, **kwargs: Any
-    ) -> None:
-        """Execute a cascade operation starting from a root instance."""
-        if session is None:
-            session = get_session()
-
-        if operation == "save":
-            await self._cascade_save_with_relationships(root_instance, session)
-        elif operation == "delete":
-            await self._cascade_delete_with_relationships(root_instance, session)
-        elif operation == "update":
-            update_data = kwargs.get("update_data", {})
-            instances_to_process = self._collect_cascade_instances(root_instance, operation)
-            await self.cascade_update(instances_to_process, update_data, session)
-        else:
-            raise ValueError(f"Unsupported cascade operation: {operation}")
+    async def _execute_queryset_delete(self, queryset, cascade_strategy: str, session: "AsyncSession") -> int:
+        """Execute QuerySet delete with different cascade strategies."""
+        if cascade_strategy == "full":
+            return await self._delete_with_full_cascade(queryset, session)
+        elif cascade_strategy == "fast":
+            return await self._delete_with_fast_cascade(queryset, session)
+        else:  # "none"
+            return await self._delete_with_no_cascade(queryset, session)
 
     @staticmethod
-    async def _process_cascade_relationships(root_instance: "ObjectModel", session: "AsyncSession") -> None:
-        """Process cascade relationships for an instance."""
-        if not hasattr(root_instance, "_state_manager"):
+    async def _delete_with_full_cascade(queryset, session: "AsyncSession") -> int:
+        """Execute complete cascade deletion with full ORM functionality."""
+        total_count = await queryset.count()
+        if total_count == 0:
+            return 0
+
+        batch_size = 50 if total_count > 100 else total_count
+        deleted_count = 0
+        offset = 0
+
+        while True:
+            batch = await queryset.offset(offset).limit(batch_size).all()
+            if not batch:
+                break
+
+            for instance in batch:
+                await instance.using(session).delete(cascade=False)
+                deleted_count += 1
+
+            offset += batch_size
+
+        return deleted_count
+
+    async def _delete_with_fast_cascade(self, queryset, session: "AsyncSession") -> int:
+        """Execute fast cascade deletion with minimal ORM processing."""
+        # Get all referenced field values
+        referenced_values = await self._get_referenced_field_values(queryset)
+        if not any(referenced_values.values()):
+            return 0
+
+        # Process necessary foreign key relationships
+        await self._process_fast_cascade_relationships(queryset, referenced_values, session)
+
+        # Execute bulk delete
+        query = queryset._builder.build(queryset._table)  # noqa
+        result = await queryset._executor.execute(query, "delete")  # noqa
+        return result if isinstance(result, int) else 0
+
+    async def _delete_with_no_cascade(self, queryset, session: "AsyncSession") -> int:
+        """Execute direct SQL deletion without ORM cascade processing."""
+        query = queryset._builder.build(queryset._table)  # noqa
+        result = await queryset._executor.execute(query, "delete")  # noqa
+        return result if isinstance(result, int) else 0
+
+    async def _get_referenced_field_values(self, queryset) -> dict[str, list]:
+        """Get all referenced field values for cascade deletion."""
+        relationships = self._find_referencing_relationships(queryset._table)  # noqa
+
+        # Find all referenced fields
+        referenced_fields = set()
+        for _, _, referenced_column in relationships:
+            referenced_fields.add(referenced_column)
+
+        # Get values for each referenced field
+        field_values = {}
+        for field in referenced_fields:
+            try:
+                values = await queryset.values_list(field, flat=True)
+                field_values[field] = values
+            except Exception:  # noqa
+                field_values[field] = []
+
+        return field_values
+
+    def _find_referencing_relationships(self, table) -> list[tuple]:
+        """Find all foreign key relationships that reference this table."""
+        relationships = []
+
+        if hasattr(table, "metadata"):
+            for ref_table in table.metadata.tables.values():
+                for column in ref_table.columns:
+                    for fk in column.foreign_keys:
+                        if fk.column.table == table:
+                            relationships.append((ref_table, column.name, fk.column.name))
+
+        return relationships
+
+    async def _process_fast_cascade_relationships(
+        self, queryset, referenced_values: dict[str, list], session: "AsyncSession"
+    ) -> None:
+        """Process necessary foreign key relationships for fast cascade."""
+        relationships = self._find_referencing_relationships(queryset._table)
+
+        for ref_table, fk_column, referenced_column in relationships:
+            values = referenced_values.get(referenced_column, [])
+            if values:
+                await self._cascade_delete_related_records(ref_table, fk_column, values, queryset, session)
+
+    async def _cascade_delete_related_records(
+        self, ref_table, fk_column: str, values: list, original_queryset, session: "AsyncSession"
+    ) -> None:
+        """Delete related records in referencing table using ORM methods."""
+        if not values:
             return
 
-        cascade_relationships = root_instance._state_manager.get_cascade_relationships()  # noqa
+        # Find the model class for the referencing table
+        related_model_class = self._find_model_class_for_table(ref_table, original_queryset)
+        if not related_model_class:
+            return
+
+        # Create QuerySet for the related model and delete using ORM
+        from .queryset import QuerySet
+
+        related_queryset = QuerySet(ref_table, related_model_class, session)
+
+        # Build filter condition for foreign key values
+        fk_column_obj = ref_table.c[fk_column]
+        filter_condition = fk_column_obj.in_(values)
+
+        # Use ORM delete with cascade=none to avoid infinite recursion
+        await related_queryset.filter(filter_condition).delete(cascade="none")
+
+    def _find_model_class_for_table(self, table, original_queryset):
+        """Find the model class associated with a table from registry."""
+        # Get registry from model class and use native method
+        if hasattr(original_queryset._model_class, "__registry__"):
+            registry = original_queryset._model_class.__registry__
+            return registry.get_model_by_table(table.name)
+        return None
+
+    async def _process_cascade_relationships(self, root_instance: "ObjectModel", session: "AsyncSession") -> None:
+        """Process cascade relationships for an instance."""
+        cascade_relationships = root_instance._state_manager.get_cascade_relationships()
         if not cascade_relationships:
             return
 
-        # Process each relationship
-        for _, related_objects in cascade_relationships.items():
-            for related_obj in related_objects:
-                if hasattr(related_obj, "save"):
-                    # Set foreign key relationship
-                    ForeignKeyInferrer.set_foreign_key(root_instance, related_obj)
-                    # Save related object
-                    await related_obj.using(session).save(cascade=False)
+        # Process each relationship with full update logic
+        for rel_name, new_related_objects in cascade_relationships.items():
+            await self._process_relationship_update(root_instance, rel_name, new_related_objects, session)
 
         # Clear cascade state
-        cascade_relationships = root_instance._state_manager.get_cascade_relationships()
-        for rel_name in cascade_relationships:
+        for rel_name in list(cascade_relationships.keys()):
             root_instance._state_manager.clear_cache_entry(rel_name)
         root_instance._state_manager.clear_cascade_save_flag()
 
-    async def _cascade_save_with_relationships(self, root_instance: "ObjectModel", session: "AsyncSession") -> None:
-        """Handle cascade save with automatic foreign key setup."""
-        # Step 1: Save root instance to get primary key
-        await root_instance.using(session).save(cascade=False)
+    async def _process_relationship_update(
+        self, root_instance: "ObjectModel", rel_name: str, new_related_objects, session: "AsyncSession"
+    ) -> None:
+        """Process complete relationship update: add, remove, modify."""
+        # Get relationship configuration
+        relationships = getattr(root_instance.__class__, "_relationships", {})
+        if rel_name not in relationships:
+            return
 
-        # Step 2: Process relationship attributes and set foreign keys
-        await self._process_relationship_attributes(root_instance, session)
+        rel_descriptor = relationships[rel_name]
+        if not (hasattr(rel_descriptor, "property") and hasattr(rel_descriptor.property, "cascade")):
+            return
 
-    async def _cascade_delete_with_relationships(self, root_instance: "ObjectModel", session: "AsyncSession") -> None:
-        """Handle cascade delete with proper relationship handling."""
-        # Step 1: Collect and delete related objects first (reverse dependency order)
-        await self._delete_related_objects(root_instance, session)
+        cascade_str = rel_descriptor.property.cascade or ""
+        has_delete_orphan = "delete-orphan" in cascade_str
 
-        # Step 2: Delete the root instance
-        await root_instance.using(session).delete(cascade=False)
+        # Get current related objects from database
+        current_objects = await self._fetch_current_related_objects(root_instance, rel_name, session)
+
+        # Convert to lists for processing
+        if new_related_objects is None:
+            new_objects = []
+        elif isinstance(new_related_objects, list):
+            new_objects = new_related_objects
+        else:
+            new_objects = [new_related_objects]
+
+        # Process updates
+        await self._update_relationship_objects(current_objects, new_objects, has_delete_orphan, session)
+
+        # Set foreign keys for new/updated objects
+        for obj in new_objects:
+            if hasattr(obj, "save"):
+                ForeignKeyInferrer.set_foreign_key(root_instance, obj)
+                await obj.using(session).save(cascade=False)
+
+    async def _fetch_current_related_objects(
+        self, root_instance: "ObjectModel", rel_name: str, session: "AsyncSession"
+    ) -> list:
+        """Fetch current related objects from database."""
+        relationships = getattr(root_instance.__class__, "_relationships", {})
+        if rel_name not in relationships:
+            return []
+
+        rel_descriptor = relationships[rel_name]
+        if not hasattr(rel_descriptor.property, "resolved_model") or not rel_descriptor.property.resolved_model:
+            return []
+
+        related_model = rel_descriptor.property.resolved_model
+        foreign_keys = rel_descriptor.property.foreign_keys
+
+        # For reverse relationships (one-to-many), foreign_keys will be None
+        # We need to infer the foreign key field name
+        if not foreign_keys:
+            # Try to get foreign key field from back_populates relationship
+            back_populates = rel_descriptor.property.back_populates
+            if back_populates and hasattr(related_model, back_populates):
+                back_attr = getattr(related_model, back_populates)
+                if hasattr(back_attr, "property") and hasattr(back_attr.property, "foreign_keys"):
+                    back_fk = back_attr.property.foreign_keys
+                    if back_fk:
+                        fk_field = back_fk if isinstance(back_fk, str) else back_fk[0]
+                    else:
+                        # Fallback to convention
+                        fk_field = f"{back_populates}_id"
+                else:
+                    # Fallback to convention
+                    fk_field = f"{root_instance.__class__.__name__.lower()}_id"
+            else:
+                # Fallback to convention
+                fk_field = f"{root_instance.__class__.__name__.lower()}_id"
+        else:
+            # For forward relationships, use the specified foreign key
+            fk_field = foreign_keys if isinstance(foreign_keys, str) else foreign_keys[0]
+
+        # Check if the foreign key field exists on the related model
+        if not hasattr(related_model, fk_field):
+            # Try alternative field names
+            alt_fields = [f"{root_instance.__class__.__name__.lower()}_id", "author_id", "user_id", "parent_id"]
+            for alt_field in alt_fields:
+                if hasattr(related_model, alt_field):
+                    fk_field = alt_field
+                    break
+            else:
+                return []
+
+        # Get primary key value
+        pk_value = getattr(root_instance, root_instance._get_primary_key_field())
+        if pk_value is None:
+            return []
+
+        current_objects = (
+            await related_model.objects.using(session).filter(getattr(related_model, fk_field) == pk_value).all()
+        )
+
+        return current_objects
+
+    async def _update_relationship_objects(
+        self, current_objects: list, new_objects: list, has_delete_orphan: bool, session: "AsyncSession"
+    ) -> None:
+        """Update relationship objects: handle add, remove, modify."""
+        # Create ID mappings
+        current_by_id = {getattr(obj, "id", None): obj for obj in current_objects if getattr(obj, "id", None)}
+        new_by_id = {getattr(obj, "id", None): obj for obj in new_objects if getattr(obj, "id", None)}
+
+        # Find objects to remove (orphans)
+        if has_delete_orphan:
+            for obj_id, obj in current_by_id.items():
+                if obj_id and obj_id not in new_by_id:
+                    # This object is no longer in the relationship - delete it as orphan
+                    await obj.using(session).delete(cascade=False)
+
+        # Process existing objects for updates
+        for obj in new_objects:
+            obj_id = getattr(obj, "id", None)
+            if obj_id and obj_id in current_by_id:
+                # This is an existing object - check if it needs updating
+                current_obj = current_by_id[obj_id]
+                if self._object_has_changes(obj, current_obj):
+                    # Object has changes - it will be saved in the main loop
+                    pass
+
+    @staticmethod
+    def _object_has_changes(new_obj, current_obj) -> bool:
+        """Check if object has changes by comparing field values."""
+        # Simple implementation - compare key fields
+        field_names = getattr(new_obj, "_get_field_names", lambda: [])() or []
+        for field_name in field_names:
+            if field_name.startswith("_"):
+                continue
+            new_value = getattr(new_obj, field_name, None)
+            current_value = getattr(current_obj, field_name, None)
+            if new_value != current_value:
+                return True
+        return False
 
     async def _delete_related_objects(self, root_instance: "ObjectModel", session: "AsyncSession") -> None:
         """Delete related objects based on cascade configuration."""
         relationships = getattr(root_instance.__class__, "_relationships", {})
-        print(f"DEBUG: Found {len(relationships)} relationships for {root_instance.__class__.__name__}")
 
         for rel_name, rel_descriptor in relationships.items():
-            print(f"DEBUG: Processing relationship {rel_name}")
             if not (hasattr(rel_descriptor, "property") and hasattr(rel_descriptor.property, "cascade")):
-                print(f"DEBUG: No cascade property for {rel_name}")
                 continue
 
             cascade_str = rel_descriptor.property.cascade
-            print(f"DEBUG: Cascade string for {rel_name}: {cascade_str}")
             if not cascade_str:
                 continue
 
             # Check if cascade string contains delete operations
             if "delete" not in cascade_str and "all" not in cascade_str:
-                print(f"DEBUG: No delete cascade for {rel_name}")
                 continue
 
-            print(f"DEBUG: Will cascade delete for {rel_name}")
-            # Get related objects from database (not from memory attributes)
+            # Get related objects from database
             related_objects = await self._fetch_related_objects(root_instance, rel_name, session)
-            print(f"DEBUG: Found {len(related_objects)} related objects for {rel_name}")
 
             # Delete related objects
             for related_obj in related_objects:
                 if hasattr(related_obj, "delete"):
-                    print(f"DEBUG: Deleting related object {related_obj}")
-                    await related_obj.using(session).delete(cascade=True)  # Recursive cascade
+                    await related_obj.using(session).delete(cascade=True)
 
     async def _fetch_related_objects(
         self, root_instance: "ObjectModel", rel_name: str, session: "AsyncSession"
@@ -539,26 +802,6 @@ class CascadeExecutor:
 
             return CascadeProfile
         return None
-
-    async def _process_relationship_attributes(self, root_instance: "ObjectModel", session: "AsyncSession") -> None:
-        """Process relationship attributes and cascade save related objects."""
-        # Simple relationship mapping for common patterns
-        relationship_mappings = self._get_relationship_mappings(root_instance.__class__.__name__)
-
-        for attr_name, (_, fk_field) in relationship_mappings.items():
-            related_objects = getattr(root_instance, attr_name, None)
-            if related_objects is None:
-                continue
-
-            # Handle both single objects and collections
-            if not isinstance(related_objects, list | tuple):
-                related_objects = [related_objects]
-
-            # Set foreign keys and save related objects
-            for related_obj in related_objects:
-                if hasattr(related_obj, fk_field) and hasattr(related_obj, "save"):
-                    setattr(related_obj, fk_field, root_instance.id)
-                    await related_obj.using(session).save(cascade=False)
 
     @staticmethod
     def _get_relationship_mappings(model_name: str) -> dict:
