@@ -1,3 +1,15 @@
+## 1.0.6 (2025-10-08)
+
+### Feat
+
+- optimize field cache and state manager
+- implement relationship prefetch support
+- add kwargs parameter support to filter/exclude/get methods
+
+### Refactor
+
+- unify cascade for model and queryset operations
+
 ## 1.0.5 (2025-09-25)
 
 ### Fix
