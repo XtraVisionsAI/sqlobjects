@@ -7,7 +7,6 @@ This module provides universal fixtures for the SQLObjects test suite:
 - Universal Data Cleanup: Automated cleanup and isolation mechanisms
 """
 
-import os
 from datetime import datetime
 
 import pytest
@@ -26,6 +25,7 @@ from sqlobjects.fields import (
 )
 from sqlobjects.model import ObjectModel
 from sqlobjects.session import ctx_session
+from tests.test_config import TestDatabaseConfig
 
 
 # ============================================================================
@@ -108,35 +108,55 @@ class PostTag(TestModel):
 # ============================================================================
 
 
-@pytest.fixture(scope="session", params=["sqlite"])
-async def test_db(request):
+# Database configuration - can be overridden via pytest command line
+def pytest_addoption(parser):
+    """Add command line options for database selection"""
+    parser.addoption(
+        "--db",
+        action="store",
+        default="sqlite",
+        choices=["sqlite", "postgresql", "mysql"],
+        help="Database type to use for testing (default: sqlite)",
+    )
+
+
+@pytest.fixture(scope="session")
+def db_type(request):
+    """Get database type from command line or default to sqlite"""
+    return request.config.getoption("--db")
+
+
+@pytest.fixture
+async def test_db(db_type):
     """Universal database fixture supporting multiple databases
 
-    Defaults to SQLite in-memory database for speed
-    Configure other databases via environment variables for compatibility testing
+    Usage:
+    - Default SQLite: pytest
+    - PostgreSQL: pytest --db=postgresql
+    - MySQL: pytest --db=mysql
+
+    Environment variables for database URLs:
+    - POSTGRESQL_TEST_URL (default: postgresql+asyncpg://test:test@localhost/tests)
+    - MYSQL_TEST_URL (default: mysql+asyncmy://test:test@localhost/tests)
     """
-    db_type = request.param
+    config = TestDatabaseConfig.get_config(db_type)
 
-    if db_type == "sqlite":
-        db_url = "sqlite+aiosqlite:///:memory:"
-    elif db_type == "postgresql":
-        db_url = os.getenv("POSTGRESQL_TEST_URL", "postgresql+asyncpg://test:test@localhost/test_db")
-    elif db_type == "mysql":
-        db_url = os.getenv("MYSQL_TEST_URL", "mysql+asyncmy://test:test@localhost/test_db")
-    else:
-        raise ValueError(f"Unsupported database type: {db_type}")
+    print(f"\n🗄️  Testing with {db_type.upper()} database: {config['url']}")
 
-    await init_db(db_url)
-    yield db_type
-    await close_db()
+    # 使用统一的池配置
+    await init_db(config["url"], **config["pool_config"])
+    await create_tables(TestModel)
+
+    try:
+        yield db_type
+    finally:
+        await close_db()
 
 
 @pytest.fixture
 async def session(test_db):
     """Universal session fixture providing database session"""
-    # Create tables for all TestModel subclasses that exist at this point
-    await create_tables(TestModel)
-
+    # Tables already created at session level, just provide session
     async with ctx_session() as session:
         yield session
 
@@ -252,7 +272,19 @@ async def clean_db(test_db):
 
     async with ctx_session() as db_session:
         # Delete data from tables in dependency order (child tables first)
-        # Note: This only removes data, table structures remain intact
+        tables_to_clean = [PostTag.__table__, Profile.__table__, Post.__table__, Tag.__table__, User.__table__]
+
+        for table in tables_to_clean:
+            try:
+                await db_session.execute(table.delete())
+            except Exception:  # noqa
+                # Ignore errors for tables that don't exist yet
+                pass
+
+        try:
+            await db_session.commit()
+        except Exception:  # noqa
+            await db_session.rollback()
 
         # Get all tables from metadata
         metadata = User.__table__.metadata
