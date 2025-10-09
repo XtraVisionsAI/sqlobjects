@@ -79,10 +79,11 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         pass
 
     def _get_all_data(self) -> dict:
-        """Get all field data, excluding deferred field proxies.
+        """Get all field data, excluding deferred field proxies and non-insertable fields.
 
         Returns:
-            Dictionary mapping field names to their current values
+            Dictionary mapping field names to their current values,
+            excluding fields that should not be included in INSERT operations
         """
         from .fields.proxies import DeferredFieldProxy, RelationFieldProxy
 
@@ -90,9 +91,36 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         for name in self._get_field_names():
             value = getattr(self, name, None)
             # Skip proxy objects to avoid serialization issues
-            if not isinstance(value, (DeferredFieldProxy, RelationFieldProxy)):
-                data[name] = value
+            if isinstance(value, (DeferredFieldProxy, RelationFieldProxy)):
+                continue
+
+            # Skip fields that should not be included in INSERT operations
+            if self._should_exclude_from_insert(name, value):
+                continue
+
+            data[name] = value
         return data
+
+    def _should_exclude_from_insert(self, field_name: str, value) -> bool:
+        """Check if field should be excluded from INSERT operations.
+
+        Args:
+            field_name: Name of the field
+            value: Current value of the field
+
+        Returns:
+            True if field should be excluded from INSERT, False otherwise
+        """
+        # Get field attribute from class
+        field_attr = getattr(self.__class__, field_name, None)
+        if not hasattr(field_attr, "include_in_init"):
+            return False
+
+        # Exclude fields with init=False and None values (like identity columns)
+        if field_attr.include_in_init is False and value is None:  # type: ignore[reportOptionalMemberAccess]
+            return True
+
+        return False
 
     def _get_dirty_data(self) -> dict:
         """Get modified field data, excluding deferred field proxies.

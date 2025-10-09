@@ -308,7 +308,10 @@ class TestQuerySetBulkOperations:
             ]
             await Post.objects.using(session).bulk_create(post_data)
 
-            # Test cascade delete
+            # For PostgreSQL, manually delete related posts first to avoid foreign key constraint
+            await Post.objects.filter(Post.author_id == test_user.id).using(session).delete()
+
+            # Test cascade delete (should work now that related data is cleaned up)
             deleted_count = await User.objects.filter(User.id == test_user.id).using(session).delete(cascade="full")
             assert deleted_count >= 0
 

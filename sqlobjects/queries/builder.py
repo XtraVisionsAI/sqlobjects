@@ -557,6 +557,28 @@ class QueryBuilder:
                     group_columns.append(field.resolve(table))
                 else:
                     group_columns.append(field)
+
+            # For PostgreSQL compatibility, include all non-aggregated columns in GROUP BY
+            if self.annotations:
+                # Add all base table columns that are being selected
+                if self.selected_fields:
+                    for field in self.selected_fields:
+                        if field in table.c and table.c[field] not in group_columns:
+                            group_columns.append(table.c[field])
+                elif not self.deferred_fields:
+                    # If no specific fields selected and no deferred fields, add all columns
+                    for column in table.c:
+                        if column not in group_columns:
+                            group_columns.append(column)
+                else:
+                    # Add non-deferred columns
+                    all_fields = set(table.columns.keys())
+                    combined_deferred = self.deferred_fields | auto_deferred_fields
+                    selected_fields = all_fields - combined_deferred
+                    for field in selected_fields:
+                        if field in table.c and table.c[field] not in group_columns:
+                            group_columns.append(table.c[field])
+
             query = query.group_by(*group_columns)
 
         # Apply having

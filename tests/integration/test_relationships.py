@@ -213,7 +213,11 @@ class TestRelationshipLoading:
     async def test_prefetch_related_many_to_many_specific(self, session):
         """Test prefetch_related specifically for many-to-many relationships"""
         # Create specific test data
-        post = await Post.objects.using(session).create(title="M2M Test Post", content="Test content", author_id=1)
+        # First create a user to avoid foreign key constraint violation
+        user = await User.objects.using(session).create(username="m2m_test_user", email="m2m@example.com", age=30)
+        post = await Post.objects.using(session).create(
+            title="M2M Test Post", content="Test content", author_id=user.id
+        )
 
         tags_data = [
             {"name": "test_tag_1"},

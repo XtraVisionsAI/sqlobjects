@@ -580,7 +580,7 @@ class IdentityColumn(Column[Any]):
         deferred: bool = False,
         deferred_group: str | None = None,
         insert_default: Any = None,
-        init: bool | None = None,
+        init: bool | None = False,  # Identity columns should not be in constructor
         repr: bool | None = None,  # noqa
         compare: bool | None = None,
         active_history: bool = False,
