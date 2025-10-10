@@ -84,12 +84,7 @@ def main():
     print(f"🔍 Checking {args.db.upper()} database availability...")
     if not asyncio.run(check_database_connection(args.db)):
         print(f"❌ {args.db.upper()} database not available")
-        if args.db != "sqlite":
-            print("💡 Falling back to SQLite for testing")
-            args.db = "sqlite"
-        else:
-            print("❌ No database available for testing")
-            sys.exit(1)
+        sys.exit(1)
     else:
         print(f"✅ {args.db.upper()} database is available")
 

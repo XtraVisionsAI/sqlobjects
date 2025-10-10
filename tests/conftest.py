@@ -62,7 +62,7 @@ class Post(TestModel):
     id: Column[int] = identity()
     title: Column[str] = StringColumn(length=200)
     content: Column[str] = column(type="text")
-    author_id: Column[int] = foreign_key("users.id")
+    author_id: Column[int] = foreign_key("users.id", ondelete="CASCADE")
     created_at: Column[datetime] = column(type="datetime", server_default=func.now())
 
     # Relationships
@@ -84,7 +84,7 @@ class Profile(TestModel):
     """User profile model for testing nested relationships"""
 
     id: Column[int] = identity()
-    user_id: Column[int] = foreign_key("users.id", unique=True)
+    user_id: Column[int] = foreign_key("users.id", unique=True, ondelete="CASCADE")
     full_name: Column[str] = StringColumn(length=100)
     location: Column[str] = StringColumn(length=100, nullable=True)
     website: Column[str] = StringColumn(length=200, nullable=True)
@@ -96,8 +96,8 @@ class Profile(TestModel):
 class PostTag(TestModel):
     """Post-tag association for testing composite primary keys"""
 
-    post_id: Column[int] = foreign_key("posts.id", primary_key=True)
-    tag_id: Column[int] = foreign_key("tags.id", primary_key=True)
+    post_id: Column[int] = foreign_key("posts.id", primary_key=True, ondelete="CASCADE")
+    tag_id: Column[int] = foreign_key("tags.id", primary_key=True, ondelete="CASCADE")
 
     class Config:
         table_name = "post_tags"

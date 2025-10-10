@@ -15,13 +15,13 @@ class TestDatabaseConfig:
             "pool_config": {},
         },
         "postgresql": {
-            "url": "postgresql://test:test@localhost/tests",
+            "url": "postgresql+asyncpg://test:test@localhost/tests",
             "driver": "asyncpg",
             "env_var": "POSTGRESQL_TEST_URL",
             "pool_config": {"pool_size": 1, "max_overflow": 0, "pool_pre_ping": True},
         },
         "mysql": {
-            "url": "mysql://test:test@localhost/tests",
+            "url": "mysql+asyncmy://test:test@localhost/tests",
             "driver": "asyncmy",
             "env_var": "MYSQL_TEST_URL",
             "pool_config": {},
@@ -49,12 +49,16 @@ async def test_database_connection(db_type: str, url: str) -> bool:
     if db_type == "postgresql":
         import asyncpg  # type: ignore[reportMissingImports]
 
-        conn = await asyncpg.connect(url)
+        # 转换 SQLAlchemy URL 为 asyncpg URL
+        native_url = url.replace("postgresql+asyncpg://", "postgresql://")
+        conn = await asyncpg.connect(native_url)
         await conn.close()
     elif db_type == "mysql":
         import asyncmy  # type: ignore[reportMissingImports]
 
-        parsed = urlparse(url)
+        # 解析 SQLAlchemy URL
+        native_url = url.replace("mysql+asyncmy://", "mysql://")
+        parsed = urlparse(native_url)
         conn = await asyncmy.connect(
             host=parsed.hostname or "localhost",
             port=parsed.port or 3306,
