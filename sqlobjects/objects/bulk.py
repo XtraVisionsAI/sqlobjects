@@ -8,9 +8,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Generic, TypeVar
 
-from sqlalchemy import bindparam, delete, insert, select, update
+from sqlalchemy import bindparam, insert, select, update
 
 from ..session import AsyncSession, ctx_session
+from .upsert import ConflictResolution as UpsertConflictResolution
+from .upsert import UpsertHandler
 
 
 T = TypeVar("T")
@@ -142,7 +144,7 @@ class DatabaseNativeHandler:
                 fields = f"({', '.join(conflict_fields)})" if conflict_fields else ""
                 return f"ON CONFLICT {fields} DO NOTHING"
             elif conflict_resolution == ConflictResolution.UPDATE and conflict_fields:
-                updates = ", ".join(f"{field} = EXCLUDED.{field}" for field in conflict_fields)
+                updates = ", ".join(f"{f} = EXCLUDED.{f}" for f in conflict_fields)
                 return f"ON CONFLICT ({', '.join(conflict_fields)}) DO UPDATE SET {updates}"
         elif self.dialect_name == "mysql":
             if conflict_resolution == ConflictResolution.IGNORE:
@@ -238,6 +240,9 @@ class BulkOperationHandler:
                 failed_batches += 1
                 if on_error == ErrorHandling.FAIL_FAST:
                     raise
+                elif on_error == ErrorHandling.IGNORE:
+                    # Silently skip failed batch
+                    pass
                 elif on_error == ErrorHandling.COLLECT:
                     for j, item in enumerate(batch):
                         all_failed_records.append(FailedRecord(i + j, item, e, "batch_error", batch_count - 1))
@@ -291,7 +296,7 @@ class BulkOperationHandler:
     def get_return_columns(self, return_fields: list[str] | None):
         """Get columns to return based on return_fields parameter."""
         if return_fields:
-            return [self.table.c[field] for field in return_fields]
+            return [self.table.c[f] for f in return_fields]
         return list(self.table.c)
 
     def create_objects_from_rows(self, rows, return_fields: list[str] | None = None) -> list:
@@ -301,7 +306,7 @@ class BulkOperationHandler:
             row_dict = dict(row._mapping)  # noqa
             if return_fields:
                 # When return_fields is specified, return dict with only requested fields
-                filtered_dict = {field: row_dict.get(field) for field in return_fields}
+                filtered_dict = {f: row_dict.get(f) for f in return_fields}
                 objects.append(filtered_dict)
             else:
                 # When return_fields is None, return full model objects
@@ -341,7 +346,14 @@ class BulkOperationHandler:
         else:
             # Use regular execute for single parameter set or no parameters
             result = await exec_session.execute(stmt, parameters)
-        return [], result.rowcount or 0, False
+
+        # Handle rowcount: -1 means unknown, use parameter count as fallback
+        rowcount = result.rowcount if result.rowcount >= 0 else 0  # noqa
+        if rowcount == 0 and isinstance(parameters, list):
+            # For INSERT/UPDATE without proper rowcount, use parameter count
+            rowcount = len(parameters)
+
+        return [], rowcount, False
 
     async def execute_with_error_handling(
         self,
@@ -358,19 +370,50 @@ class BulkOperationHandler:
         # Use provided session or fall back to instance session
         exec_session = session or self.session
 
-        # Modify statement for conflict resolution
+        # Use unified UPSERT handler for conflict resolution
         if conflict_resolution != ConflictResolution.ERROR:
-            stmt = self.native_handler.modify_statement(stmt, conflict_resolution, conflict_fields)
+            upsert_handler = UpsertHandler(exec_session)
+            upsert_conflict = (
+                UpsertConflictResolution.IGNORE
+                if conflict_resolution == ConflictResolution.IGNORE
+                else UpsertConflictResolution.UPDATE
+            )
+            # For INSERT operations, replace the statement with UPSERT
+            if operation == "insert":
+                stmt = upsert_handler.get_upsert_statement(self.table, data_batch, upsert_conflict, conflict_fields)
+            else:
+                # For other operations, keep original logic
+                stmt = self.native_handler.modify_statement(stmt, conflict_resolution, conflict_fields)
 
         successful_objects = []
         failed_records = []
         success_count = 0
 
-        if error_handling in (ErrorHandling.FAIL_FAST, ErrorHandling.IGNORE):
-            # Unified handling for FAIL_FAST and IGNORE modes
+        if error_handling == ErrorHandling.FAIL_FAST:
+            # FAIL_FAST: Execute batch and let exceptions propagate
             successful_objects, success_count = await self._execute_batch_operation(
                 stmt, operation, data_batch, return_columns, exec_session
             )
+        elif error_handling == ErrorHandling.IGNORE:
+            # IGNORE: Process individually to skip errors
+            for _, data in enumerate(data_batch):
+                try:
+                    single_stmt = stmt.values([data]) if hasattr(stmt, "values") else stmt
+                    if return_columns and self.supports_returning(operation):
+                        single_stmt = single_stmt.returning(*return_columns)
+                        result = await exec_session.execute(single_stmt)
+                        rows = result.fetchall()
+                        if rows:
+                            current_return_fields = getattr(self, "_current_return_fields", None)
+                            successful_objects.extend(self.create_objects_from_rows(rows, current_return_fields))
+                            success_count += 1
+                    else:
+                        result = await exec_session.execute(single_stmt)
+                        if result.rowcount > 0:  # noqa
+                            success_count += 1
+                except Exception:  # noqa
+                    # Silently ignore errors
+                    pass
 
         elif error_handling == ErrorHandling.COLLECT:
             # Process individually to collect detailed errors
@@ -478,7 +521,15 @@ class BulkOperationHandler:
         """Handle UPDATE operations without RETURNING support."""
         # Execute update first
         result = await session.execute(stmt, data_batch)
-        success_count = result.rowcount or 0
+        success_count = result.rowcount
+
+        # If rowcount is -1 (unknown), execute individually to get accurate count
+        if success_count < 0:  # noqa
+            success_count = 0
+            for data in data_batch:
+                individual_result = await session.execute(stmt, [data])
+                if individual_result.rowcount > 0:  # noqa
+                    success_count += individual_result.rowcount
 
         # If successful, create objects with merged data
         if success_count > 0:
@@ -504,7 +555,7 @@ class BulkOperationHandler:
                 current_return_fields = getattr(self, "_current_return_fields", None)
                 if current_return_fields:
                     # Return only requested fields as dict
-                    filtered_dict = {field: obj_data.get(field) for field in current_return_fields}
+                    filtered_dict = {f: obj_data.get(f) for f in current_return_fields}
                     successful_objects.append(filtered_dict)
                 else:
                     # Return full model object
@@ -584,15 +635,63 @@ async def bulk_create(
     session = manager._get_session(readonly=False)  # noqa
     handler = BulkOperationHandler(session, manager._table, manager._model_class, transaction_mode)  # noqa
 
-    stmt = insert(manager._table)  # noqa
+    # Process data to exclude non-insertable fields
+    processed_objects = []
+    for obj_data in objects:
+        processed_item = {}
+        for key, value in obj_data.items():
+            if hasattr(manager._model_class, key):  # noqa
+                # Create a temporary instance to use the _should_exclude_from_insert method
+                temp_instance = manager._model_class()  # noqa
+                if not temp_instance._should_exclude_from_insert(key, value):  # noqa
+                    processed_item[key] = value
+            else:
+                # If field doesn't exist on model, include it (let database handle the error)
+                processed_item[key] = value
+        processed_objects.append(processed_item)
+
     return_columns = handler.get_return_columns(return_fields) if return_objects else None
 
     async def operation_func(session_, batch_data):
-        # Store return_fields in handler for use in create_objects_from_rows
-        handler._current_return_fields = return_fields
-        return await handler.execute_with_error_handling(
-            stmt, "insert", batch_data, on_error, on_conflict, conflict_fields, return_columns, session_
-        )
+        # Use unified UPSERT handler for conflict resolution
+        if on_conflict != ConflictResolution.ERROR:
+            upsert_handler = UpsertHandler(session_)
+            upsert_conflict = (
+                UpsertConflictResolution.IGNORE
+                if on_conflict == ConflictResolution.IGNORE
+                else UpsertConflictResolution.UPDATE
+            )
+
+            # Store return_fields in handler for use in create_objects_from_rows
+            handler._current_return_fields = return_fields
+
+            # Execute UPSERT with returning
+            batch_results = await upsert_handler.execute_upsert_with_returning(
+                manager._table,
+                batch_data,
+                upsert_conflict,
+                conflict_fields,  # noqa
+            )
+
+            # Convert results to model instances only if return_objects is True
+            operator_successful_objects = []
+            if return_objects:
+                for result_data in batch_results:
+                    if return_fields:
+                        filtered_dict = {f: result_data.get(f) for f in return_fields}
+                        operator_successful_objects.append(filtered_dict)
+                    else:
+                        instance = manager._model_class.from_dict(result_data)  # noqa
+                        operator_successful_objects.append(instance)
+
+            return operator_successful_objects, len(batch_results), []
+        else:
+            # Regular insert without conflict resolution
+            stmt = insert(manager._table)  # noqa
+            handler._current_return_fields = return_fields
+            return await handler.execute_with_error_handling(
+                stmt, "insert", batch_data, on_error, on_conflict, conflict_fields, return_columns, session_
+            )
 
     (
         successful_objects,
@@ -601,13 +700,13 @@ async def bulk_create(
         batch_count,
         failed_batches,
         rollback_count,
-    ) = await handler.execute_bulk_operation(objects, batch_size, operation_func, transaction_mode, on_error)
+    ) = await handler.execute_bulk_operation(processed_objects, batch_size, operation_func, transaction_mode, on_error)
 
     return handler.build_result(
         successful_objects,
         total_success_count,
         failed_records,
-        len(objects),
+        len(processed_objects),
         transaction_mode,
         batch_count,
         failed_batches,
@@ -628,6 +727,7 @@ async def bulk_update(
     on_error: ErrorHandling = ErrorHandling.FAIL_FAST,
     on_conflict: ConflictResolution = ConflictResolution.ERROR,
     conflict_fields: list[str] | None = None,
+    accurate_count: bool = True,
 ) -> int | list | BulkResult:
     """Perform true bulk update operations for better performance.
 
@@ -642,6 +742,9 @@ async def bulk_update(
         on_error: Error handling strategy
         on_conflict: Conflict resolution strategy
         conflict_fields: Fields to check for conflicts
+        accurate_count: Whether to return accurate update count (default: True)
+            - True: Guarantees accurate count (PostgreSQL uses individual execution, slower)
+            - False: Prioritizes performance, may return approximate count (PostgreSQL ~20x faster)
 
     Returns:
         - int: Number of updated records (default, backward compatible)
@@ -664,39 +767,69 @@ async def bulk_update(
     session = manager._get_session(readonly=False)  # noqa
     handler = BulkOperationHandler(session, manager._table, manager._model_class, transaction_mode)  # noqa
 
-    # Build base statement with conflict resolution
+    # Fast path: use executemany for all databases when accurate_count=False
+    if not accurate_count:
+        return await _bulk_update_fast(manager, mappings, match_fields, batch_size, session)
+
+    # Build base statement
     where_conditions = [manager._table.c[field] == bindparam(f"match::{field}") for field in match_fields]  # noqa
     stmt = update(manager._table).where(*where_conditions)  # noqa
 
-    # Apply conflict resolution if specified
-    if on_conflict != ConflictResolution.ERROR:
-        stmt = handler.native_handler.modify_statement(stmt, on_conflict, conflict_fields)
-
     async def operation_func(session_, batch_data):
-        # Add update values
-        update_values = {key: bindparam(f"update::{key}") for key in batch_data[0].keys() if key not in match_fields}
-        if not update_values:
-            return [], 0, []
+        # Use unified UPSERT handler for bulk update with conflict resolution
+        if on_conflict != ConflictResolution.ERROR:
+            upsert_handler = UpsertHandler(session_)
+            upsert_conflict = UpsertConflictResolution.UPDATE
 
-        batch_stmt = stmt.values(**update_values)
+            # Store return_fields in handler for use in create_objects_from_rows
+            handler._current_return_fields = return_fields
 
-        # Prepare parameter mappings
-        param_mappings = []
-        for mapping in batch_data:
-            param_dict = {}
-            for f in match_fields:
-                param_dict[f"match::{f}"] = mapping[f]
-            for key, value in mapping.items():
-                if key not in match_fields:
-                    param_dict[f"update::{key}"] = value
-            param_mappings.append(param_dict)
+            # Execute UPSERT with returning
+            batch_results = await upsert_handler.execute_upsert_with_returning(
+                manager._table,
+                batch_data,
+                upsert_conflict,
+                match_fields,  # noqa
+            )
 
-        return_columns = handler.get_return_columns(return_fields) if return_objects else None
-        # Store return_fields in handler for use in create_objects_from_rows
-        handler._current_return_fields = return_fields
-        return await handler.execute_with_error_handling(
-            batch_stmt, "update", param_mappings, on_error, on_conflict, conflict_fields, return_columns, session_
-        )
+            # Convert results to model instances only if return_objects is True
+            oper_successful_objects = []
+            if return_objects:
+                for result_data in batch_results:
+                    if return_fields:
+                        filtered_dict = {field: result_data.get(field) for field in return_fields}
+                        oper_successful_objects.append(filtered_dict)
+                    else:
+                        instance = manager._model_class.from_dict(result_data)  # noqa
+                        oper_successful_objects.append(instance)
+
+            return oper_successful_objects, len(batch_results), []
+        else:
+            # Regular update without conflict resolution
+            update_values = {
+                key: bindparam(f"update::{key}") for key in batch_data[0].keys() if key not in match_fields
+            }
+            if not update_values:
+                return [], 0, []
+
+            batch_stmt = stmt.values(**update_values)
+
+            # Prepare parameter mappings
+            param_mappings = []
+            for mapping in batch_data:
+                param_dict = {}
+                for f in match_fields:
+                    param_dict[f"match::{f}"] = mapping[f]
+                for key, value in mapping.items():
+                    if key not in match_fields:
+                        param_dict[f"update::{key}"] = value
+                param_mappings.append(param_dict)
+
+            return_columns = handler.get_return_columns(return_fields) if return_objects else None
+            handler._current_return_fields = return_fields
+            return await handler.execute_with_error_handling(
+                batch_stmt, "update", param_mappings, on_error, on_conflict, conflict_fields, return_columns, session_
+            )
 
     (
         successful_objects,
@@ -762,30 +895,55 @@ async def bulk_delete(
     handler = BulkOperationHandler(session, manager._table, manager._model_class, transaction_mode)  # noqa
 
     async def operation_func(session_, batch_ids):
-        field_column = manager._table.c[id_field]  # noqa
+        # Get instances to be deleted for cascade processing
+        table = manager._table  # noqa
+        instances_to_delete = []
+
+        field_column = table.c[id_field]
         in_condition = field_column.in_(batch_ids)
 
         # Handle FunctionExpression by resolving to SQLAlchemy expression
         if hasattr(in_condition, "resolve"):
-            in_condition = in_condition.resolve(manager._table)  # noqa
+            in_condition = in_condition.resolve(table)
 
-        stmt = delete(manager._table).where(in_condition)  # noqa
-        return_columns = handler.get_return_columns(return_fields) if return_objects else None
+        select_stmt = select(table).where(in_condition)
+        result = await session_.execute(select_stmt)
 
-        if return_objects and not handler.supports_returning("delete"):
-            # Fallback: select before delete
-            # Store return_fields in handler for use in create_objects_from_rows
-            handler._current_return_fields = return_fields
-            objects_batch = await handler.handle_select_fallback(in_condition, return_columns, session_)
-            result = await session_.execute(stmt)
-            return objects_batch, result.rowcount or 0, []
-        else:
-            # Store return_fields in handler for use in create_objects_from_rows
-            handler._current_return_fields = return_fields
-            objects, rowcount, _ = await handler.execute_with_returning(
-                stmt, "delete", return_columns, None, session_, return_fields
-            )
-            return objects, rowcount, []
+        for row in result.fetchall():
+            instance = manager._model_class.from_dict(dict(row._mapping))  # noqa
+            instances_to_delete.append(instance)
+
+        # Handle deletion with foreign key constraint handling
+        total_deleted = 0
+        objects_batch = []
+
+        for instance in instances_to_delete:
+            # Collect object data before deletion if needed
+            if return_objects:
+                if return_fields:
+                    filtered_dict = {f: getattr(instance, f, None) for f in return_fields}
+                    objects_batch.append(filtered_dict)
+                else:
+                    objects_batch.append(instance)
+
+            try:
+                # Try direct deletion first
+                await instance._delete_internal(session=session_)  # noqa
+                total_deleted += 1
+            except Exception as e:
+                # If foreign key constraint error, try to handle related records
+                error_str = str(e).lower()
+                if "foreign key" in error_str or "constraint" in error_str:
+                    # For PostgreSQL foreign key errors, try to delete related records first
+                    await _handle_foreign_key_constraint_error(instance, session_)
+                    # Try deletion again
+                    await instance._delete_internal(session=session_)  # noqa
+                    total_deleted += 1
+                else:
+                    # Re-raise non-foreign key errors
+                    raise
+
+        return objects_batch, total_deleted, []
 
     (
         successful_objects,
@@ -806,4 +964,81 @@ async def bulk_delete(
         failed_batches,
         rollback_count,
         return_objects,
+    )
+
+
+async def _bulk_update_fast(
+    manager, mappings: list[dict[str, Any]], match_fields: list[str], batch_size: int, session: AsyncSession
+) -> int:
+    """Fast bulk update using executemany (may return approximate count for PostgreSQL)."""
+    if not mappings:
+        return 0
+
+    # Build UPDATE statement
+    where_conditions = [manager._table.c[f] == bindparam(f"match::{f}") for f in match_fields]  # noqa
+    stmt = update(manager._table).where(*where_conditions)  # noqa
+
+    # Get update fields (exclude match fields)
+    update_values = {key: bindparam(f"update::{key}") for key in mappings[0].keys() if key not in match_fields}
+    if not update_values:
+        return 0
+
+    stmt = stmt.values(**update_values)
+
+    # Process in batches
+    total = 0
+    for i in range(0, len(mappings), batch_size):
+        batch = mappings[i : i + batch_size]
+
+        # Prepare parameter mappings
+        param_mappings = []
+        for mapping in batch:
+            param_dict = {}
+            for f in match_fields:
+                param_dict[f"match::{f}"] = mapping[f]
+            for key, value in mapping.items():
+                if key not in match_fields:
+                    param_dict[f"update::{key}"] = value
+            param_mappings.append(param_dict)
+
+        # Execute with executemany
+        result = await session.execute(stmt, param_mappings)
+        # PostgreSQL returns -1, use batch length as approximation
+        count = result.rowcount if result.rowcount >= 0 else len(batch)  # noqa
+        total += count
+
+    return total
+
+
+async def _handle_foreign_key_constraint_error(instance, session):
+    """Handle foreign key constraint errors.
+
+    This function is called when a foreign key constraint prevents deletion.
+    Currently raises a clear error message. Future versions may support
+    automatic cascade deletion based on relationship metadata.
+
+    Args:
+        instance: Model instance that failed to delete
+        session: Database session
+
+    Raises:
+        DatabaseError: Always raises with helpful error message
+    """
+    from ..exceptions import DatabaseError
+
+    model_name = instance.__class__.__name__
+
+    # Get primary key field(s) from table metadata
+    pk_columns = list(instance.__table__.primary_key.columns)
+    if pk_columns:
+        pk_values = {col.name: getattr(instance, col.name, None) for col in pk_columns}
+        pk_str = ", ".join(f"{k}={v}" for k, v in pk_values.items())
+    else:
+        pk_str = "unknown"
+
+    raise DatabaseError(
+        f"Cannot delete {model_name} ({pk_str}) due to foreign key constraint. "
+        f"Other records reference this {model_name}. "
+        f"Please delete or update the referencing records first, "
+        f"or configure cascade deletion in your model relationships."
     )
