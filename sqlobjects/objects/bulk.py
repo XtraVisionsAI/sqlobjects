@@ -667,7 +667,7 @@ async def bulk_create(
 
             # Execute UPSERT with returning
             batch_results = await upsert_handler.execute_upsert_with_returning(
-                manager._table,
+                manager._table,  # noqa
                 batch_data,
                 upsert_conflict,
                 conflict_fields,  # noqa
@@ -786,7 +786,7 @@ async def bulk_update(
 
             # Execute UPSERT with returning
             batch_results = await upsert_handler.execute_upsert_with_returning(
-                manager._table,
+                manager._table,  # noqa
                 batch_data,
                 upsert_conflict,
                 match_fields,  # noqa
@@ -895,55 +895,58 @@ async def bulk_delete(
     handler = BulkOperationHandler(session, manager._table, manager._model_class, transaction_mode)  # noqa
 
     async def operation_func(session_, batch_ids):
-        # Get instances to be deleted for cascade processing
-        table = manager._table  # noqa
-        instances_to_delete = []
+        from sqlalchemy import delete
 
-        field_column = table.c[id_field]
+        # Check if model has cascade delete relationships
+        has_cascade = _has_cascade_delete_relations(manager._model_class)  # noqa
+
+        # Fetch instances if needed for return_objects or cascade processing
+        instances = []
+        if return_objects or has_cascade:
+            field_column = manager._table.c[id_field]  # noqa
+            in_condition = field_column.in_(batch_ids)
+
+            # Handle FunctionExpression by resolving to SQLAlchemy expression
+            if hasattr(in_condition, "resolve"):
+                in_condition = in_condition.resolve(manager._table)  # noqa
+
+            select_stmt = select(manager._table).where(in_condition)  # noqa
+            result = await session_.execute(select_stmt)
+
+            for row in result.fetchall():
+                instance = manager._model_class.from_dict(dict(row._mapping))  # noqa
+                instances.append(instance)
+
+        # Process cascade deletion if needed
+        if has_cascade:
+            from ..cascade import CascadeExecutor
+
+            handler._current_return_fields = return_fields
+            cascade_executor = CascadeExecutor()
+            for instance in instances:
+                await cascade_executor._delete_related_objects(instance, session_)  # noqa
+
+        # Execute batch delete with single SQL statement
+        field_column = manager._table.c[id_field]  # noqa
         in_condition = field_column.in_(batch_ids)
 
-        # Handle FunctionExpression by resolving to SQLAlchemy expression
         if hasattr(in_condition, "resolve"):
-            in_condition = in_condition.resolve(table)
+            in_condition = in_condition.resolve(manager._table)  # noqa
 
-        select_stmt = select(table).where(in_condition)
-        result = await session_.execute(select_stmt)
+        stmt = delete(manager._table).where(in_condition)  # noqa
+        result = await session_.execute(stmt)
 
-        for row in result.fetchall():
-            instance = manager._model_class.from_dict(dict(row._mapping))  # noqa
-            instances_to_delete.append(instance)
-
-        # Handle deletion with foreign key constraint handling
-        total_deleted = 0
+        # Build return objects if requested
         objects_batch = []
-
-        for instance in instances_to_delete:
-            # Collect object data before deletion if needed
-            if return_objects:
+        if return_objects:
+            for instance in instances:
                 if return_fields:
                     filtered_dict = {f: getattr(instance, f, None) for f in return_fields}
                     objects_batch.append(filtered_dict)
                 else:
                     objects_batch.append(instance)
 
-            try:
-                # Try direct deletion first
-                await instance._delete_internal(session=session_)  # noqa
-                total_deleted += 1
-            except Exception as e:
-                # If foreign key constraint error, try to handle related records
-                error_str = str(e).lower()
-                if "foreign key" in error_str or "constraint" in error_str:
-                    # For PostgreSQL foreign key errors, try to delete related records first
-                    await _handle_foreign_key_constraint_error(instance, session_)
-                    # Try deletion again
-                    await instance._delete_internal(session=session_)  # noqa
-                    total_deleted += 1
-                else:
-                    # Re-raise non-foreign key errors
-                    raise
-
-        return objects_batch, total_deleted, []
+        return objects_batch, result.rowcount, []
 
     (
         successful_objects,
@@ -1010,35 +1013,20 @@ async def _bulk_update_fast(
     return total
 
 
-async def _handle_foreign_key_constraint_error(instance, session):
-    """Handle foreign key constraint errors.
-
-    This function is called when a foreign key constraint prevents deletion.
-    Currently raises a clear error message. Future versions may support
-    automatic cascade deletion based on relationship metadata.
+def _has_cascade_delete_relations(model_class) -> bool:
+    """Check if model has cascade delete relationships.
 
     Args:
-        instance: Model instance that failed to delete
-        session: Database session
+        model_class: Model class to check
 
-    Raises:
-        DatabaseError: Always raises with helpful error message
+    Returns:
+        True if model has cascade delete relationships, False otherwise
     """
-    from ..exceptions import DatabaseError
-
-    model_name = instance.__class__.__name__
-
-    # Get primary key field(s) from table metadata
-    pk_columns = list(instance.__table__.primary_key.columns)
-    if pk_columns:
-        pk_values = {col.name: getattr(instance, col.name, None) for col in pk_columns}
-        pk_str = ", ".join(f"{k}={v}" for k, v in pk_values.items())
-    else:
-        pk_str = "unknown"
-
-    raise DatabaseError(
-        f"Cannot delete {model_name} ({pk_str}) due to foreign key constraint. "
-        f"Other records reference this {model_name}. "
-        f"Please delete or update the referencing records first, "
-        f"or configure cascade deletion in your model relationships."
-    )
+    relationships = getattr(model_class, "_relationships", {})
+    for rel_descriptor in relationships.values():
+        if not (hasattr(rel_descriptor, "property") and hasattr(rel_descriptor.property, "cascade")):
+            continue
+        cascade_str = rel_descriptor.property.cascade or ""
+        if "delete" in cascade_str or "all" in cascade_str:
+            return True
+    return False

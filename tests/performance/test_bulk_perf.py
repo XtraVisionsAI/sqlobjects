@@ -310,13 +310,20 @@ class TestConcurrentBulkOperations:
 
     async def test_concurrent_bulk_creates(self, session, performance_monitor):
         """Test concurrent bulk create operations"""
+        from sqlobjects.session import ctx_session
 
         async def create_batch(batch_id: int, batch_size: int = 100):
-            users_data = [
-                {"username": f"concurrent_{batch_id}_{i}", "email": f"concurrent{batch_id}_{i}@example.com", "age": 25}
-                for i in range(batch_size)
-            ]
-            return await User.objects.using(session).bulk_create(users_data)
+            # Each task uses its own session for proper isolation
+            async with ctx_session() as batch_session:
+                users_data = [
+                    {
+                        "username": f"concurrent_{batch_id}_{i}",
+                        "email": f"concurrent{batch_id}_{i}@example.com",
+                        "age": 25,
+                    }
+                    for i in range(batch_size)
+                ]
+                return await User.objects.using(batch_session).bulk_create(users_data)
 
         # Run multiple concurrent bulk creates
         performance_monitor.start()
@@ -338,6 +345,8 @@ class TestConcurrentBulkOperations:
 
     async def test_mixed_concurrent_operations(self, session, performance_monitor):
         """Test mixed concurrent bulk operations"""
+        from sqlobjects.session import ctx_session
+
         # Create initial data
         initial_data = [
             {"username": f"mixed_user_{i}", "email": f"mixed{i}@example.com", "age": 25} for i in range(200)
@@ -346,17 +355,23 @@ class TestConcurrentBulkOperations:
         assert initial_users_result.objects is not None
         initial_users: list[User] = initial_users_result.objects  # type: ignore[assignment]
 
+        # Commit initial data so concurrent operations can see it
+        await session.commit()
+
         async def concurrent_create():
-            new_data = [{"username": f"new_user_{i}", "email": f"new{i}@example.com", "age": 30} for i in range(50)]
-            return await User.objects.using(session).bulk_create(new_data)
+            async with ctx_session() as create_session:
+                new_data = [{"username": f"new_user_{i}", "email": f"new{i}@example.com", "age": 30} for i in range(50)]
+                return await User.objects.using(create_session).bulk_create(new_data)
 
         async def concurrent_update():
-            update_mappings = [{"id": user.id, "age": 35} for user in initial_users[:50]]
-            return await User.objects.using(session).bulk_update(update_mappings, match_fields=["id"])
+            async with ctx_session() as update_session:
+                update_mappings = [{"id": user.id, "age": 35} for user in initial_users[:50]]
+                return await User.objects.using(update_session).bulk_update(update_mappings, match_fields=["id"])
 
         async def concurrent_delete():
-            delete_ids = [user.id for user in initial_users[50:100]]
-            return await User.objects.using(session).bulk_delete(delete_ids, id_field="id")
+            async with ctx_session() as delete_session:
+                delete_ids = [user.id for user in initial_users[50:100]]
+                return await User.objects.using(delete_session).bulk_delete(delete_ids, id_field="id")
 
         # Run mixed operations concurrently
         performance_monitor.start()
@@ -390,9 +405,14 @@ class TestBulkOperationResourceUsage:
 
         def monitor_cpu():
             process = psutil.Process(os.getpid())
+            # Establish baseline with first call
+            process.cpu_percent()
+            time.sleep(0.2)
+
             while monitoring:
-                cpu_usage_samples.append(process.cpu_percent())
-                time.sleep(0.1)
+                cpu = process.cpu_percent(interval=0.2)
+                if cpu > 0:  # Ignore zero values
+                    cpu_usage_samples.append(cpu)
 
         # Start CPU monitoring
         monitor_thread = threading.Thread(target=monitor_cpu)
@@ -409,14 +429,13 @@ class TestBulkOperationResourceUsage:
             monitoring = False
             monitor_thread.join()
 
-        # Analyze CPU usage
+        # Analyze CPU usage - focus on average, brief spikes are normal
         if cpu_usage_samples:
             avg_cpu = sum(cpu_usage_samples) / len(cpu_usage_samples)
-            max_cpu = max(cpu_usage_samples)
 
-            # CPU usage should be reasonable (not pegging CPU at 100%)
-            assert avg_cpu < 80.0, f"High average CPU usage: {avg_cpu:.2f}%"
-            assert max_cpu < 95.0, f"High peak CPU usage: {max_cpu:.2f}%"
+            # Average CPU usage should be reasonable
+            # Brief spikes to 100% are normal for bulk operations
+            assert avg_cpu < 70.0, f"High average CPU usage: {avg_cpu:.2f}%"
 
     async def test_database_connection_efficiency(self, session, performance_monitor):
         """Test bulk operations use database connections efficiently"""

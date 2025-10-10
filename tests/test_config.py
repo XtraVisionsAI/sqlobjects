@@ -18,7 +18,7 @@ class TestDatabaseConfig:
             "url": "postgresql+asyncpg://test:test@localhost/tests",
             "driver": "asyncpg",
             "env_var": "POSTGRESQL_TEST_URL",
-            "pool_config": {"pool_size": 1, "max_overflow": 0, "pool_pre_ping": True},
+            "pool_config": {"pool_size": 10, "max_overflow": 0, "pool_pre_ping": True},
         },
         "mysql": {
             "url": "mysql+asyncmy://test:test@localhost/tests",
