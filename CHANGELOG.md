@@ -1,3 +1,21 @@
+## 1.0.7 (2025-10-14)
+
+### Feat
+
+- add upsert support for PostgreSQL
+
+### Fix
+
+- identity support for PostgreSQL
+
+### Refactor
+
+- consolidate bulk and queryset logic
+
+### Perf
+
+- improve bulk delete performance
+
 ## 1.0.6 (2025-10-08)
 
 ### Feat
