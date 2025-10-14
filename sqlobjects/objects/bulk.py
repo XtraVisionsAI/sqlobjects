@@ -10,12 +10,28 @@ from typing import Any, Callable, Generic, TypeVar
 
 from sqlalchemy import bindparam, insert, select, update
 
+from ..cascade import has_cascade_delete_relations
+from ..internal import ResultProcessor
 from ..session import AsyncSession, ctx_session
 from .upsert import ConflictResolution as UpsertConflictResolution
 from .upsert import UpsertHandler
 
 
 T = TypeVar("T")
+
+
+def _get_error_code(exception: Exception) -> str:
+    """Extract error code from database exception."""
+    error_str = str(exception).lower()
+    if "unique" in error_str or "duplicate" in error_str:
+        return "unique_violation"
+    elif "not null" in error_str:
+        return "not_null_violation"
+    elif "foreign key" in error_str:
+        return "foreign_key_violation"
+    elif "check constraint" in error_str:
+        return "check_violation"
+    return "unknown_error"
 
 
 class TransactionMode(Enum):
@@ -129,69 +145,6 @@ class BulkTransactionManager:
             return await operation_func(self.session, batch_data)
 
 
-class DatabaseNativeHandler:
-    """Handles database-specific conflict resolution."""
-
-    def __init__(self, dialect_name: str):
-        self.dialect_name = dialect_name
-
-    def get_conflict_clause(
-        self, conflict_resolution: ConflictResolution, conflict_fields: list[str] | None = None
-    ) -> str | None:
-        """Get database-specific conflict resolution clause."""
-        if self.dialect_name == "postgresql":
-            if conflict_resolution == ConflictResolution.IGNORE:
-                fields = f"({', '.join(conflict_fields)})" if conflict_fields else ""
-                return f"ON CONFLICT {fields} DO NOTHING"
-            elif conflict_resolution == ConflictResolution.UPDATE and conflict_fields:
-                updates = ", ".join(f"{f} = EXCLUDED.{f}" for f in conflict_fields)
-                return f"ON CONFLICT ({', '.join(conflict_fields)}) DO UPDATE SET {updates}"
-        elif self.dialect_name == "mysql":
-            if conflict_resolution == ConflictResolution.IGNORE:
-                return "INSERT IGNORE"
-            elif conflict_resolution == ConflictResolution.UPDATE:
-                return "INSERT ... ON DUPLICATE KEY UPDATE"
-        elif self.dialect_name == "sqlite":
-            if conflict_resolution == ConflictResolution.IGNORE:
-                return "INSERT OR IGNORE"
-            elif conflict_resolution == ConflictResolution.UPDATE:
-                return "INSERT OR REPLACE"
-        return None
-
-    def modify_statement(self, stmt, conflict_resolution: ConflictResolution, conflict_fields: list[str] | None = None):
-        """Modify SQL statement for conflict resolution."""
-        if conflict_resolution == ConflictResolution.IGNORE:
-            if self.dialect_name == "postgresql" and hasattr(stmt, "on_conflict_do_nothing"):
-                if conflict_fields:
-                    return stmt.on_conflict_do_nothing(index_elements=conflict_fields)
-                return stmt.on_conflict_do_nothing()
-            elif self.dialect_name == "sqlite":
-                # For SQLite, use INSERT OR IGNORE
-                return stmt.prefix_with("OR IGNORE")
-            elif self.dialect_name == "mysql":
-                # For MySQL, use INSERT IGNORE
-                return stmt.prefix_with("IGNORE")
-        elif conflict_resolution == ConflictResolution.UPDATE:
-            if self.dialect_name == "sqlite":
-                # For SQLite, use INSERT OR REPLACE
-                return stmt.prefix_with("OR REPLACE")
-        return stmt
-
-    @staticmethod
-    def get_error_code(exception: Exception) -> str:
-        """Extract error code from database exception."""
-        error_str = str(exception).lower()
-        if "unique" in error_str or "duplicate" in error_str:
-            return "unique_violation"
-        elif "not null" in error_str:
-            return "not_null_violation"
-        elif "foreign key" in error_str:
-            return "foreign_key_violation"
-        elif "check constraint" in error_str:
-            return "check_violation"
-        return "unknown_error"
-
-
 class BulkOperationHandler:
     """Unified handler for bulk operations with SQLAlchemy native capabilities."""
 
@@ -200,7 +153,6 @@ class BulkOperationHandler:
         self.table = table
         self.model_class = model_class
         self.dialect = session.bind.dialect
-        self.native_handler = DatabaseNativeHandler(self.dialect.name)
         self.transaction_manager = BulkTransactionManager(session, transaction_mode)
         self._current_return_fields: list[str] | None = None
 
@@ -300,19 +252,8 @@ class BulkOperationHandler:
         return list(self.table.c)
 
     def create_objects_from_rows(self, rows, return_fields: list[str] | None = None) -> list:
-        """Create model objects or dictionaries from database rows."""
-        objects = []
-        for row in rows:
-            row_dict = dict(row._mapping)  # noqa
-            if return_fields:
-                # When return_fields is specified, return dict with only requested fields
-                filtered_dict = {f: row_dict.get(f) for f in return_fields}
-                objects.append(filtered_dict)
-            else:
-                # When return_fields is None, return full model objects
-                obj = self.model_class.from_dict(row_dict, validate=False)
-                objects.append(obj)
-        return objects
+        """Create model objects or dictionaries from database rows using ResultProcessor."""
+        return ResultProcessor.rows_to_objects(rows, self.model_class, return_fields)
 
     async def execute_with_returning(
         self,
@@ -381,9 +322,6 @@ class BulkOperationHandler:
             # For INSERT operations, replace the statement with UPSERT
             if operation == "insert":
                 stmt = upsert_handler.get_upsert_statement(self.table, data_batch, upsert_conflict, conflict_fields)
-            else:
-                # For other operations, keep original logic
-                stmt = self.native_handler.modify_statement(stmt, conflict_resolution, conflict_fields)
 
         successful_objects = []
         failed_records = []
@@ -433,7 +371,7 @@ class BulkOperationHandler:
                         if result.rowcount > 0:  # noqa
                             success_count += 1
                 except Exception as e:
-                    failed_records.append(FailedRecord(i, data, e, self.native_handler.get_error_code(e)))
+                    failed_records.append(FailedRecord(i, data, e, _get_error_code(e)))
 
         return successful_objects, success_count, failed_records
 
@@ -898,7 +836,7 @@ async def bulk_delete(
         from sqlalchemy import delete
 
         # Check if model has cascade delete relationships
-        has_cascade = _has_cascade_delete_relations(manager._model_class)  # noqa
+        has_cascade = has_cascade_delete_relations(manager._model_class)
 
         # Fetch instances if needed for return_objects or cascade processing
         instances = []
@@ -1011,22 +949,3 @@ async def _bulk_update_fast(
         total += count
 
     return total
-
-
-def _has_cascade_delete_relations(model_class) -> bool:
-    """Check if model has cascade delete relationships.
-
-    Args:
-        model_class: Model class to check
-
-    Returns:
-        True if model has cascade delete relationships, False otherwise
-    """
-    relationships = getattr(model_class, "_relationships", {})
-    for rel_descriptor in relationships.values():
-        if not (hasattr(rel_descriptor, "property") and hasattr(rel_descriptor.property, "cascade")):
-            continue
-        cascade_str = rel_descriptor.property.cascade or ""
-        if "delete" in cascade_str or "all" in cascade_str:
-            return True
-    return False

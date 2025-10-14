@@ -1,9 +1,10 @@
 from typing import TypeVar
 
-from sqlalchemy import and_, delete, insert, select, update
+from sqlalchemy import and_, insert, select, update
 
 from .cascade import CascadeExecutor
 from .exceptions import PrimaryKeyError
+from .internal import SQLOperations
 from .metadata import ModelProcessor
 from .mixins import FieldCacheMixin
 from .signals import Operation, SignalMixin, emit_signals
@@ -155,34 +156,6 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
             if i < len(pk_values):
                 setattr(self, col.name, pk_values[i])
 
-    def _get_upsert_statement(self, table, data):
-        """Construct UPSERT statement based on database dialect."""
-        dialect = self.get_session().bind.dialect.name
-
-        pk_columns = list(table.primary_key.columns)
-
-        if dialect == "postgresql":
-            from sqlalchemy.dialects.postgresql import insert
-
-            stmt = insert(table).values(**data)
-            return stmt.on_conflict_do_update(index_elements=pk_columns, set_=data)
-
-        elif dialect == "mysql":
-            from sqlalchemy.dialects.mysql import insert
-
-            stmt = insert(table).values(**data)
-            return stmt.on_duplicate_key_update(**data)
-
-        elif dialect == "sqlite":
-            from sqlalchemy.dialects.sqlite import insert
-
-            stmt = insert(table).values(**data)
-            return stmt.on_conflict_do_update(index_elements=pk_columns, set_=data)
-
-        else:
-            # Return None for unsupported dialects to trigger fallback
-            return None
-
     async def _save_internal(self, validate: bool = True, session=None):
         """Internal save operation using UPSERT with fallback to query-then-save.
 
@@ -210,18 +183,29 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
 
         data = self._get_all_data()
 
-        # Try UPSERT for supported databases
-        upsert_stmt = self._get_upsert_statement(table, data)
-        if upsert_stmt is not None:
-            try:
-                result = await session.execute(upsert_stmt)
-                if result.inserted_primary_key:
-                    self._set_primary_key_values(result.inserted_primary_key)
-                # Clear dirty fields after successful save
-                self._state_manager.clear_dirty_fields()
-                return self
-            except Exception as e:
-                raise PrimaryKeyError(f"Upsert operation failed: {e}") from e
+        # Try UPSERT using UpsertHandler
+        try:
+            from .objects.upsert import ConflictResolution, UpsertHandler
+
+            handler = UpsertHandler(session)
+            pk_columns = [col.name for col in table.primary_key.columns]
+
+            stmt = handler.get_upsert_statement(
+                table=table,
+                values=[data],
+                conflict_resolution=ConflictResolution.UPDATE,
+                match_fields=pk_columns,
+            )
+
+            result = await session.execute(stmt)
+            if result.inserted_primary_key:
+                self._set_primary_key_values(result.inserted_primary_key)
+            self._state_manager.clear_dirty_fields()
+            return self
+
+        except (ValueError, Exception):
+            # Fallback for unsupported databases or UPSERT failures
+            pass
 
         # Fallback: query database to determine INSERT or UPDATE
         try:
@@ -308,17 +292,34 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         await self._delete_internal(session=session)
 
     async def _delete_internal(self, session=None):
-        """Internal delete operation without cascade handling."""
+        """Internal delete operation without signals or cascade handling.
+
+        Used by Bulk operations to delete individual records without triggering
+        instance-level signals.
+        """
         if session is None:
             session = self.get_session()
 
         table = self.get_table()
-        try:
-            pk_conditions = self._build_pk_conditions()
-            stmt = delete(table).where(and_(*pk_conditions))
-            await session.execute(stmt)
-        except Exception as e:
-            raise PrimaryKeyError(f"Delete operation failed: {e}") from e
+        pk_conditions = self._build_pk_conditions()
+        await SQLOperations.execute_delete(session, table, pk_conditions)
+
+    async def _update_internal(self, update_data: dict, session=None):
+        """Internal update operation without signals or cascade handling.
+
+        Used by Bulk operations to update individual records without triggering
+        instance-level signals.
+
+        Args:
+            update_data: Dictionary of field names to values to update
+            session: Database session to use
+        """
+        if session is None:
+            session = self.get_session()
+
+        table = self.get_table()
+        pk_conditions = self._build_pk_conditions()
+        await SQLOperations.execute_update(session, table, pk_conditions, update_data)
 
     async def refresh(self, fields: list[str] | None = None, include_deferred: bool = True):
         """Refresh this instance with the latest data from the database.

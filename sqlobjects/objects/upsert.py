@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, Any
 
 import sqlalchemy as sa
 
+from ..queries.dialect import DialectHandler
+
 
 if TYPE_CHECKING:
     from ..session import AsyncSession
@@ -25,7 +27,7 @@ class UpsertHandler:
 
     def __init__(self, session: "AsyncSession"):
         self.session = session
-        self.dialect_name = session.bind.dialect.name
+        self.dialect = DialectHandler.create(session)
 
     def get_upsert_statement(
         self,
@@ -35,92 +37,23 @@ class UpsertHandler:
         match_fields: list[str] | None = None,
     ) -> sa.sql.Insert:
         """Generate database-specific UPSERT statement."""
-        if self.dialect_name == "postgresql":
-            from sqlalchemy.dialects.postgresql import insert as pg_insert
+        if not values:
+            return sa.insert(table)
 
-            insert_stmt = pg_insert(table).values(values)
-            return self._get_postgresql_upsert(insert_stmt, table, conflict_resolution, match_fields)
-        elif self.dialect_name == "mysql":
-            insert_stmt = sa.insert(table).values(values)
-            return self._get_mysql_upsert(insert_stmt, conflict_resolution)
-        elif self.dialect_name == "sqlite":
-            return self._get_sqlite_upsert(table, values, conflict_resolution, match_fields)
+        # Determine update fields based on conflict resolution
+        if conflict_resolution == ConflictResolution.UPDATE:
+            all_fields = list(values[0].keys())
+            update_fields = [f for f in all_fields if f not in (match_fields or [])]
         else:
-            return sa.insert(table).values(values)
+            update_fields = []
 
-    @staticmethod
-    def _get_postgresql_upsert(
-        insert_stmt: sa.sql.Insert, table: sa.Table, conflict_resolution: str, match_fields: list[str] | None
-    ) -> sa.sql.Insert:
-        """Generate PostgreSQL ON CONFLICT statement."""
-        if conflict_resolution == ConflictResolution.IGNORE:
-            if match_fields:
-                conflict_columns = [table.c[field] for field in match_fields]
-                return insert_stmt.on_conflict_do_nothing(index_elements=conflict_columns)  # type: ignore[reportAttributeAccessIssue]
-            return insert_stmt.on_conflict_do_nothing()  # type: ignore[reportAttributeAccessIssue]
-        elif conflict_resolution == ConflictResolution.UPDATE:
-            if match_fields:
-                conflict_columns = [table.c[field] for field in match_fields]
-            else:
-                conflict_columns = [col for col in table.primary_key.columns]  # noqa
-
-            update_dict = {
-                col.name: insert_stmt.excluded[col.name]  # type: ignore[reportAttributeAccessIssue]
-                for col in table.columns  # noqa
-                if col.name not in [c.name for c in conflict_columns]
-            }
-
-            return insert_stmt.on_conflict_do_update(  # type: ignore[reportAttributeAccessIssue]
-                index_elements=conflict_columns, set_=update_dict
-            )
-        return insert_stmt
-
-    @staticmethod
-    def _get_mysql_upsert(insert_stmt: sa.sql.Insert, conflict_resolution: str) -> sa.sql.Insert:
-        """Generate MySQL ON DUPLICATE KEY statement."""
-        if conflict_resolution == ConflictResolution.IGNORE:
-            return insert_stmt.prefix_with("IGNORE")
-        elif conflict_resolution == ConflictResolution.UPDATE:
-            return insert_stmt.on_duplicate_key_update(  # type: ignore[reportAttributeAccessIssue]
-                **{col.name: sa.text(f"VALUES({col.name})") for col in insert_stmt.table.columns}  # noqa
-            )
-        return insert_stmt
-
-    @staticmethod
-    def _get_sqlite_upsert(
-        table: sa.Table, values: list[dict[str, Any]], conflict_resolution: str, match_fields: list[str] | None
-    ) -> sa.sql.Insert:
-        """Generate SQLite ON CONFLICT statement."""
-        if conflict_resolution == ConflictResolution.IGNORE:
-            if match_fields:
-                # Use ON CONFLICT with specific columns
-                from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
-                sqlite_stmt = sqlite_insert(table).values(values)
-                conflict_columns = [table.c[field] for field in match_fields]
-                return sqlite_stmt.on_conflict_do_nothing(index_elements=conflict_columns)
-            else:
-                # Use INSERT OR IGNORE for general conflicts
-                return sa.insert(table).values(values).prefix_with("OR IGNORE")
-        elif conflict_resolution == ConflictResolution.UPDATE:
-            if match_fields:
-                # Use ON CONFLICT DO UPDATE with specific columns
-                from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
-                sqlite_stmt = sqlite_insert(table).values(values)
-                conflict_columns = [table.c[field] for field in match_fields]
-
-                update_dict = {
-                    col.name: sqlite_stmt.excluded[col.name]
-                    for col in table.columns
-                    if col.name not in match_fields  # noqa
-                }
-
-                return sqlite_stmt.on_conflict_do_update(index_elements=conflict_columns, set_=update_dict)
-            else:
-                # Use INSERT OR REPLACE for general conflicts
-                return sa.insert(table).values(values).prefix_with("OR REPLACE")
-        return sa.insert(table).values(values)
+        # Use DialectHandler to generate statement
+        return self.dialect.get_upsert_statement(
+            table=table,
+            data=values[0],
+            conflict_fields=match_fields or [],
+            update_fields=update_fields,
+        )
 
     async def execute_upsert_with_returning(
         self,
@@ -135,13 +68,11 @@ class UpsertHandler:
 
         stmt = self.get_upsert_statement(table, values, conflict_resolution, match_fields)
 
-        if self.dialect_name in ("postgresql", "sqlite"):
+        if self.dialect.supports_returning():
             stmt = stmt.returning(*table.columns)  # noqa
             result = await self.session.execute(stmt)
             return [dict(row._mapping) for row in result.fetchall()]  # noqa
         else:
-            # For MySQL, execute and return the input values with any defaults applied
+            # For databases without RETURNING support
             result = await self.session.execute(stmt)
-            # For MySQL without RETURNING, we can't get the exact inserted data
-            # Return the input values as approximation
-            return values[: result.rowcount] if result.rowcount else []
+            return values[: result.rowcount] if result.rowcount and result.rowcount > 0 else []

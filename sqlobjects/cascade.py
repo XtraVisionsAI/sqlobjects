@@ -27,6 +27,7 @@ __all__ = [
     "normalize_ondelete",
     "normalize_onupdate",
     "normalize_cascade",
+    "has_cascade_delete_relations",
 ]
 
 
@@ -108,6 +109,25 @@ def normalize_onupdate(onupdate: OnUpdateType) -> str:
 
     # This should never be reached due to type constraints, but kept for safety
     raise TypeError(f"onupdate must be OnUpdate enum or string, got {type(onupdate)}")
+
+
+def has_cascade_delete_relations(model_class) -> bool:
+    """Check if model class has cascade delete relationships.
+
+    Args:
+        model_class: Model class to check
+
+    Returns:
+        True if model has cascade delete relationships, False otherwise
+    """
+    relationships = getattr(model_class, "_relationships", {})
+    for rel_descriptor in relationships.values():
+        if not (hasattr(rel_descriptor, "property") and hasattr(rel_descriptor.property, "cascade")):
+            continue
+        cascade_str = rel_descriptor.property.cascade or ""
+        if "delete" in cascade_str or "all" in cascade_str:
+            return True
+    return False
 
 
 def normalize_cascade(cascade: CascadeType) -> str:
