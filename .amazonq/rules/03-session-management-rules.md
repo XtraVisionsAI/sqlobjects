@@ -30,6 +30,8 @@ await User.objects.using(session).bulk_create(user_data)
 #### Single Database Sessions
 ```python
 # ctx_session() for single database operations
+from sqlobjects.session import ctx_session
+
 async with ctx_session() as session:
     user = await User.objects.using(session).create(username="alice")
     posts = await user.posts.using(session).all()
@@ -39,10 +41,48 @@ async with ctx_session() as session:
 #### Multiple Database Sessions
 ```python
 # ctx_sessions() for multi-database operations
+from sqlobjects.session import ctx_sessions
+
 async with ctx_sessions("main", "analytics") as sessions:
     user = await User.objects.using(sessions["main"]).create(username="bob")
     await Log.objects.using(sessions["analytics"]).create(message="User created")
     # Coordinated transaction across databases
+```
+
+### Session Acquisition with Read/Write Separation
+**Session management supports readonly parameter for read/write separation**
+```python
+from sqlobjects.session import get_session
+
+class ObjectsManager:
+    def _get_session(self, readonly: bool = True) -> AsyncSession:
+        """Get database session with explicit readonly parameter.
+        
+        Args:
+            readonly: Whether the session is for read-only operations
+        
+        Returns:
+            AsyncSession instance
+        """
+        if self._db_or_session is None:
+            return get_session(readonly=readonly)
+        elif isinstance(self._db_or_session, str):
+            return get_session(self._db_or_session, readonly=readonly)
+        else:
+            return self._db_or_session
+
+# Usage examples
+session = self._get_session(readonly=False)  # Write operations
+session = self._get_session(readonly=True)   # Read operations (default)
+
+# In ObjectsManager methods
+async def create(self, **kwargs):
+    session = self._get_session(readonly=False)  # Write operation
+    # ...
+
+async def get(self, **kwargs):
+    session = self._get_session(readonly=True)   # Read operation
+    # ...
 ```
 
 ## Transaction Management Patterns

@@ -52,23 +52,82 @@ class User(ObjectModel):
 ## Proxy System Architecture
 
 ### Deferred Field Proxy
-- **DeferredFieldProxy**: Smart proxy for handling deferred loading fields
-- **Auto-caching**: Cache values after loading to avoid repeated queries
-- **Error handling**: Provide friendly error messages to prevent accidental access
+- **DeferredObject**: Proxy for deferred loading fields
+- **Auto-creation**: Created in `__getattribute__` when accessing unloaded deferred fields
+- **Caching**: Stored in `_state_manager.object_cache` after creation
+- **Lazy loading**: Supports `fetch()` method for explicit data loading
+- **State tracking**: Integrates with `_deferred_fields` and `_loaded_deferred_fields`
 
 ### Relation Field Proxy
-- **RelationFieldProxy**: Smart proxy for handling relationship fields
-- **Lazy loading**: Load relationship objects on demand
-- **Caching mechanism**: Integrate with existing prefetch logic
+- **RelatedObject**: Proxy for single relationship fields (ForeignKey, OneToOne)
+- **RelatedCollection**: Proxy for collection relationships (OneToMany, ManyToMany)
+- **Lazy loading**: Load relationship data on demand via `fetch()` method
+- **Prefetch integration**: Returns prefetched data when available
+- **Cascade support**: Handles cascade save operations for assigned relationships
 
-### Proxy Integration
+### Proxy Integration in FieldCacheMixin
 ```python
-from sqlobjects.model import ObjectModel, DeferredFieldProxy, RelationFieldProxy
+class FieldCacheMixin(DataConversionMixin):
+    def __getattribute__(self, name: str):
+        """Optimized attribute access using unified proxy cache."""
+        # Skip special attributes and methods
+        if name.startswith("_") or name in method_names:
+            return super().__getattribute__(name)
+        
+        # Check object cache first
+        object_cache = self._state_manager.get_object_cache()
+        if name in object_cache:
+            return object_cache[name]  # May be value, prefetch data, or proxy
+        
+        # Get field cache from model class
+        field_cache = model_class._get_field_cache()
+        
+        # Handle deferred fields
+        if name in field_cache.get("deferred_fields", set()):
+            if name in self._deferred_fields and not self.is_field_loaded(name):
+                if self._state_manager.is_from_database():
+                    proxy = DeferredObject(self, name)
+                    self._update_cache(name, proxy)
+                    return proxy
+        
+        # Handle relationship fields
+        if name in field_cache.get("relationship_fields", set()):
+            # Check cascade_relationships first (manually assigned values)
+            cascade_relationships = self._state_manager.get_cascade_relationships()
+            if name in cascade_relationships:
+                return cascade_relationships[name]
+            
+            # Return relationship proxy from descriptor
+            relationships = getattr(self.__class__, "_relationships", {})
+            if name in relationships:
+                descriptor = relationships[name]
+                proxy = descriptor.__get__(self, self.__class__)
+                self._update_cache(name, proxy)
+                return proxy
+        
+        return super().__getattribute__(name)
+```
+
+### Proxy Usage Examples
+```python
+from sqlobjects.fields.proxies import DeferredObject, RelatedObject, RelatedCollection
 
 class User(ObjectModel):
-    # Proxy objects automatically created and managed
-    # Smart dispatch through __getattribute__
-    pass
+    bio: Column[str] = column(type="text", deferred=True)
+    posts: Related[list["Post"]] = relationship("Post")
+
+# Deferred field proxy
+user = await User.objects.defer("bio").get(User.id == 1)
+assert isinstance(user.bio, DeferredObject)
+bio_content = await user.bio.fetch()  # Explicit loading
+
+# Relationship proxy
+assert isinstance(user.posts, RelatedCollection)
+posts = await user.posts.fetch()  # Load related posts
+
+# Cascade relationship assignment
+user.posts = [post1, post2]  # Stored in cascade_relationships
+assert user._state_manager.needs_cascade_save()  # Marked for cascade
 ```
 
 ## State Management Architecture
@@ -91,21 +150,21 @@ state_manager.set("proxy_cache", {})               # Proxy object cache
 
 ## Field System Architecture
 
-### Unified Type Registration System
+### Type System Implementation
 ```python
-# TypeRegistry with LRU caching for performance
-TypeRegistry = {
-    "string": (sa.String, {"length": 255}),
-    "text": (sa.Text, {}),
-    "integer": (sa.Integer, {}),
-    "bigint": (sa.BigInteger, {}),
-    # ... comprehensive type mapping
-}
+# Type creation using create_type_instance function
+from sqlobjects.fields.types import create_type_instance
 
-# LRU cache for field instance creation
-@lru_cache(maxsize=1000)
-def create_field_instance(field_type: str, **kwargs) -> sa.Column:
-    return TypeRegistry[field_type][0](**kwargs)
+# Create SQLAlchemy type from type name and parameters
+enhanced_type = create_type_instance(type_name, type_params)
+
+# Supports auto type inference from Column[T] annotations
+if type_name == "auto":
+    annotations = getattr(owner, "__annotations__", {})
+    if name in annotations:
+        annotation = annotations[name]
+        inferred_type, inferred_params = _infer_type_from_annotation(annotation)
+        type_name = inferred_type
 ```
 
 ### Parameter Processing Pipeline
@@ -124,12 +183,19 @@ def create_field_instance(field_type: str, **kwargs) -> sa.Column:
 
 ### Field Definition Strategies
 
-#### Unified column() Function
+#### Column Descriptor Pattern
 ```python
-# Single function for all field types with type parameter
+# Column class acts as descriptor for field definitions
+from sqlobjects.fields import Column, column
+
+# Using column() function with type parameter
 name: Column[str] = column(type="string", length=100, nullable=False)
 age: Column[int] = column(type="integer", nullable=True, default=0)
 data: Column[dict] = column(type="json", default=dict)
+
+# Auto type inference from Column[T] annotation
+name: Column[str] = column(type="auto")  # Infers "string" from Column[str]
+age: Column[int] = column(type="auto")  # Infers "integer" from Column[int]
 
 # Enhanced functionality parameters
 username: Column[str] = column(
@@ -143,15 +209,18 @@ username: Column[str] = column(
 #### Shortcut Functions
 ```python
 # Convenience functions for common types
+from sqlobjects.fields import StringColumn, IntegerColumn, JsonColumn
+
 name: Column[str] = StringColumn(length=100)
 age: Column[int] = IntegerColumn(nullable=True, default=0)
 data: Column[dict] = JsonColumn(default=dict)
 ```
 
-#### Selection Criteria
-- **Use column()**: When you need explicit control or uncommon types
-- **Use shortcuts**: For common fields with standard parameters
-- **Consistency**: Choose one approach per project for consistency
+#### Field Definition Guidelines
+- **column() function**: Provides explicit control and supports all parameters
+- **Shortcut functions**: Convenient for common field types
+- **Type inference**: Use `type="auto"` to infer from Column[T] annotation
+- **Consistency**: Maintain consistent approach within each project
 
 ### Advanced Field Parameters
 
@@ -370,36 +439,130 @@ class User(ObjectModel):
 
 ## Core Method Implementation Rules
 
-### save() Method Smart Detection
-- **CREATE detection**: Execute INSERT when no primary key value
-- **UPDATE detection**: Execute UPDATE when primary key value exists
-- **Dirty field optimization**: UPDATE only modifies changed fields
-- **Detached instance handling**: Support saving detached instances
+### save() Method Implementation
+
+**Strategy**: UPSERT with fallback to query-then-save
 
 ```python
-# Smart detection example
-user = User(username="new")  # No primary key
-await user.save()  # INSERT operation
+@emit_signals(Operation.SAVE)
+async def save(self, validate: bool = True, cascade: bool | None = None, session=None):
+    """Save operation with UPSERT support and cascade handling.
+    
+    Implementation:
+    1. Determine cascade behavior from model relationships
+    2. Use CascadeExecutor for cascade operations
+    3. Call _save_internal for direct save operations
+    """
+    if cascade is None:
+        cascade = self._has_cascade_relations()
+    
+    if cascade:
+        executor = CascadeExecutor()
+        return await executor.execute_save_operation(self, validate, session)
+    
+    return await self._save_internal(validate, session)
 
-user.email = "new@example.com"  # Mark as dirty field
-await user.save()  # UPDATE operation, only update email
+async def _save_internal(self, validate: bool = True, session=None):
+    """Internal save using UPSERT with fallback.
+    
+    Implementation:
+    1. Try UPSERT using UpsertHandler (PostgreSQL ON CONFLICT, SQLite INSERT OR REPLACE)
+    2. Fallback to query-then-save for unsupported databases
+    3. Query database to determine INSERT or UPDATE
+    4. Execute appropriate operation
+    """
+    # Try UPSERT first
+    try:
+        from .objects.upsert import ConflictResolution, UpsertHandler
+        handler = UpsertHandler(session)
+        stmt = handler.get_upsert_statement(
+            table=table,
+            values=[data],
+            conflict_resolution=ConflictResolution.UPDATE,
+            match_fields=pk_columns,
+        )
+        result = await session.execute(stmt)
+        # Handle result...
+    except (ValueError, Exception):
+        # Fallback: query database to determine operation
+        existing = await session.execute(select(table).where(and_(*pk_conditions)))
+        if existing.first():
+            # UPDATE operation
+            update_data = self._get_dirty_data()
+            stmt = update(table).where(and_(*pk_conditions)).values(**update_data)
+        else:
+            # INSERT operation
+            stmt = insert(table).values(**data)
+        await session.execute(stmt)
 ```
 
+**Operation Detection for Signals**:
+- `_determine_save_operation()` checks `_has_primary_key_values()`
+- Returns `Operation.CREATE` if no primary key values
+- Returns `Operation.UPDATE` if primary key values exist
+- Used by `emit_signals` decorator to emit specific signals
+
 ### Object Creation Consistency Principle
-**All object creation paths should produce consistent results**
-- New instances should have clean state (no dirty field markers)
-- Validation should be applied uniformly across creation methods
-- Default values should be handled consistently
-- State initialization should be predictable and reliable
+
+**All object creation paths produce consistent clean state**
 
 ```python
-# Consistent object creation
-user_dict = user.to_dict(exclude=["password"], safe_access=True)
-user = User.from_dict(data, validate=True)  # Clean state after creation
+@classmethod
+def from_dict(cls, data: dict[str, Any], validate: bool = True):
+    """Create model instance from dictionary with clean state.
+    
+    Implementation:
+    1. Filter data to include only valid table fields
+    2. Separate init=True and init=False fields
+    3. Call __init__ with init=True fields
+    4. Set init=False fields directly (id, server_default fields)
+    5. Clear dirty_fields immediately after creation
+    6. Execute validation if requested
+    """
+    # Separate fields by init parameter
+    init_data = {}
+    non_init_data = {}
+    
+    for field_name, value in filtered_data.items():
+        field_attr = getattr(cls, field_name, None)
+        if field_attr and hasattr(field_attr, "get_codegen_params"):
+            codegen_params = field_attr.get_codegen_params()
+            if codegen_params.get("init", True):
+                init_data[field_name] = value
+            else:
+                non_init_data[field_name] = value
+    
+    # Create instance with init fields
+    instance = cls(**init_data)
+    
+    # Set non-init fields directly
+    for field_name, value in non_init_data.items():
+        setattr(instance, field_name, value)
+    
+    # CRITICAL: Clear dirty fields to ensure clean state
+    instance._state_manager.clear_dirty_fields()
+    
+    if validate:
+        instance.validate_all_fields()
+    
+    return instance
+```
 
-# All creation methods produce consistent results
-user = await User.objects.create(username="john")
-user, created = await User.objects.get_or_create(username="jane")
+**Why Clear Dirty Fields**:
+- New instances should not have dirty field markers
+- Prevents unnecessary UPDATE operations on first save()
+- Maintains consistency across all creation methods
+- Ensures predictable object state
+
+**Consistent Creation Methods**:
+```python
+# All methods produce clean state
+user = User.from_dict({"username": "john", "email": "john@example.com"})
+user = await User.objects.create(username="jane")
+user, created = await User.objects.get_or_create(username="bob")
+
+# All instances have clean state after creation
+assert len(user._state_manager.get_dirty_fields()) == 0
 ```
 
 ## Validation System Integration

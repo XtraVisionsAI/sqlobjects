@@ -24,71 +24,105 @@ live_data = await User.objects.defer("bio", "profile_image").all()  # Defer heav
 ## Query Method Classification System
 
 ### Query Building Methods (Return QuerySet)
-**Chainable methods that modify query without execution - available on both ObjectsManager and QuerySet**
+**Chainable methods that modify query without execution**
 ```python
 # Basic query building
 User.objects.filter(User.is_active == True)      # Filtering
+User.objects.exclude(User.is_deleted == True)    # Exclusion
 User.objects.order_by("-created_at")             # Ordering
 User.objects.limit(10).offset(20)                # Pagination
-User.objects.select_related("profile")           # Relationship loading
+User.objects.select_related("profile")           # JOIN preload
+User.objects.prefetch_related("posts")           # Separate query preload
 User.objects.only("id", "username")              # Field selection
+User.objects.defer("heavy_field")                # Field deferring
+User.objects.undefer("field")                    # Remove from deferred
 
-# Advanced query building (now available on ObjectsManager)
+# Advanced query building
 User.objects.distinct("department")              # Duplicate elimination
 User.objects.annotate(post_count=func.count())   # Calculated fields
 User.objects.group_by("department")              # Grouping
 User.objects.having(func.count() > 5)            # Group filtering
 User.objects.join(Post.__table__, condition)     # Manual joins
+User.objects.leftjoin(Post.__table__, condition) # Left joins
+User.objects.outerjoin(Post.__table__, condition)# Outer joins
 User.objects.select_for_update(nowait=True)      # Row locking
-User.objects.only("field1", "field2")            # Field selection
-User.objects.defer("heavy_field")                # Field deferring
-User.objects.skip_default_ordering()             # Performance optimization
+User.objects.select_for_share(skip_locked=True)  # Shared locking
+User.objects.extra(columns={"custom": "1"})      # Extra SQL
+User.objects.none()                              # Empty queryset
+User.objects.reverse()                           # Reverse ordering
+User.objects.skip_default_ordering()             # Skip default ordering
 ```
 
-### Query Execution Methods (Execute Query)
-**Terminal methods that execute the query and return results - available on both ObjectsManager and QuerySet**
+### Expression Methods (Return Composable Expressions)
+**Methods that create expressions for execution or use in other queries**
 ```python
-# Basic execution methods
-await User.objects.filter(...).all()            # List of objects
-await User.objects.filter(...).get()            # Single object
-await User.objects.filter(...).count()          # Integer count
-await User.objects.filter(...).exists()         # Boolean existence (now on ObjectsManager)
-await User.objects.filter(...).first()          # First object or None
+# Aggregation expressions
+stats = await User.objects.aggregate(avg_age=func.avg(User.age))
+avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).subquery(query_type="scalar")
 
-# Additional execution methods
-await User.objects.filter(...).last()           # Last object (reverse + first)
-await User.objects.earliest("created_at")       # Earliest by field
-await User.objects.latest("updated_at")         # Latest by field
+# Count expressions
+total = await User.objects.count()
+user_count = User.objects.filter(User.is_active == True).count()
 
-# Data format methods (now available on ObjectsManager)
-await User.objects.values("id", "username")     # List of dictionaries
-await User.objects.values_list("username", flat=True)  # List of values
-await User.objects.aggregate(avg_age=func.avg(User.age))  # Aggregation
-await User.objects.raw("SELECT * FROM users WHERE age > :age", {"age": 18})  # Raw SQL
+# Existence expressions
+has_users = await User.objects.exists()
+has_posts = Post.objects.filter(Post.author_id == User.id).exists()
 
-# Date and time extraction methods (now on ObjectsManager)
-await User.objects.dates("created_at", "year")       # Date extraction
-await User.objects.datetimes("last_login", "hour")   # DateTime extraction
+# Collection expressions
+users = await User.objects.all()
+user = await User.objects.first()
+user = await User.objects.last()
+user = await User.objects.earliest("created_at")
+user = await User.objects.latest("updated_at")
 
-# Index access methods (now on ObjectsManager)
-await User.objects.get_item(0)                       # Single item by index
-await User.objects.get_item(slice(0, 10))            # Slice access
+# Data extraction expressions
+data = await User.objects.values("id", "username")
+values = await User.objects.values_list("username", flat=True)
+
+# Date/time extraction expressions
+dates = await User.objects.dates("created_at", "year")
+datetimes = await User.objects.datetimes("last_login", "hour")
+
+# Index access expressions
+user = await User.objects.get_item(0)
+users = await User.objects.get_item(slice(0, 10))
+
+# Subquery expressions
+subquery = User.objects.filter(User.is_active == True).subquery("active_users")
+```
+
+### Query Execution Methods (Execute and Return Results)
+**Terminal methods that execute queries and return final results**
+```python
+# Single object retrieval
+user = await User.objects.get(User.id == 1)
+user = await User.objects.filter(User.username == "john").get()
 
 # Iterator for large datasets
 async for user in User.objects.iterator(chunk_size=1000):
     await process_user(user)
+
+# Raw SQL execution
+users = await User.objects.raw("SELECT * FROM users WHERE age > :age", {"age": 18})
 ```
 
-### Subquery Methods (Return SubqueryExpression)
-**Methods that create subqueries for use in other queries - now available on ObjectsManager**
+### Subquery Expression Creation
+**Creating subqueries for use in other queries**
 ```python
-# These methods return subquery expressions
-avg_age = User.objects.aggregate(avg=func.avg(User.age)).subquery(query_type="scalar")
-has_posts = Post.objects.filter(Post.author_id == User.id).subquery(query_type="exists")
-active_users = User.objects.filter(User.is_active == True).subquery("active")
+# Scalar subqueries for comparisons
+avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).subquery(query_type="scalar")
+older_users = await User.objects.filter(User.age > avg_age).all()
 
-# ObjectsManager provides direct access to subquery creation
-subquery_expr = User.objects.subquery("user_subquery")  # Direct subquery creation
+# EXISTS subqueries for boolean conditions
+has_posts = Post.objects.filter(Post.author_id == User.id).subquery(query_type="exists")
+authors = await User.objects.filter(has_posts).all()
+
+# Table subqueries for complex JOINs
+active_users = User.objects.filter(User.is_active == True).subquery("active_users")
+posts = await Post.objects.join(active_users, Post.author_id == active_users.c.id).all()
+
+# Direct subquery creation
+subquery_expr = User.objects.subquery("user_subquery", query_type="auto")
 ```
 
 ## Smart Operation Detection System
@@ -222,46 +256,152 @@ users = await User.objects.filter(~Q(User.is_deleted == True)).all()
 
 ## ObjectsManager Design Patterns
 
-### Complete QuerySet Method Coverage
-**ObjectsManager provides shortcuts to all QuerySet functionality**
+### Complete Method Coverage
+**ObjectsManager provides comprehensive database operation interface**
+
+#### Session Management
 ```python
-# All QuerySet methods available directly on ObjectsManager
-User.objects.exists()                    # Execution method shortcut
-User.objects.annotate(count=func.count()) # Query building shortcut
-User.objects.subquery("users_sub")        # Subquery creation shortcut
-User.objects.extra(select={"custom": "1"}) # Advanced query shortcut
+User.objects.using(session)              # Bind to specific session
+User.objects.using("analytics")          # Bind to named database
+```
+
+#### Query Building Shortcuts (Return QuerySet)
+```python
+User.objects.filter(User.is_active == True)
+User.objects.exclude(User.is_deleted == True)
+User.objects.order_by("-created_at")
+User.objects.limit(10).offset(20)
+User.objects.only("id", "username")
+User.objects.defer("bio")
+User.objects.undefer("bio")
+User.objects.select_related("profile")
+User.objects.prefetch_related("posts")
+User.objects.distinct("department")
+User.objects.annotate(count=func.count())
+User.objects.group_by("department")
+User.objects.having(func.count() > 5)
+User.objects.join(Post.__table__, condition)
+User.objects.leftjoin(Post.__table__, condition)
+User.objects.outerjoin(Post.__table__, condition)
+User.objects.select_for_update(nowait=True)
+User.objects.select_for_share(skip_locked=True)
+User.objects.extra(columns={"custom": "1"})
+User.objects.skip_default_ordering()
+User.objects.none()
+User.objects.reverse()
+```
+
+#### Expression Method Shortcuts
+```python
+User.objects.all()                       # AllExpression
+User.objects.count()                     # CountExpression
+User.objects.exists()                    # ExistsExpression
+User.objects.aggregate(**kwargs)         # AggregateExpression
+User.objects.first()                     # FirstExpression
+User.objects.last()                      # LastExpression
+User.objects.earliest(*fields)           # EarliestExpression
+User.objects.latest(*fields)             # LatestExpression
+User.objects.values(*fields)             # ValuesExpression
+User.objects.values_list(*fields)        # ValuesListExpression
+User.objects.dates(field, kind)          # DatesExpression
+User.objects.datetimes(field, kind)      # DatetimesExpression
+User.objects.get_item(key)               # GetItemExpression
+User.objects.subquery(name)              # SubqueryExpression
+```
+
+#### Data Operation Methods
+```python
+# Creation operations
+await User.objects.create(**kwargs)
+await User.objects.get(**kwargs)
+await User.objects.get_or_create(**lookup, defaults={})
+await User.objects.update_or_create(**lookup, defaults={})
+await User.objects.in_bulk(id_list, field_name="pk")
+
+# Execution methods
+await User.objects.raw(sql, params)
+async for obj in User.objects.iterator(chunk_size=1000):
+    pass
+
+# Bulk operations
+await User.objects.bulk_create(objects, batch_size=1000)
+await User.objects.bulk_update(mappings, match_fields=["id"])
+await User.objects.bulk_delete(ids, id_field="id")
+await User.objects.delete_all(fast=False)
+await User.objects.update_all(**values)
 ```
 
 ### Method Delegation Strategy
-**Consistent delegation pattern for API completeness**
+**ObjectsManager delegates to QuerySet for query building**
 ```python
-# ObjectsManager delegates to QuerySet for consistency
-def exists(self) -> QuerySet[ModelType]:
-    return self.get_queryset().exists()
-
-def annotate(self, **kwargs) -> QuerySet[ModelType]:
-    return self.get_queryset().annotate(**kwargs)
+class ObjectsManager(Generic[T]):
+    def filter(self, *args, **kwargs) -> QuerySet[T]:
+        """Create QuerySet and apply filter."""
+        return QuerySet(self._table, self._model_class, self._db_or_session).filter(*args, **kwargs)
+    
+    def annotate(self, *args, **kwargs) -> QuerySet[T]:
+        """Create QuerySet and apply annotation."""
+        return self.filter().annotate(*args, **kwargs)
+    
+    def all(self):
+        """Create AllExpression for execution."""
+        return self.filter().all()
+    
+    def exists(self):
+        """Create ExistsExpression for execution."""
+        return self.filter().exists()
 
 # Maintains type safety and method chaining
 result = await User.objects.filter(User.is_active == True).exists()
 queryset = User.objects.annotate(post_count=func.count()).filter(User.post_count > 5)
+users = await User.objects.all()
 ```
 
-### Constructor Integration Pattern
-**ObjectsManager methods use from_dict() for proper instance creation**
+### Instance Creation Pattern
+**ObjectsManager uses from_dict() for consistent instance creation**
 ```python
-# Avoid direct constructor calls in ObjectsManager methods
-# ❌ Direct constructor (bypasses proper initialization)
-instance = self._model_class(**kwargs)
+class ObjectsManager(Generic[T]):
+    @emit_signals(Operation.SAVE)
+    async def create(self, validate: bool = True, **kwargs) -> T:
+        """Create new object with proper initialization."""
+        # Use from_dict for consistent state initialization
+        obj = self._model_class.from_dict(kwargs, validate=False)
+        
+        # Execute validation if requested
+        if validate:
+            obj.validate_all_fields()
+        
+        # Execute INSERT directly (signals handled by decorator)
+        stmt = insert(self._table).values(**obj._get_all_data())
+        session = self._get_session(readonly=False)
+        result = await session.execute(stmt)
+        
+        # Set primary key from result
+        if result.inserted_primary_key:
+            obj._set_primary_key_values(result.inserted_primary_key)
+        
+        return obj
+    
+    async def get_or_create(self, defaults=None, validate=True, **lookup):
+        """Get or create with consistent initialization."""
+        try:
+            obj = await self.filter(*conditions).get()
+            return obj, False
+        except DoesNotExist:
+            create_data = lookup.copy()
+            if defaults:
+                create_data.update(defaults)
+            
+            # Use from_dict for consistent initialization
+            obj = self._model_class.from_dict(create_data, validate=False)
+            await obj.using(self._get_session(readonly=False)).save(validate=validate)
+            return obj, True
 
-# ✅ Use from_dict() for proper initialization
-instance = self._model_class.from_dict(kwargs)
-
-# Benefits:
+# Benefits of from_dict():
 # - Handles init=False fields correctly
-# - Manages dirty field tracking
+# - Clears dirty field tracking
 # - Applies validation consistently
-# - Ensures proper state initialization
+# - Ensures clean state initialization
 ```
 
 ## Component Architecture Rules
