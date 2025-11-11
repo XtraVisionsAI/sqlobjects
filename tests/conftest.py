@@ -17,6 +17,7 @@ from sqlobjects.fields import (
     BooleanColumn,
     Column,
     IntegerColumn,
+    Related,
     StringColumn,
     column,
     foreign_key,
@@ -52,8 +53,13 @@ class User(TestModel):
     bio: Column[str] = column(type="text", deferred=True)
 
     # Relationships
-    posts = relationship("Post", back_populates="author")
-    profile = relationship("Profile", back_populates="user", uselist=False)
+    posts: Related[list["Post"]] = relationship("Post", back_populates="author")
+    profile: Related["Profile"] = relationship("Profile", back_populates="user", uselist=False)
+
+
+user = User()
+print(type(user.posts))
+print(type(user.profile))
 
 
 class Post(TestModel):

@@ -1,10 +1,11 @@
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Generic, TypeVar, overload
 
 from ...cascade import OnDelete
 
 
 if TYPE_CHECKING:
     from ...model import ObjectModel
+    from ..proxies import BaseRelated
 
 
 T = TypeVar("T")
@@ -112,9 +113,9 @@ class RelationshipDescriptor(Generic[T]):
     def __get__(self, instance: None, owner: type) -> "RelationshipDescriptor[T]": ...
 
     @overload
-    def __get__(self, instance: "ObjectModel", owner: type) -> T: ...
+    def __get__(self, instance: "ObjectModel", owner: type) -> "BaseRelated[T]": ...
 
-    def __get__(self, instance: "ObjectModel | None", owner: type) -> Any:
+    def __get__(self, instance: "ObjectModel | None", owner: type) -> "RelationshipDescriptor[T] | BaseRelated[T]":
         """Get relationship value.
 
         Args:
@@ -139,18 +140,24 @@ class RelationshipDescriptor(Generic[T]):
                 return getattr(instance, cache_attr)
 
         # Return different objects based on lazy strategy
-        from ..proxies import ManyToManyProxy, OneToManyProxy, RelatedObjectProxy
-        from .strategies import NoLoadProxy, RaiseProxy, RelatedQuerySet
+        from ..proxies import (
+            ManyToManyRelation,
+            NoLoadRelation,
+            OneToManyRelation,
+            RaiseLoadRelation,
+            RelatedObject,
+            RelatedQuerySet,
+        )
 
         if self.property.lazy == "dynamic":
             return RelatedQuerySet(instance, self)
         elif self.property.lazy == "noload":
-            return NoLoadProxy(instance, self)
+            return NoLoadRelation(instance, self)
         elif self.property.lazy == "raise":
-            return RaiseProxy(instance, self)
+            return RaiseLoadRelation(instance, self)
         elif self.property.is_many_to_many:
-            return ManyToManyProxy(instance, self)
+            return ManyToManyRelation(instance, self)
         elif self.property.uselist:
-            return OneToManyProxy(instance, self)
+            return OneToManyRelation(instance, self)
         else:
-            return RelatedObjectProxy(instance, self)
+            return RelatedObject(instance, self)

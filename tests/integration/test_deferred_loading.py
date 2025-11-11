@@ -4,7 +4,7 @@ import pytest
 
 from sqlobjects.exceptions import PrimaryKeyError
 from sqlobjects.fields import Column, StringColumn, column, foreign_key, identity
-from sqlobjects.fields.proxies import DeferredFieldProxy
+from sqlobjects.fields.proxies import DeferredObject
 from tests.conftest import TestModel
 
 
@@ -220,7 +220,7 @@ class TestDeferredFieldDatabaseOperations:
 
         # Accessing deferred field should return proxy
         bio_proxy = loaded_user.bio
-        assert isinstance(bio_proxy, DeferredFieldProxy)
+        assert isinstance(bio_proxy, DeferredObject)
 
         # Fetch through proxy should load the field
         bio_content = await bio_proxy.fetch()

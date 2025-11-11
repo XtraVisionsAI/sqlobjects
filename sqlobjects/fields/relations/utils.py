@@ -1,18 +1,16 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 
 from sqlalchemy import Column, ForeignKey, Table
 
 from ...cascade import CascadeType, normalize_cascade
-from .descriptors import RelationshipDescriptor, RelationshipProperty, RelationshipType
-
-
-if TYPE_CHECKING:
-    from ...model import ObjectModel
-    from ..proxies import RelatedObjectProxy
+from .descriptors import RelationshipProperty, RelationshipType
 
 
 T = TypeVar("T")
+
+if TYPE_CHECKING:
+    from ...model import ObjectModel
 
 
 @dataclass
@@ -106,6 +104,59 @@ class RelationshipResolver:
             return RelationshipType.ONE_TO_MANY
 
 
+@overload
+def relationship(
+    argument: str | type,
+    *,
+    uselist: Literal[False],
+    foreign_keys: str | list[str] | None = None,
+    back_populates: str | None = None,
+    backref: str | None = None,
+    lazy: Literal["select"] = "select",
+    primaryjoin: str | None = None,
+    order_by: str | list[str] | None = None,
+    cascade: CascadeType = None,
+    passive_deletes: bool = False,
+    **kwargs: Any,
+) -> Any: ...
+
+
+@overload
+def relationship(
+    argument: str | type,
+    *,
+    secondary: str | M2MTable,
+    foreign_keys: str | list[str] | None = None,
+    back_populates: str | None = None,
+    backref: str | None = None,
+    lazy: str = "select",
+    uselist: bool | None = None,
+    primaryjoin: str | None = None,
+    secondaryjoin: str | None = None,
+    order_by: str | list[str] | None = None,
+    cascade: CascadeType = None,
+    passive_deletes: bool = False,
+    **kwargs: Any,
+) -> Any: ...
+
+
+@overload
+def relationship(
+    argument: str | type,
+    *,
+    foreign_keys: str | list[str] | None = None,
+    back_populates: str | None = None,
+    backref: str | None = None,
+    lazy: str = "select",
+    uselist: bool | None = None,
+    primaryjoin: str | None = None,
+    order_by: str | list[str] | None = None,
+    cascade: CascadeType = None,
+    passive_deletes: bool = False,
+    **kwargs: Any,
+) -> Any: ...
+
+
 def relationship(
     argument: str | type["ObjectModel"],
     *,
@@ -121,7 +172,7 @@ def relationship(
     cascade: CascadeType = None,
     passive_deletes: bool = False,
     **kwargs: Any,
-) -> "RelationshipDescriptor[RelatedObjectProxy]":
+) -> Any:
     """Define model relationship with SQLAlchemy-compatible cascade behavior.
 
     Args:
@@ -140,20 +191,18 @@ def relationship(
         **kwargs: Additional relationship options
 
     Returns:
-        Column instance marked as relationship field with cascade configuration
+        Column instance wrapping RelationshipDescriptor for type compatibility
 
     Raises:
         ValueError: If both back_populates and backref are specified
 
     Example:
-        # Type-safe enum usage
+        # With type annotation
+        posts: Column[list["Post"]] = relationship("Post", back_populates="author")
+        author: Column[User] = relationship("User", back_populates="posts")
+
+        # With cascade
         posts = relationship("Post", cascade={CascadeOption.ALL, CascadeOption.DELETE_ORPHAN})
-
-        # Preset constants
-        comments = relationship("Comment", cascade=CascadePresets.ALL_DELETE_ORPHAN)
-
-        # SQLAlchemy string format
-        tags = relationship("Tag", cascade="all, delete-orphan")
     """
 
     # Validate mutually exclusive parameters
@@ -194,8 +243,11 @@ def relationship(
         property_.m2m_definition = m2m_def  # type: ignore[reportAttributeAccessIssue]
         property_.is_many_to_many = True
 
-    # Return descriptor that provides proper type hints
-    return RelationshipDescriptor(property_)
+    # Import Related here to avoid circular import
+    from ..core import Related
+
+    # Return Related container for relationship fields
+    return Related(is_relationship=True, relationship_property=property_, m2m_definition=m2m_def)
 
 
 class RelationshipAnalyzer:

@@ -1,4 +1,3 @@
-from ..proxies import BaseRelatedCollection, ManyToManyProxy, OneToManyProxy
 from .descriptors import RelationshipDescriptor, RelationshipProperty, RelationshipType
 from .prefetch import PrefetchHandler
 from .strategies import NoLoadProxy, RaiseProxy, RelatedQuerySet
@@ -11,10 +10,6 @@ __all__ = [
     "RelationshipProperty",
     "RelationshipDescriptor",
     "RelationshipResolver",
-    # Proxy classes (now in fields/proxies.py)
-    "BaseRelatedCollection",
-    "OneToManyProxy",
-    "ManyToManyProxy",
     # Special loading strategies
     "RelatedQuerySet",
     "NoLoadProxy",

@@ -87,17 +87,17 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
             excluding fields that should not be included in INSERT operations
         """
         from .fields.proxies import (
-            DeferredFieldProxy,
-            ManyToManyProxy,
-            OneToManyProxy,
-            RelatedObjectProxy,
+            DeferredObject,
+            ManyToManyRelation,
+            OneToManyRelation,
+            RelatedObject,
         )
 
         data = {}
         for name in self._get_field_names():
             value = getattr(self, name, None)
             # Skip proxy objects to avoid serialization issues
-            if isinstance(value, (DeferredFieldProxy, RelatedObjectProxy, OneToManyProxy, ManyToManyProxy)):
+            if isinstance(value, (DeferredObject, RelatedObject, OneToManyRelation, ManyToManyRelation)):
                 continue
 
             # Skip fields that should not be included in INSERT operations
@@ -136,10 +136,10 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
             or all field data if no dirty fields are tracked
         """
         from .fields.proxies import (
-            DeferredFieldProxy,
-            ManyToManyProxy,
-            OneToManyProxy,
-            RelatedObjectProxy,
+            DeferredObject,
+            ManyToManyRelation,
+            OneToManyRelation,
+            RelatedObject,
         )
 
         dirty_fields = self._state_manager.get_dirty_fields()
@@ -150,7 +150,7 @@ class ModelMixin(FieldCacheMixin, SignalMixin):
         for name in dirty_fields:
             value = getattr(self, name, None)
             # Skip proxy objects to avoid serialization issues
-            if not isinstance(value, (DeferredFieldProxy, RelatedObjectProxy, OneToManyProxy, ManyToManyProxy)):
+            if not isinstance(value, (DeferredObject, RelatedObject, OneToManyRelation, ManyToManyRelation)):
                 data[name] = value
         return data
 

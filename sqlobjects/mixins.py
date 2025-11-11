@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from sqlalchemy import Table, and_, select
 
 from .exceptions import PrimaryKeyError, ValidationError
-from .fields.proxies import DeferredFieldProxy
+from .fields.proxies import DeferredObject
 from .fields.utils import get_column_from_field, is_field_definition
 from .session import AsyncSession, get_session
 
@@ -633,7 +633,7 @@ class FieldCacheMixin(DataConversionMixin):
                 and self._state_manager.is_from_database()
             ):
                 # Create and cache deferred field proxy
-                proxy = DeferredFieldProxy(self, name)
+                proxy = DeferredObject(self, name)
                 self._update_cache(name, proxy)
                 return proxy
 

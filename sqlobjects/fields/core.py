@@ -1,19 +1,110 @@
 """Core field classes for SQLObjects"""
 
 from collections.abc import Callable
-from typing import Any, Generic, TypeVar, Union, cast, get_args, get_origin, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, Union, cast, get_args, get_origin, overload
 
 from sqlalchemy import Column as CoreColumn
 from sqlalchemy import ForeignKey
 from sqlalchemy.sql.elements import ColumnElement
+
+from sqlobjects.fields.proxies import RelatedCollection, RelatedObject
 
 from ..cascade import OnDelete
 from ..expressions.mixins import ColumnAttributeFunctionMixin
 from .types import create_type_instance
 
 
+if TYPE_CHECKING:
+    pass
+
+
 T = TypeVar("T")
 NullableT = TypeVar("NullableT")
+
+
+class Related(Generic[T]):
+    """Relationship field container - returns appropriate relationship proxy.
+
+    This class serves as a type container for relationship fields, providing
+    clear type hints while delegating actual behavior to RelationshipDescriptor.
+
+    Type Parameters:
+        T: The related model type (single object or list)
+
+    Example:
+        >>> class User(ObjectModel):
+        ...     posts: Related[list["Post"]] = relationship("Post")
+        ...     profile: Related["Profile"] = relationship("Profile", uselist=False)
+    """
+
+    def __init__(self, **params):
+        """Initialize relationship field container.
+
+        Args:
+            **params: Relationship configuration parameters
+        """
+        self._params = params
+        self._is_relationship = True
+        self._relationship_descriptor = None
+        self.name = None
+
+    def __set_name__(self, owner, name):
+        """Set field name and create relationship descriptor.
+
+        Args:
+            owner: The model class that owns this field
+            name: The field name
+        """
+        self.name = name
+        self._setup_relationship(owner, name)
+
+    def _setup_relationship(self, owner, name):
+        """Set up relationship field descriptor.
+
+        Args:
+            owner: The model class that owns this field
+            name: The field name
+        """
+        from .relations.descriptors import RelationshipDescriptor
+
+        relationship_property = self._params.get("relationship_property")
+        if relationship_property:
+            # Set M2M definition if provided
+            m2m_def = self._params.get("m2m_definition")
+            if m2m_def:
+                relationship_property.m2m_definition = m2m_def
+                relationship_property.is_many_to_many = True
+
+            self._relationship_descriptor = RelationshipDescriptor(relationship_property)
+            self._relationship_descriptor.__set_name__(owner, name)
+
+    @overload
+    def __get__(self, instance: None, owner: type) -> "Related[T]": ...
+
+    @overload
+    def __get__(self: "Related[list[Any]]", instance: Any, owner: type) -> "RelatedCollection[Any]": ...
+
+    @overload
+    def __get__(self, instance: Any, owner: type) -> "RelatedObject[T]": ...
+
+    def __get__(self, instance, owner) -> "Related[T] | RelatedCollection[Any] | RelatedObject[T] | None":
+        """Fallback descriptor - should not be called in normal usage.
+
+        ModelProcessor metaclass extracts RelationshipDescriptor and replaces
+        this Related instance, so this method is only called if setup fails.
+
+        Args:
+            instance: Model instance or None for class access
+            owner: The model class
+
+        Returns:
+            RelationshipDescriptor or None as fallback
+        """
+        if self._relationship_descriptor:
+            return self._relationship_descriptor.__get__(instance, owner)
+        if instance is None:
+            return self
+        return None
 
 
 class Column(Generic[T]):
@@ -56,11 +147,10 @@ class Column(Generic[T]):
         self._private_name = None
 
     def __set_name__(self, owner, name):
-        """Set field name and initialize appropriate descriptor.
+        """Set field name and initialize column descriptor.
 
         Called automatically by Python when the field is assigned to a class.
-        Creates either a ColumnAttribute for database fields or a relationship
-        descriptor for relationship fields.
+        Creates ColumnAttribute for database fields.
 
         Args:
             owner: The model class that owns this field
@@ -68,26 +158,7 @@ class Column(Generic[T]):
         """
         self.name = name
         self._private_name = f"_{name}"
-
-        # Check if this is actually a RelationshipDescriptor wrapped in Column annotation
-        if hasattr(self, "_is_relationship") and self._is_relationship:
-            self._setup_relationship(owner, name)
-        else:
-            self._setup_column(owner, name)
-
-    def _setup_relationship(self, owner, name):
-        """Set up relationship field descriptor.
-
-        Args:
-            owner: The model class that owns this field
-            name: The field name
-        """
-        from .relations.descriptors import RelationshipDescriptor
-
-        relationship_property = self._params.get("relationship_property")
-        if relationship_property:
-            self._relationship_descriptor = RelationshipDescriptor(relationship_property)
-            self._relationship_descriptor.__set_name__(owner, name)
+        self._setup_column(owner, name)
 
     def _setup_column(self, owner, name):
         """Set up database column field.
@@ -198,9 +269,6 @@ class Column(Generic[T]):
         Returns:
             ColumnAttribute when accessed on class, field value when accessed on instance
         """
-        if self._is_relationship and self._relationship_descriptor:
-            return self._relationship_descriptor.__get__(instance, owner)
-
         if instance is None:
             return self._column_attribute
         else:
@@ -222,14 +290,10 @@ class Column(Generic[T]):
         Raises:
             AttributeError: If trying to set value on class rather than instance
         """
-        if self._is_relationship:
-            # Relationship fields may not support direct setting
-            pass
-        else:
-            if instance is None:
-                raise AttributeError("Cannot set attribute on class")
-            private_name = self._private_name or f"_{self.name}"
-            setattr(instance, private_name, value)
+        if instance is None:
+            raise AttributeError("Cannot set attribute on class")
+        private_name = self._private_name or f"_{self.name}"
+        setattr(instance, private_name, value)
 
 
 class ColumnAttribute(ColumnAttributeFunctionMixin, Generic[T]):

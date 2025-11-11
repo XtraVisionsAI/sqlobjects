@@ -1,6 +1,12 @@
-from .core import Column, ColumnAttribute, column
+from .core import Column, ColumnAttribute, Related, column
 from .functions import computed, foreign_key, identity
-from .proxies import DeferredFieldProxy, ManyToManyProxy, OneToManyProxy, RelatedObjectProxy
+from .proxies import (
+    # Backward compatibility aliases
+    DeferredObject,
+    ManyToManyRelation,
+    OneToManyRelation,
+    RelatedObject,
+)
 from .relations import M2MTable, relationship
 from .shortcuts import (
     ArrayColumn,
@@ -25,6 +31,7 @@ __all__ = [
     # Core field system
     "Column",
     "ColumnAttribute",
+    "Related",
     "column",
     # Shortcut field classes
     "StringColumn",
@@ -49,14 +56,12 @@ __all__ = [
     "M2MTable",
     "relationship",
     # Public proxy interfaces
-    "DeferredFieldProxy",
-    "RelatedObjectProxy",
-    "OneToManyProxy",
-    "ManyToManyProxy",
+    "DeferredObject",
+    "RelatedObject",
+    "OneToManyRelation",
+    "ManyToManyRelation",
     # Utility functions
     "extract_field_metadata",
     "get_deferred_fields",
     "get_relation_fields",
-    # Note: Special loading strategies (RelatedQuerySet, NoLoadProxy, RaiseProxy) are internal
-    # and available via fields.relations.strategies if needed
 ]

@@ -9,7 +9,7 @@ import psutil
 import pytest
 
 from sqlobjects.fields import Column, StringColumn, column, identity
-from sqlobjects.fields.proxies import DeferredFieldProxy
+from sqlobjects.fields.proxies import DeferredObject
 from tests.conftest import TestModel
 
 
@@ -198,7 +198,7 @@ class TestDeferredFieldPerformance:
         # Measure proxy creation time
         start_time = time.perf_counter()
         for _ in range(1000):
-            proxy = DeferredFieldProxy(loaded_user, "small_bio")
+            proxy = DeferredObject(loaded_user, "small_bio")
             _ = proxy.field_name  # Access to ensure object is created
         proxy_creation_time = time.perf_counter() - start_time
 
@@ -219,7 +219,7 @@ class TestDeferredFieldPerformance:
             await PerformanceTestUser.objects.using(session).defer("small_bio").get(PerformanceTestUser.id == user.id)
         )
 
-        proxy = DeferredFieldProxy(loaded_user, "small_bio")
+        proxy = DeferredObject(loaded_user, "small_bio")
 
         # First fetch (should load from database)
         start_time = time.perf_counter()
