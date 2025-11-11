@@ -13,32 +13,37 @@ RelationFieldProxy lazy loading, QuerySet-integrated select_related/prefetch_rel
 Supports multiple relationship types through unified relationship() function and Column descriptor integration:
 
 ```python
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, StringColumn, column
+from sqlobjects.fields.relations import relationship, Related
+from sqlalchemy import ForeignKey
+
 class User(ObjectModel):
     name: Column[str] = StringColumn(length=50)
 
 class Post(ObjectModel):
     title: Column[str] = StringColumn(length=100)
-    author_id: Column[int] = foreign_key("users.id")  # Foreign key field
+    author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
   
-    # Relationship field - unified processing with Column descriptor
-    author: Column[User] = relationship("User", foreign_keys="author_id")
+    # Relationship field - returns Related container
+    author: Related[User] = relationship("User", foreign_keys="author_id")
 
-# Column descriptor automatically recognizes relationship fields:
-# - Sets _is_relationship = True
-# - Uses RelationshipDescriptor for access handling
-# - Integrates into ModelProcessor's _relationships dictionary
+# relationship() returns Related container:
+# - Related wraps RelationshipProperty
+# - ModelProcessor extracts RelationshipDescriptor from Related
+# - RelationshipDescriptor returns RelatedObject or RelatedCollection proxies
 
 class Tag(ObjectModel):
     name: Column[str] = StringColumn(length=50)
 
-# Many-to-many relationship - using through parameter
+# Many-to-many relationship - using secondary parameter
 class PostTag(ObjectModel):
-    post_id: Column[int] = foreign_key("posts.id")
-    tag_id: Column[int] = foreign_key("tags.id")
+    post_id: Column[int] = column(type="integer", foreign_key=ForeignKey("posts.id"))
+    tag_id: Column[int] = column(type="integer", foreign_key=ForeignKey("tags.id"))
 
 # Dynamically add relationship fields
-Post.tags = relationship("Tag", through="PostTag")
-Tag.posts = relationship("Post", through="PostTag")
+Post.tags = relationship("Tag", secondary="post_tags")
+Tag.posts = relationship("Post", secondary="post_tags")
 ```
 
 ### 2. JOIN Query Optimization
@@ -88,9 +93,9 @@ users = await User.objects.prefetch_related(
 # 2. Groups results by foreign key relationships
 # 3. Associates results with main instances
 
-# RelationFieldProxy lazy loading
+# RelatedCollection lazy loading
 user = await User.objects.first()
-# user.posts returns RelationFieldProxy
+# user.posts returns RelatedCollection proxy
 # await user.posts.fetch() actually loads the data
 ```
 
@@ -100,23 +105,29 @@ Complete many-to-many relationship support, including intermediate table managem
 
 ```python
 # Many-to-many relationship definition
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, StringColumn, column
+from sqlobjects.fields.relations import relationship, Related
+from sqlalchemy import ForeignKey
+from datetime import datetime
+
 class User(ObjectModel):
-    name: str = str_column(length=50)
+    name: Column[str] = StringColumn(length=50)
 
 class Role(ObjectModel):
-    name: str = str_column(length=50)
+    name: Column[str] = StringColumn(length=50)
 
 # Intermediate table
 class UserRole(ObjectModel):
-    user_id: int = int_column()
-    role_id: int = int_column()
-    assigned_at: datetime = datetime_column(default=datetime.now)
+    user_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
+    role_id: Column[int] = column(type="integer", foreign_key=ForeignKey("roles.id"))
+    assigned_at: Column[datetime] = column(type="datetime", default_factory=datetime.now)
 
-User.roles = relationship("Role", through="UserRole")
+User.roles = relationship("Role", secondary="user_roles")
 
 # Relationship operations
 user = await User.objects.get(User.id == 1)
-roles = await user.roles.all()  # Get user roles
+roles = await user.roles.fetch()  # Get user roles
 ```
 
 ## Module Architecture
@@ -125,13 +136,15 @@ roles = await user.roles.all()  # Get user roles
 
 **Relationship Definition Layer**
 
-- **relationship()**: Unified relationship definition function, returns Column descriptor
+- **relationship()**: Unified relationship definition function, returns Related container
+- **Related**: Container wrapping RelationshipProperty for type hints
 - **RelationshipDescriptor**: Relationship descriptor, handles relationship field access and proxying
 - **RelationshipProperty**: Relationship property definition, stores relationship metadata
 
 **Lazy Loading Layer**
 
-- **RelationFieldProxy**: Relationship field proxy, supports lazy loading and caching
+- **RelatedObject**: Proxy for single relationship fields (ForeignKey, OneToOne)
+- **RelatedCollection**: Proxy for collection relationships (OneToMany, ManyToMany)
 - **FieldCacheMixin**: Integrated in ObjectModel, automatically handles proxy objects
 
 **Query Integration Layer**
@@ -142,8 +155,8 @@ roles = await user.roles.all()  # Get user roles
 
 ### Design Philosophy
 
-**Unified Integration**: relationship() function unified with Column descriptors, simplifying API design
-**Lazy Loading**: RelationFieldProxy provides transparent lazy loading and caching mechanism
+**Unified Integration**: relationship() function returns Related container, ModelProcessor extracts descriptor
+**Lazy Loading**: RelatedObject and RelatedCollection provide transparent lazy loading and caching
 **Flexible Prefetch**: prefetch_related supports hybrid usage of strings and custom QuerySets
 **Concurrent Optimization**: QueryExecutor concurrently executes multiple prefetch queries for improved performance
 **Automatic Association**: Automatically groups and associates prefetch results based on foreign key relationships
@@ -164,7 +177,7 @@ roles = await user.roles.all()  # Get user roles
 relationship(target_model, foreign_keys=None, back_populates=None)
 
 # Many-to-many relationship
-relationship(target_model, through=None, back_populates=None)
+relationship(target_model, secondary=None, back_populates=None)
 
 # One-to-one relationship
 relationship(target_model, foreign_keys=None, unique=True)
@@ -187,8 +200,11 @@ relationship(target_model, foreign_keys=None, unique=True)
 
 ```python
 # Relationship access
-instance.relation_name  # Get relationship object
-await instance.relation_name.all()  # Get relationship list
+instance.relation_name  # Get relationship proxy (RelatedObject or RelatedCollection)
+await instance.relation_name.fetch()  # Fetch related data
+
+# Collection operations
+await instance.relation_name.count()  # Count related objects
 
 # Relationship modification
 await instance.relation_name.add(related_instance)
@@ -202,14 +218,19 @@ await instance.relation_name.clear()
 
 ```python
 # Basic relationship definition
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, StringColumn, column
+from sqlobjects.fields.relations import relationship, Related
+from sqlalchemy import ForeignKey
+
 class User(ObjectModel):
     name: Column[str] = StringColumn(length=50)
 
 class Post(ObjectModel):
     title: Column[str] = StringColumn(length=100)
-    author_id: Column[int] = IntegerColumn()
+    author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
   
-    author = relationship("User", foreign_keys="author_id")
+    author: Related[User] = relationship("User", foreign_keys="author_id")
 
 # Relationship queries
 posts = await Post.objects.select_related("author").all()
@@ -217,9 +238,9 @@ for post in posts:
     print(f"{post.title} by {post.author.name}")
 
 # Reverse relationship
-User.posts = relationship("Post", foreign_keys="Post.author_id")
+User.posts: Related[list[Post]] = relationship("Post", foreign_keys="Post.author_id")
 user = await User.objects.get(User.id == 1)
-user_posts = await user.posts.all()
+user_posts = await user.posts.fetch()
 ```
 
 ### Advanced Usage
@@ -234,19 +255,19 @@ class Category(ObjectModel):
 
 class Post(ObjectModel):
     title: Column[str] = StringColumn(length=100)
-    author_id: Column[int] = IntegerColumn()
-    category_id: Column[int] = IntegerColumn()
+    author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
+    category_id: Column[int] = column(type="integer", foreign_key=ForeignKey("categories.id"))
   
-    author = relationship("User", foreign_keys="author_id")
-    category = relationship("Category", foreign_keys="category_id")
+    author: Related[User] = relationship("User", foreign_keys="author_id")
+    category: Related[Category] = relationship("Category", foreign_keys="category_id")
 
 class Comment(ObjectModel):
     content: Column[str] = StringColumn(length=500)
-    post_id: Column[int] = IntegerColumn()
-    user_id: Column[int] = IntegerColumn()
+    post_id: Column[int] = column(type="integer", foreign_key=ForeignKey("posts.id"))
+    user_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
   
-    post = relationship("Post", foreign_keys="post_id")
-    user = relationship("User", foreign_keys="user_id")
+    post: Related[Post] = relationship("Post", foreign_keys="post_id")
+    user: Related[User] = relationship("User", foreign_keys="user_id")
 
 # Multi-level relationship preloading
 comments = await Comment.objects.select_related(
@@ -280,13 +301,13 @@ class Role(ObjectModel):
     permissions: Column[list[str]] = JsonColumn(default=list)
 
 class UserRole(ObjectModel):
-    user_id: Column[int] = IntegerColumn()
-    role_id: Column[int] = IntegerColumn()
-    assigned_at: Column[datetime] = DateTimeColumn(default=datetime.now)
-    assigned_by: Column[int] = IntegerColumn()
+    user_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
+    role_id: Column[int] = column(type="integer", foreign_key=ForeignKey("roles.id"))
+    assigned_at: Column[datetime] = column(type="datetime", default_factory=datetime.now)
+    assigned_by: Column[int] = column(type="integer")
 
-User.roles = relationship("Role", through="UserRole")
-Role.users = relationship("User", through="UserRole")
+User.roles: Related[list[Role]] = relationship("Role", secondary="user_roles")
+Role.users: Related[list[User]] = relationship("User", secondary="user_roles")
 
 # Many-to-many operations
 user = await User.objects.get(User.id == 1)
@@ -302,7 +323,7 @@ await UserRole.objects.create(
 # Query many-to-many relationships
 users_with_roles = await User.objects.prefetch_related("roles").all()
 for user in users_with_roles:
-    roles = await user.roles.all()
+    roles = await user.roles.fetch()
     print(f"{user.name}: {[role.name for role in roles]}")
 
 # Complex relationship queries

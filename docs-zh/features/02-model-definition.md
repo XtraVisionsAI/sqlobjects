@@ -6,7 +6,7 @@ SQLObjects 提供 Django 风格的模型定义系统，具有自动表生成、�
 
 ## 快速开始
 
-### 基础模型
+### 基本模型
 
 ```python
 from sqlobjects.model import ObjectModel
@@ -23,15 +23,15 @@ class User(ObjectModel):
 
 ```python
 # ModelProcessor 元类自动处理：
-# - 表名："users"（复数形式的蛇形命名法）
+# - 表名："users"（复数形式的 snake_case）
 # - 对象管理器：User.objects = ObjectsDescriptor(User)
 # - 字段缓存：_cached_field_info 用于性能优化
-# - 主键：如果未指定则自动生成 id 字段
+# - 主键：如果未指定，自动生成 id 字段
 
 user = await User.objects.create(username="john", email="john@example.com")
 print(user.id)  # 使用 identity() 或 primary_key=True 时自动生成
 
-# ObjectsDescriptor 每次访问时提供新的 ObjectsManager 实例
+# ObjectsDescriptor 在每次访问时提供新的 ObjectsManager 实例
 manager1 = User.objects  # 新的 ObjectsManager 实例
 manager2 = User.objects  # 另一个新的 ObjectsManager 实例
 ```
@@ -41,7 +41,7 @@ manager2 = User.objects  # 另一个新的 ObjectsManager 实例
 ### 字符串字段
 
 ```python
-# 基础字符串字段
+# 基本字符串字段
 name: Column[str] = StringColumn(length=100)
 
 # 文本字段（无长度限制）
@@ -62,7 +62,7 @@ id: Column[int] = IntegerColumn(primary_key=True)
 count: Column[int] = IntegerColumn(type="bigint")
 rating: Column[int] = IntegerColumn(type="smallint")
 
-# 小数精度
+# 十进制精度
 price: Column[Decimal] = NumericColumn(precision=10, scale=2)
 percentage: Column[float] = FloatColumn()
 ```
@@ -72,7 +72,7 @@ percentage: Column[float] = FloatColumn()
 ```python
 from datetime import datetime, date, time
 
-# 带自动时间戳的日期时间
+# DateTime 自动时间戳
 created_at: Column[datetime] = DateTimeColumn(default_factory=datetime.now)
 updated_at: Column[datetime] = DateTimeColumn(onupdate=datetime.now)
 
@@ -109,8 +109,9 @@ external_id: Column[str] = UuidColumn(default_factory=uuid.uuid4)
 file_data: Column[bytes] = BinaryColumn(length=1024)
 
 # 外键关系
-author_id: Column[int] = foreign_key("users.id")
-category_id: Column[int] = foreign_key("categories.id", nullable=False, index=True)
+from sqlalchemy import ForeignKey
+author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
+category_id: Column[int] = column(type="integer", foreign_key=ForeignKey("categories.id"), nullable=False, index=True)
 ```
 
 ## 字段参数
@@ -119,7 +120,7 @@ category_id: Column[int] = foreign_key("categories.id", nullable=False, index=Tr
 
 ```python
 # 可空性和默认值
-username: Column[str] = StringColumn(nullable=False)  # 必填
+username: Column[str] = StringColumn(nullable=False)  # 必需
 nickname: Column[str] = StringColumn(nullable=True)   # 可选
 is_active: Column[bool] = BooleanColumn(default=True) # 默认值
 
@@ -135,26 +136,26 @@ code: Column[str] = StringColumn(index=True)          # 数据库索引
 class User(ObjectModel):
     # 常规字段获得默认值：init=True, repr=True, compare=False
     username: Column[str] = column(type="string")  # 自动应用默认值
-  
+
     # 主键字段自动设置：init=False, repr=True, compare=True
     id: Column[int] = identity()  # 自动检测为主键
-  
+
     # 自增字段自动设置：init=False
     sequence_id: Column[int] = column(type="integer", autoincrement=True)
-  
+
     # 服务器默认字段自动设置：init=False
     created_at: Column[datetime] = column(type="datetime", server_default=func.now())
-  
+
     # 手动覆盖默认值
     internal_field: Column[str] = column(type="string", init=False, repr=False)
     password: Column[str] = column(type="string", repr=False)  # 隐藏敏感信息
-    version: Column[int] = column(type="integer", compare=True)  # 参与比较
+    version: Column[int] = column(type="integer", compare=True)  # 包含在比较中
 
 # from_dict 方法自动处理 init 参数
 user_data = {"id": 1, "username": "alice", "created_at": datetime.now()}
 user = User.from_dict(user_data)  # 自动分离 init=True/False 字段
 
-# ObjectsManager 创建方法使用 from_dict 以保持一致性
+# ObjectsManager 创建方法使用 from_dict 保持一致性
 user = await User.objects.create(
     id=1,  # init=False 字段通过 setattr 处理
     username="bob",  # init=True 字段通过构造函数处理
@@ -170,20 +171,20 @@ bio: Column[str] = column(
     type="text",
     deferred=True,  # 延迟加载直到访问
     deferred_group="details",  # 分组延迟字段
-    deferred_raiseload=True  # 如果在延迟时访问则抛出错误
+    deferred_raiseload=True  # 访问延迟字段时抛出错误
 )
 
-# 历史追踪
+# 历史跟踪
 important_field: Column[str] = column(
     type="string",
-    active_history=True  # 追踪字段值变更
+    active_history=True  # 跟踪字段值变化
 )
 
 # 内存优化
 profile_image: Column[bytes] = column(
     type="binary",
     deferred=True,
-    init=False,      # 排除在构造函数外
+    init=False,      # 从构造函数中排除
     repr=False       # 在字符串表示中隐藏
 )
 ```
@@ -214,7 +215,7 @@ created_at: Column[datetime] = column(
     validators=[validate_datetime()]  # 字段级验证
 )
 
-# 仅插入时默认值
+# 仅插入默认值
 status: Column[str] = column(
     type="string",
     insert_default="pending"  # 仅在 INSERT 操作时的默认值
@@ -227,68 +228,73 @@ optional_param: Column[str] = column(type="string", kw_only=True)
 ## 外键字段
 
 ```python
-from sqlobjects.fields import foreign_key, ForeignKey, column
+from sqlobjects.fields import column
+from sqlalchemy import ForeignKey
 
 class Post(ObjectModel):
     title: Column[str] = StringColumn(length=200)
-  
-    # 方法1：使用 foreign_key() 便利函数（推荐）
-    author_id: Column[int] = foreign_key("users.id")
-    category_id: Column[int] = foreign_key("categories.id", nullable=False, index=True)
-  
-    # 方法2：使用带 ForeignKey 参数的 column()
-    tag_id: Column[int] = column(
+
+    # 使用 column() 和 ForeignKey 参数
+    author_id: Column[int] = column(
         type="integer",
-        foreign_key=ForeignKey("tags.id"),
-        nullable=True
+        foreign_key=ForeignKey("users.id")
     )
-  
-    # 带自定义类型的外键
-    uuid_ref: Column[str] = foreign_key("external_table.uuid", type="string")
+    
+    category_id: Column[int] = column(
+        type="integer",
+        foreign_key=ForeignKey("categories.id"),
+        nullable=False,
+        index=True
+    )
+
+    # 自定义类型的外键
+    uuid_ref: Column[str] = column(
+        type="string",
+        foreign_key=ForeignKey("external_table.uuid")
+    )
 ```
 
 ## 字段快捷方式
 
-### 身份标识和时间戳
+### Identity 和时间戳
 
 ```python
 from sqlobjects.model import ObjectModel
-from sqlobjects.fields import Column, StringColumn, identity, column
+from sqlobjects.fields import Column, StringColumn, IdentityColumn, column
+from sqlalchemy import ForeignKey
 from datetime import datetime
 
 class Post(ObjectModel):
-    id: Column[int] = identity()  # 自增主键
+    id: Column[int] = IdentityColumn()  # 自增主键
     title: Column[str] = StringColumn(length=200)
-    author_id: Column[int] = column(type="integer", nullable=False)
+    author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"), nullable=False)
     created_at: Column[datetime] = column(type="datetime", default_factory=datetime.now)
     updated_at: Column[datetime] = column(type="datetime", onupdate=datetime.now)
 ```
 
-### 身份标识和计算字段
+### Identity 和 Computed 字段
 
 ```python
 from sqlobjects.model import ObjectModel
-from sqlobjects.fields import Column, NumericColumn, computed, identity
+from sqlobjects.fields import Column, NumericColumn, IdentityColumn, ComputedColumn
 from decimal import Decimal
 
 class Order(ObjectModel):
-    # 带自定义配置的身份列
-    id: Column[int] = identity(start=1000, increment=1)
-    order_number: Column[int] = identity(start=1000, increment=1, cache=10)
-  
+    # 自定义配置的 Identity 列
+    id: Column[int] = IdentityColumn(start=1000, increment=1)
+    order_number: Column[int] = IdentityColumn(start=1000, increment=1, cache=10)
+
     subtotal: Column[Decimal] = NumericColumn(precision=10, scale=2)
     tax_rate: Column[Decimal] = NumericColumn(precision=5, scale=4)
-  
-    # 计算列
-    total: Column[Decimal] = computed(
+
+    # Computed 列
+    total: Column[Decimal] = ComputedColumn(
         "subtotal * (1 + tax_rate)", 
-        column_type="numeric", 
-        precision=10, 
-        scale=2
+        column_type="numeric"
     )
-  
-    # 持久化计算列（存储在数据库中）
-    total_cached: Column[Decimal] = computed(
+
+    # 持久化的 computed 列（存储在数据库中）
+    total_cached: Column[Decimal] = ComputedColumn(
         "subtotal * (1 + tax_rate)",
         persisted=True,
         column_type="numeric"
@@ -302,7 +308,7 @@ class Order(ObjectModel):
 ```python
 class User(ObjectModel):
     # ... 字段 ...
-  
+
     class Config:
         table_name = "app_users"  # 覆盖默认表名
         ordering = ["-created_at"]  # 默认排序
@@ -322,7 +328,7 @@ class Product(ObjectModel):
     name: Column[str] = StringColumn(length=100)
     sku: Column[str] = StringColumn(length=50)
     price: Column[Decimal] = NumericColumn(precision=10, scale=2)
-  
+
     class Config:
         indexes = [
             index("idx_sku", "sku", unique=True),
@@ -367,14 +373,14 @@ from sqlobjects.exceptions import ValidationError
 
 class User(ObjectModel):
     # ... 字段 ...
-  
+
     def validate(self):
         """自定义模型级验证"""
         if self.age and self.age < 18 and self.is_admin:
-            raise ValidationError("18岁以下的用户不能成为管理员")
-      
+            raise ValidationError("Users under 18 cannot be administrators")
+    
         if self.username and self.username.lower() in ['admin', 'root']:
-            raise ValidationError("不允许使用保留用户名")
+            raise ValidationError("Reserved usernames are not allowed")
 ```
 
 ### 自定义验证
@@ -388,11 +394,11 @@ from sqlobjects.exceptions import ValidationError
 def validate_file_extension(value):
     """自定义文件扩展名验证器"""
     if not value.lower().endswith(('.pdf', '.doc', '.docx')):
-        raise ValidationError("只允许 PDF 和 Word 文档")
+        raise ValidationError("Only PDF and Word documents are allowed")
 
 class Document(ObjectModel):
     title: Column[str] = column(type="string", length=200)
-  
+
     # 自定义验证
     filename: Column[str] = column(
         type="string",
@@ -401,12 +407,12 @@ class Document(ObjectModel):
             validate_file_extension
         ]
     )
-  
+
     # 模式验证
     document_code: Column[str] = column(
         type="string",
         validators=[
-            validate_regex(r'^DOC-\d{4}-\d{2}$', "格式：DOC-YYYY-MM")
+            validate_regex(r'^DOC-\d{4}-\d{2}$', "Format: DOC-YYYY-MM")
         ]
     )
 ```
@@ -416,7 +422,7 @@ class Document(ObjectModel):
 ### 实例操作
 
 ```python
-# 创建并保存
+# 创建和保存
 user = User(username="alice", email="alice@example.com")
 await user.save()
 
@@ -437,7 +443,7 @@ await user.refresh(fields=["username", "email"])  # 选择性刷新
 ```python
 # to_dict 方法 - 支持延迟字段和安全访问
 user_dict = user.to_dict()  # 所有已加载字段
-user_dict = user.to_dict(include=["id", "username"])  # 指定字段
+user_dict = user.to_dict(include=["id", "username"])  # 特定字段
 user_dict = user.to_dict(exclude=["password_hash"])  # 排除敏感字段
 user_dict = user.to_dict(include_deferred=True)  # 包含延迟字段
 user_dict = user.to_dict(safe_access=False)  # 不安全访问可能抛出异常
@@ -446,16 +452,16 @@ user_dict = user.to_dict(safe_access=False)  # 不安全访问可能抛出异常
 user_data = {"username": "bob", "email": "bob@example.com", "id": 1}
 user = User.from_dict(user_data, validate=True)
 
-# from_dict 内部处理流程：
+# from_dict 内部过程：
 # 1. 过滤无效字段（不在 table.columns 中）
 # 2. 应用 default_factory 和 column.default
-# 3. 基于 field.get_codegen_params() 分离 init=True/False 字段
+# 3. 根据 field.get_codegen_params() 分离 init=True/False 字段
 # 4. 使用 init=True 字段创建实例
 # 5. 通过 setattr 设置 init=False 字段
-# 6. 清除脏字段追踪
+# 6. 清除脏字段跟踪
 # 7. 执行验证（如果 validate=True）
 
-# ObjectsManager 集成 - 所有创建方法都使用 from_dict
+# ObjectsManager 集成 - 所有创建方法使用 from_dict
 user = await User.objects.create(
     id=1,  # init=False 字段自动处理
     username="alice",  # init=True 字段
@@ -484,7 +490,7 @@ is_active: Column[bool] = BooleanColumn(default=True)
 user_count: Column[int] = IntegerColumn(default=0)
 
 # 避免缩写
-# 好的：description, category_id, is_published
+# 好：description, category_id, is_published
 # 避免：desc, cat_id, pub
 ```
 
@@ -507,8 +513,8 @@ uuid: Column[str] = UuidColumn(default_factory=uuid.uuid4)
 class User(ObjectModel):
     email: Column[str] = column(type="string", validators=[validate_email()])  # 字段级
     age: Column[int] = column(type="integer", validators=[validate_range(0, 150)])
-  
+
     def validate(self):  # 模型级
         if self.email and User.objects.filter(User.email == self.email).exists():
-            raise ValidationError("邮箱已存在")
+            raise ValidationError("Email already exists")
 ```

@@ -20,17 +20,74 @@ comments = await Comment.objects.select_related("post__author").all()
 ### prefetch_related for Reverse Relationships
 **Use separate queries for one-to-many and many-to-many relationships**
 ```python
-# Reverse foreign key relationships - both syntaxes supported
+# Basic prefetch - string and field expression syntax
 users = await User.objects.prefetch_related("posts").all()       # String syntax
-users = await User.objects.prefetch_related(User.posts).all()    # Expression syntax ✅
+users = await User.objects.prefetch_related(User.posts).all()    # Expression syntax
 
 # Many-to-many relationships
 posts = await Post.objects.prefetch_related("tags").all()
-posts = await Post.objects.prefetch_related(Post.tags).all()     # Expression syntax ✅
+posts = await Post.objects.prefetch_related(Post.tags).all()
 
 # Multiple prefetch relationships
 users = await User.objects.prefetch_related("posts", "comments", "groups").all()
-users = await User.objects.prefetch_related(User.posts, User.comments, User.groups).all()  # Expression syntax ✅
+users = await User.objects.prefetch_related(User.posts, User.comments, User.groups).all()
+```
+
+### prefetch_related Advanced Configuration
+**Custom QuerySet for filtering and ordering prefetched data**
+```python
+# Advanced prefetch with custom QuerySet
+users = await User.objects.prefetch_related(
+    published_posts=Post.objects.filter(Post.is_published == True)
+                               .order_by('-created_at')
+                               .limit(5)
+).all()
+
+# Access prefetched data
+for user in users:
+    # published_posts contains filtered and ordered results
+    recent_posts = await user.published_posts.fetch()
+
+# Mixed usage: simple and advanced prefetch
+users = await User.objects.prefetch_related(
+    User.profile,  # Simple prefetch using field expression
+    recent_posts=Post.objects.filter(
+        Post.created_at >= datetime.now() - timedelta(days=30)
+    ).order_by('-created_at')  # Advanced prefetch with custom QuerySet
+).all()
+
+# Multiple advanced prefetch configurations
+users = await User.objects.prefetch_related(
+    active_posts=Post.objects.filter(Post.status == "active"),
+    draft_posts=Post.objects.filter(Post.status == "draft"),
+    recent_comments=Comment.objects.order_by('-created_at').limit(10)
+).all()
+```
+
+**Implementation Details**:
+```python
+def prefetch_related(self, *fields, **queryset_configs) -> "QuerySet[T]":
+    """Separate query preload with advanced configuration.
+    
+    Args:
+        *fields: Simple prefetch field names (strings or field expressions)
+        **queryset_configs: Advanced prefetch with custom QuerySets
+    
+    Examples:
+        # Simple prefetch
+        .prefetch_related('posts', 'comments')
+        .prefetch_related(User.posts, User.comments)
+        
+        # Advanced prefetch
+        .prefetch_related(
+            recent_posts=Post.objects.filter(...).order_by(...)
+        )
+    """
+    relationship_paths = [self._get_relationship_path(f) for f in fields]
+    new_builder = self._builder.add_prefetch_relationships(*relationship_paths)
+    if queryset_configs:
+        new_builder = new_builder.add_prefetch_configs(**queryset_configs)
+    return self._create_new_queryset(new_builder)
 ```
 
 ### Combined Loading Strategies
@@ -48,34 +105,52 @@ for post in posts:
 
 ## Cache Control for Relationship Queries
 
-### Cache Strategy for Relationship Data
-**Balance between performance and data freshness**
+### Relationship Query Optimization
+**Optimize relationship loading with field selection and filtering**
 ```python
-# Optimize relationship queries with field selection
-users = await User.objects.select_related("department").all()
-
-# Use field selection for dynamic relationship data
-live_posts = await Post.objects.select_related("author").only("id", "title", "author__username").filter(
-    Post.created_at > datetime.now() - timedelta(minutes=5)
+# Optimize with field selection
+users = await User.objects.select_related("department").only(
+    "id", "username", "department__name"
 ).all()
 
-# Cache prefetch operations for stable data
-users = await User.objects.prefetch_related("roles").all()
+# Defer heavy fields in relationships
+posts = await Post.objects.select_related("author").defer(
+    "content",           # Heavy field from main model
+    "author__bio"        # Heavy field from related model
+).all()
 
-# Optimize user-specific relationship data with field selection
-user_posts = await Post.objects.defer("content").filter(
-    Post.author_id == current_user.id
-).prefetch_related("comments").all()
+# Filter prefetched relationships
+users = await User.objects.prefetch_related(
+    recent_posts=Post.objects.filter(
+        Post.created_at >= datetime.now() - timedelta(days=7)
+    ).order_by('-created_at').limit(10)
+).all()
+
+# Combine select_related and prefetch_related
+posts = await Post.objects.select_related("author").prefetch_related(
+    active_comments=Comment.objects.filter(Comment.is_active == True)
+).all()
 ```
 
-### Cache Performance Monitoring
-**Basic cache statistics available**
+### Field Cache and Metadata
+**Field metadata caching at class level**
 ```python
-# Available: Field selection control
-result = await queryset.only("id", "name").all()  # Load only needed fields
+# Field cache provides categorized field information
+field_cache = User._get_field_cache()
+# Returns: {
+#     "deferred_fields": set(),
+#     "relationship_fields": set(),
+#     "regular_fields": set()
+# }
 
-# Field cache information available
-field_cache = Model._get_field_cache()  # Field metadata caching
+# Field selection for performance
+users = await User.objects.only("id", "username", "email").all()
+users = await User.objects.defer("bio", "profile_image").all()
+
+# Check field categorization
+if "bio" in field_cache.get("deferred_fields", set()):
+    # Field is configured for deferred loading
+    pass
 ```
 
 ## Performance Optimization Architecture

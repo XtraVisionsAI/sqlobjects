@@ -1,63 +1,70 @@
-# SQLObjects 扩展功能设计文档
+# SQLObjects 扩展系统设计文档
 
 ## 概述
 
-SQLObjects 扩展功能通过 ObjectModel 内置集成，提供信号系统、智能操作检测、性能优化和代理系统等增强功能。通过 Mixin 组合模式和统一状态管理，为核心功能提供无缝集成的扩展能力。
+SQLObjects 扩展系统通过与 ObjectModel 的内置集成提供增强功能，包括信号系统、智能操作检测、性能优化和代理系统。通过 Mixin 组合模式和统一状态管理，为核心功能提供无缝集成能力。
 
-## 核心特性
+## 核心功能
 
 ### 1. 内置信号系统
 
-ObjectModel 内置 SignalMixin，提供完整的模型生命周期信号和智能操作检测：
+ObjectModel 默认包含 SignalMixin，通过方法名称约定发现提供完整的模型生命周期信号：
 
 ```python
-from sqlobjects.model import ObjectModel  # 已内置 SignalMixin
+from sqlobjects.model import ObjectModel  # SignalMixin 已内置
 from sqlobjects.fields import Column, StringColumn
+from sqlobjects.signals import SignalContext, Operation
 from datetime import datetime
 
-class User(ObjectModel):  # 自动具备信号功能
+class User(ObjectModel):  # 自动具有信号功能
     name: Column[str] = StringColumn(length=50)
-    
-    # 实例级信号 - 自动集成
-    async def before_save(self, context):
-        # context.actual_operation 显示实际操作类型
+  
+    # 实例级信号 - 通过方法名称约定发现
+    async def before_save(self, context: SignalContext):
+        # context.actual_operation 显示检测到的操作（CREATE 或 UPDATE）
         self.updated_at = datetime.now()
-    
-    async def before_create(self, context):
+  
+    async def before_create(self, context: SignalContext):
         self.created_at = datetime.now()
-    
-    async def after_create(self, context):
+  
+    async def after_create(self, context: SignalContext):
         await self.send_welcome_email()
-    
+  
     # 类级批量信号
     @classmethod
-    async def before_bulk_create(cls, context):
+    async def before_bulk_create(cls, context: SignalContext):
         print(f"Creating {context.affected_count} users")
 
-# @emit_signals 装饰器自动处理信号发射
+# 信号处理器发现机制：
+# - 使用 getattr() 按名称查找方法（before_save、after_create 等）
+# - @emit_signals 装饰器调用 _determine_save_operation() 检测 CREATE/UPDATE
+# - 为 SAVE 操作发射双重信号（SAVE 和 CREATE/UPDATE）
+
 user = User(name="John")  # 无主键值
-await user.save()  # 自动检测 CREATE，发射双信号
+await user.save()  # _determine_save_operation() 返回 CREATE
+# 发射：before_save → before_create → after_save → after_create
 
 user.name = "John Updated"
-await user.save()  # 自动检测 UPDATE，只更新脏字段
+await user.save()  # _determine_save_operation() 返回 UPDATE
+# 发射：before_save → before_update → after_save → after_update
 ```
 
 ### 2. 异常处理
 
-层次化的异常系统，提供详细的错误信息和统一的错误处理：
+分层异常系统提供详细的错误信息和统一的错误处理：
 
 ```python
 # 异常层次结构
 try:
     user = await User.objects.get(User.id == 999)
 except DoesNotExist:
-    print("用户不存在")
+    print("User does not exist")
 except ValidationError as e:
     if e.is_multiple:
         for field, errors in e.field_errors.items():
             print(f"{field}: {', '.join(errors)}")
 except SQLObjectsError:
-    print("SQLObjects 操作错误")
+    print("SQLObjects operation error")
 
 # 验证错误收集
 collector = ValidationErrorCollector()
@@ -68,12 +75,12 @@ collector.raise_if_errors()
 
 ### 3. 集成性能优化
 
-通过批量操作优化和 FieldCacheMixin 代理系统提供性能增强：
+通过批量操作优化和 FieldCacheMixin 代理系统提升性能：
 
 ```python
 # QueryCache FIFO 缓存 - 自动管理缓存大小
-users = await User.objects.filter(User.is_active == True).all()  # 缓存 miss
-users = await User.objects.filter(User.is_active == True).all()  # 缓存 hit
+users = await User.objects.filter(User.is_active == True).all()  # 缓存未命中
+users = await User.objects.filter(User.is_active == True).all()  # 缓存命中
 
 # 缓存统计和控制
 stats = QuerySet.get_cache_stats()
@@ -87,7 +94,7 @@ affected = await User.objects.bulk_update(update_data, batch_size=500)
 # FieldCacheMixin 代理系统 - 自动处理延迟字段
 user = await User.objects.only("name").first()  # bio 字段延迟
 # user.bio 返回 DeferredFieldProxy
-# await user.bio.fetch() 才真正加载
+# await user.bio.fetch() 实际加载数据
 
 # 关系代理 - RelationFieldProxy
 # user.posts 返回 RelationFieldProxy
@@ -96,7 +103,7 @@ user = await User.objects.only("name").first()  # bio 字段延迟
 
 ### 4. 工具函数
 
-实用的工具函数和辅助类，简化常见操作：
+简化常见操作的实用工具函数和辅助类：
 
 ```python
 # 命名转换工具
@@ -117,39 +124,50 @@ print(f"Field categories: {list(field_stats.keys())}")
 ### 核心组件
 
 **模型集成层**
-- **ObjectModel**: 组合所有 Mixin 的完整模型基类，内置所有扩展功能
+
+- **ObjectModel**: 完整的模型基类，组合所有 Mixins，内置扩展功能
 - **ModelMixin**: 组合 FieldCacheMixin + SignalMixin
 
 **信号系统层**
-- **SignalMixin**: 信号混入类，内置在 ObjectModel 中
+
+- **SignalMixin**: 信号 Mixin 类，内置到 ObjectModel
 - **@emit_signals**: 信号装饰器，自动处理信号发射和操作检测
-- **Operation**: 操作类型枚举，支持 SAVE/DELETE 等
+- **_determine_save_operation()**: 检查 _has_primary_key_values() 以检测 CREATE vs UPDATE 的函数
+- **_emit_signal()**: 使用 getattr() 按方法名称发现处理器的函数
+- **Operation**: 操作类型枚举，支持 SAVE/CREATE/UPDATE/DELETE
+- **SignalContext**: 包含 operation、session、instance 和 actual_operation 的数据类
 
 **代理系统层**
-- **DeferredFieldProxy**: 延迟字段代理，支持懒加载和缓存
-- **RelationFieldProxy**: 关系字段代理，支持关系懒加载
-- **FieldCacheMixin**: 集成字段缓存和代理系统到 __getattribute__ 中
+
+- **DeferredObject**: 延迟字段代理，支持延迟加载和缓存
+- **RelatedObject**: 单个关系代理（ForeignKey、OneToOne）
+- **RelatedCollection**: 集合关系代理（OneToMany、ManyToMany）
+- **FieldCacheMixin**: 将字段缓存和代理系统集成到 __getattribute__
 
 **状态管理层**
+
 - **StateManager**: 统一实例状态管理，支持多种状态类型
 - **HistoryTrackingMixin**: 历史跟踪和脏字段检测
 
 **性能工具层**
-- **FieldCache**: 字段元数据缓存机制，集成在模型类中
+
+- **FieldCache**: 字段元数据缓存机制，集成到模型类
 - **ValidationError**: 分层异常系统，支持单字段和多字段错误
 
 ### 设计理念
 
-**内置集成**: 所有扩展功能内置在 ObjectModel 中，无需显式配置
+**内置集成**: 所有扩展功能内置到 ObjectModel，无需显式配置
 **Mixin 组合**: 通过 Mixin 组合避免复杂继承，提高可维护性
-**统一状态**: StateManager 统一管理实例状态，支持多种状态类型
+**统一状态**: StateManager 统一实例状态管理，支持多种状态类型
 **智能代理**: 通过 __getattribute__ 集成代理系统，提供透明的延迟加载
-**装饰器驱动**: @emit_signals 装饰器自动处理信号发射和操作检测
-**性能内置**: 字段缓存、批量操作和代理系统内置在核心组件中
+**方法名称发现**: 信号处理器通过方法名称约定使用 getattr() 发现
+**操作检测**: _determine_save_operation() 检查 _has_primary_key_values() 以检测 CREATE/UPDATE
+**双重信号发射**: SAVE 操作发射 SAVE 和特定的 CREATE/UPDATE 信号
+**内置性能**: 字段缓存、批量操作和代理系统内置到核心组件
 
 ### 与其他模块的集成
 
-**核心架构模块**: 集成信号系统到模型生命周期
+**核心架构模块**: 将信号系统集成到模型生命周期
 **数据操作模块**: 提供批量操作优化和字段缓存
 **字段系统模块**: 集成验证错误处理和异常系统
 
@@ -158,26 +176,29 @@ print(f"Field categories: {list(field_stats.keys())}")
 ### 信号系统
 
 ```python
-# 信号功能（ObjectModel 已内置）
+# 信号功能（内置到 ObjectModel）
+from sqlobjects.model import ObjectModel
+from sqlobjects.signals import SignalContext, Operation, emit_signals
+
 class Model(ObjectModel):
-    # 实例级信号
-    async def before_save(self, context): pass
-    async def after_save(self, context): pass
-    async def before_create(self, context): pass
-    async def after_create(self, context): pass
-    async def before_update(self, context): pass
-    async def after_update(self, context): pass
-    async def before_delete(self, context): pass
-    async def after_delete(self, context): pass
-    
+    # 实例级信号 - 通过方法名称发现
+    async def before_save(self, context: SignalContext): pass
+    async def after_save(self, context: SignalContext): pass
+    async def before_create(self, context: SignalContext): pass
+    async def after_create(self, context: SignalContext): pass
+    async def before_update(self, context: SignalContext): pass
+    async def after_update(self, context: SignalContext): pass
+    async def before_delete(self, context: SignalContext): pass
+    async def after_delete(self, context: SignalContext): pass
+  
     # 批量操作信号
     @classmethod
-    async def before_bulk_create(cls, context): pass
+    async def before_bulk_create(cls, context: SignalContext): pass
     @classmethod
-    async def after_bulk_create(cls, context): pass
+    async def after_bulk_create(cls, context: SignalContext): pass
 
-# 信号装饰器
-@emit_signals(Operation.SAVE)
+# 带操作检测的信号装饰器
+@emit_signals(Operation.SAVE)  # 调用 _determine_save_operation() 获取实际操作
 async def save(self): pass
 ```
 
@@ -235,22 +256,24 @@ get_model_metadata(model_class)
 
 ## 使用指南
 
-### 基础用法
+### 基础使用
 
 ```python
-# 基础信号使用
+# 基本信号使用
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, StringColumn
+from sqlobjects.signals import SignalContext
+from datetime import datetime
 
-class User(ObjectModel):  # 已内置信号功能
+class User(ObjectModel):  # 信号功能已内置
     name: Column[str] = StringColumn(length=50)
     email: Column[str] = StringColumn(length=100)
-    
-    async def before_save(self, context):
+  
+    async def before_save(self, context: SignalContext):
         # 保存前处理
         self.updated_at = datetime.now()
-    
-    async def after_create(self, context):
+  
+    async def after_create(self, context: SignalContext):
         # 创建后处理
         await self.send_welcome_email()
 
@@ -270,29 +293,30 @@ table_name = to_snake_case("UserProfile")  # "user_profile"
 model_name = to_camel_case(table_name)     # "UserProfile"
 ```
 
-### 高级用法
+### 高级使用
 
 ```python
 # 复杂信号处理
 from sqlobjects.model import ObjectModel
-from sqlobjects.signals import Operation
+from sqlobjects.signals import SignalContext, Operation
 from datetime import datetime
 
 class User(ObjectModel):
-    async def before_save(self, context):
+    async def before_save(self, context: SignalContext):
         # 通用保存逻辑
+        # context.actual_operation 由 _determine_save_operation() 设置
         if context.actual_operation == Operation.CREATE:
             self.created_at = datetime.now()
         self.updated_at = datetime.now()
-    
-    async def after_create(self, context):
+  
+    async def after_create(self, context: SignalContext):
         # 创建后异步任务
         await self.create_user_profile()
         await self.send_welcome_email()
         await self.log_user_creation(context.session)
-    
+  
     @classmethod
-    async def before_bulk_create(cls, context):
+    async def before_bulk_create(cls, context: SignalContext):
         # 批量创建前处理
         print(f"Creating {context.affected_count} users")
 
@@ -300,16 +324,16 @@ class User(ObjectModel):
 class UserValidator:
     def __init__(self):
         self.collector = ValidationErrorCollector()
-    
+  
     def validate_user_data(self, data):
         if not data.get("name"):
             self.collector.add_error("name", "Name is required")
-        
+      
         if not data.get("email"):
             self.collector.add_error("email", "Email is required")
         elif "@" not in data["email"]:
             self.collector.add_error("email", "Invalid email format")
-        
+      
         self.collector.raise_if_errors()
 
 # 性能优化使用

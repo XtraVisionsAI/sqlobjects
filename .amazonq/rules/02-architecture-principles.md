@@ -20,34 +20,58 @@
 
 ### Core Module Boundaries
 
-#### `base.py` - Model Foundation
+#### `model.py` - Model Foundation
 
-- **ObjectModel base class**: Core model functionality and metaclass
-- **Configuration system**: ModelConfig parsing and application
-- **Metadata processing**: Table generation and schema management
-- **Dataclass integration**: Automatic field processing and type handling
+- **ObjectModel base class**: Core model functionality with metaclass
+- **ModelMixin**: Complete functionality integration through mixin chain
+- **Metadata processing**: Table generation and schema management via ModelProcessor
+- **CRUD operations**: save(), delete(), refresh() with signal integration
 
-#### `fields.py` - Type System
+#### `fields/` - Type System
 
-- **Field definitions**: Column types and parameter processing
-- **Type registry**: Centralized type mapping and conversion
-- **Validation integration**: Field-level validator support
-- **Column type classes**: Type-safe field definitions with parameter validation
+- **core.py**: Column descriptor, ColumnAttribute, field parameter processing
+- **types/**: Type creation and SQLAlchemy type mapping
+- **shortcuts.py**: Convenience functions for common field types
+- **proxies.py**: DeferredObject, RelatedObject, RelatedCollection
+- **relations/**: Relationship field definitions and descriptors
 
-#### `queries.py` - Query Engine
+#### `queryset.py` - Query Interface
 
-- **QuerySet implementation**: Chainable query building with comprehensive method coverage
-- **ObjectsManager**: Model-level query interface providing shortcuts to all QuerySet methods
-- **Bulk operations**: High-performance batch processing
-- **Result processing**: Query execution and object instantiation
-- **Method Delegation**: ObjectsManager delegates to QuerySet for consistent API
+- **QuerySet class**: Chainable query building and execution interface
+- **Q object**: Logical combination expressions for complex conditions
+- **Method categories**: Query building, expression creation, execution
+- **Expression integration**: Returns composable expression objects
 
-#### `database.py` - Connection Management
+#### `queries/` - Query Engine Components
 
-- **Database initialization**: Connection setup and configuration
-- **Session management**: Context managers and session factories
+- **builder.py**: QueryBuilder implementation with immutable query building
+- **executor.py**: QueryExecutor implementation for unified query execution
+- **dialect.py**: Database dialect-specific functionality
+
+#### `objects/` - Objects Manager
+
+- **core.py**: ObjectsManager and ObjectsDescriptor implementation
+- **bulk.py**: Bulk operations (bulk_create, bulk_update, bulk_delete)
+- **upsert.py**: UPSERT operation handling for different databases
+
+#### `expressions/` - Composable Expressions
+
+- **base.py**: Base expression classes and interfaces
+- **terminal.py**: Terminal expressions (AllExpression, FirstExpression, etc.)
+- **aggregate.py**: Aggregation expressions
+- **subquery.py**: Subquery expressions for use in other queries
+- **function.py**: Function expressions for database functions
+
+#### `database/` - Connection Management
+
+- **manager.py**: DatabaseManager singleton for multi-database management
+- **config.py**: Database configuration and connection pool settings
+
+#### `session.py` - Session Management
+
+- **Session factories**: Context managers and session creation
 - **Transaction control**: Commit/rollback and isolation levels
-- **Multi-database support**: Named databases and routing
+- **Multi-database support**: Named database routing
 
 ### Cross-Module Integration Patterns
 
@@ -112,8 +136,32 @@
 
 ### Multi-Database Compatibility Strategy
 
-**Decision**: Database dialect detection with function mapping
-**Rationale**:
+**Implementation**: Database dialect detection with function mapping
+
+**Approach**:
+
+- Detect database dialect using `session.bind.dialect.name`
+- Map to database-specific functions (PostgreSQL: `date_trunc()`, SQLite: `strftime()`, MySQL: `date_format()`)
+- Provide `extract()` function fallback for unsupported databases
+- Ensure consistent Python object types across databases
+
+**Example Implementation**:
+```python
+# In QuerySet.execute_dates()
+dialect_name = self._executor.session.bind.dialect.name
+
+if dialect_name == "postgresql":
+    date_expr = func.date_trunc("year", field_col)
+elif dialect_name == "sqlite":
+    date_expr = func.strftime("%Y-01-01", field_col)
+elif dialect_name == "mysql":
+    date_expr = func.date_format(field_col, "%Y-01-01")
+else:
+    # Fallback using extract
+    date_expr = func.extract("year", field_col)
+```
+
+**Benefits**:
 
 - Optimal performance using database-native functions
 - Consistent Python API across all databases

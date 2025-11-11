@@ -2,16 +2,17 @@
 
 ## 概述
 
-SQLObjects 提供了全面的关系支持，包括自动 JOIN 优化、延迟和急切加载策略，以及直观的关系遍历语法。
+SQLObjects 提供全面的关系支持，包括自动 JOIN 优化、延迟和预加载策略以及直观的关系遍历语法。
 
 ## 快速开始
 
-### 基础关系
+### 基本关系
 
 ```python
 from sqlobjects.model import ObjectModel
-from sqlobjects.fields import Column, StringColumn, TextColumn, foreign_key
-from sqlobjects.relations import relationship
+from sqlobjects.fields import Column, StringColumn, TextColumn, column
+from sqlobjects.fields.relations import relationship, Related
+from sqlalchemy import ForeignKey
 
 class User(ObjectModel):
     username: Column[str] = StringColumn(length=50)
@@ -20,25 +21,25 @@ class User(ObjectModel):
 class Post(ObjectModel):
     title: Column[str] = StringColumn(length=200)
     content: Column[str] = TextColumn()
-    author_id: Column[int] = foreign_key("users.id")  # 外键约束
-  
+    author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
+
     # 使用统一的 relationship() 函数定义关系
-    author = relationship("User", foreign_keys="author_id")
+    author: Related[User] = relationship("User", foreign_keys="author_id")
 
 # 向 User 添加反向关系
-User.posts = relationship("Post", foreign_keys="Post.author_id")
+User.posts: Related[list[Post]] = relationship("Post", foreign_keys="Post.author_id")
 ```
 
 ### 使用关系
 
 ```python
-# 访问相关对象
+# 访问关联对象
 post = await Post.objects.get(Post.id == 1)
-author = await post.author  # 延迟加载
+author = await post.author.fetch()  # 通过 RelatedObject 代理延迟加载
 
 # 反向关系
 user = await User.objects.get(User.id == 1)
-user_posts = await user.posts.all()  # 反向关系的查询集
+user_posts = await user.posts.fetch()  # 通过 RelatedCollection 代理获取
 ```
 
 ## 关系类型
@@ -51,20 +52,20 @@ class Department(ObjectModel):
 
 class Employee(ObjectModel):
     name: Column[str] = StringColumn(length=100)
-    department_id: Column[int] = foreign_key("departments.id")  # 创建外键约束
-  
+    department_id: Column[int] = column(type="integer", foreign_key=ForeignKey("departments.id"))
+
     # 多对一关系
-    department = relationship("Department", foreign_keys="department_id")
+    department: Related[Department] = relationship("Department", foreign_keys="department_id")
 
 # 向 Department 添加反向关系
-Department.employees = relationship("Employee", foreign_keys="Employee.department_id")
+Department.employees: Related[list[Employee]] = relationship("Employee", foreign_keys="Employee.department_id")
 
-# 用法
+# 使用
 employee = await Employee.objects.get(Employee.id == 1)
-dept = await employee.department  # 单个对象
+dept = await employee.department.fetch()  # 通过 RelatedObject 获取单个对象
 
 department = await Department.objects.get(Department.id == 1)
-employees = await department.employees.all()  # 对象列表
+employees = await department.employees.fetch()  # 通过 RelatedCollection 获取列表
 ```
 
 ### 一对一
@@ -75,20 +76,20 @@ class User(ObjectModel):
 
 class Profile(ObjectModel):
     bio: Column[str] = TextColumn()
-    user_id: Column[int] = foreign_key("users.id", unique=True)  # 唯一约束
-  
+    user_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"), unique=True)
+
     # 一对一关系
-    user = relationship("User", foreign_keys="user_id")
+    user: Related[User] = relationship("User", foreign_keys="user_id")
 
 # 向 User 添加反向一对一关系
-User.profile = relationship("Profile", foreign_keys="Profile.user_id", unique=True)
+User.profile: Related[Profile] = relationship("Profile", foreign_keys="Profile.user_id", uselist=False)
 
-# 用法
+# 使用
 profile = await Profile.objects.get(Profile.id == 1)
-user = await profile.user  # 单个对象
+user = await profile.user.fetch()  # 通过 RelatedObject 获取单个对象
 
 user = await User.objects.get(User.id == 1)
-profile = await user.profile  # 单个对象（或 None）
+profile = await user.profile.fetch()  # 通过 RelatedObject 获取单个对象（或 None）
 ```
 
 ### 多对多
@@ -100,21 +101,21 @@ class Post(ObjectModel):
 class Tag(ObjectModel):
     name: Column[str] = StringColumn(length=50)
 
-# 关联表（自动创建）
+# 关联表
 class PostTag(ObjectModel):
-    post_id: Column[int] = foreign_key("posts.id", primary_key=True)
-    tag_id: Column[int] = foreign_key("tags.id", primary_key=True)
+    post_id: Column[int] = column(type="integer", foreign_key=ForeignKey("posts.id"), primary_key=True)
+    tag_id: Column[int] = column(type="integer", foreign_key=ForeignKey("tags.id"), primary_key=True)
 
-# 使用 through 参数添加多对多关系
-Post.tags = relationship("Tag", through="PostTag")
-Tag.posts = relationship("Post", through="PostTag")
+# 使用 secondary 参数添加多对多关系
+Post.tags: Related[list[Tag]] = relationship("Tag", secondary="post_tags")
+Tag.posts: Related[list[Post]] = relationship("Post", secondary="post_tags")
 
-# 用法
+# 使用
 post = await Post.objects.get(Post.id == 1)
-tags = await post.tags.all()  # 标签列表
+tags = await post.tags.fetch()  # 通过 ManyToManyRelation 获取标签列表
 
 tag = await Tag.objects.get(Tag.id == 1)
-posts = await tag.posts.all()  # 文章列表
+posts = await tag.posts.fetch()  # 通过 ManyToManyRelation 获取帖子列表
 ```
 
 ## 加载策略
@@ -124,21 +125,21 @@ posts = await tag.posts.all()  # 文章列表
 ```python
 # 延迟加载 - 访问时查询数据库
 post = await Post.objects.get(Post.id == 1)
-author = await post.author  # 在此处执行单独查询
+author = await post.author.fetch()  # 在此处执行单独查询
 
 # N+1 查询问题示例
 posts = await Post.objects.all()
 for post in posts:
-    author = await post.author  # 执行 N 次额外查询！
+    author = await post.author.fetch()  # 执行 N 个额外查询！
 ```
 
-### 使用 select_related 的急切加载
+### 使用 select_related 预加载
 
 ```python
 # 对外键关系使用 select_related（JOIN）
 posts = await Post.objects.select_related("author").all()
 for post in posts:
-    author = post.author  # 无额外查询 - 已经加载
+    author = post.author  # 无额外查询 - 已加载
 
 # 多个关系
 posts = await Post.objects.select_related("author", "category").all()
@@ -150,18 +151,18 @@ comments = await Comment.objects.select_related("post__author").all()
 posts = await Post.objects.select_related("author").all()
 ```
 
-### 使用 prefetch_related 的急切加载
+### 使用 prefetch_related 预加载
 
 ```python
 # 对反向外键和多对多关系使用 prefetch_related
 users = await User.objects.prefetch_related("posts").all()
 for user in users:
-    posts = await user.posts.all()  # 无额外查询
+    posts = await user.posts.fetch()  # 无额外查询
 
 # 多对多关系
 posts = await Post.objects.prefetch_related("tags").all()
 for post in posts:
-    tags = await post.tags.all()  # 无额外查询
+    tags = await post.tags.fetch()  # 无额外查询
 
 # 多个预取
 users = await User.objects.prefetch_related("posts", "groups", "permissions").all()
@@ -173,7 +174,7 @@ users = await User.objects.prefetch_related("posts").all()
 ### 高级预取配置
 
 ```python
-# 带有过滤和排序的高级预取
+# 带过滤和排序的高级预取
 users = await User.objects.prefetch_related(
     published_posts=Post.objects.filter(Post.is_published == True)
                                .order_by('-created_at')
@@ -198,11 +199,11 @@ users = await User.objects.prefetch_related(
     ).order_by('-created_at')
 ).all()
 
-# 访问预取的数据
+# 访问预取数据
 for user in users:
     # 高级预取结果可直接访问
-    recent_posts = user.recent_posts  # 过滤/排序后的文章列表
-    popular_posts = user.popular_posts  # 热门文章列表
+    recent_posts = user.recent_posts  # 过滤/排序的帖子列表
+    popular_posts = user.popular_posts  # 热门帖子列表
 ```
 
 ### 组合加载策略
@@ -212,14 +213,14 @@ for user in users:
 posts = await Post.objects.select_related("author").prefetch_related("tags", "comments").all()
 
 for post in posts:
-    author = post.author  # 来自 JOIN (select_related)
-    tags = await post.tags.all()  # 来自预取 (prefetch_related)
+    author = post.author  # 来自 JOIN（select_related）
+    tags = await post.tags.all()  # 来自预取（prefetch_related）
     comments = await post.comments.all()  # 来自预取
 ```
 
 ## 高级关系查询
 
-### 按相关字段过滤
+### 按关联字段过滤
 
 ```python
 # 按外键字段过滤
@@ -228,24 +229,24 @@ posts = await Post.objects.filter(Post.author.username == "john").all()
 # 按反向关系过滤
 users = await User.objects.filter(User.posts.title.like("%python%")).all()
 
-# 多个关系过滤器
+# 多个关系过滤
 posts = await Post.objects.filter(
     Post.author.is_active == True,
     Post.category.name == "Technology"
 ).all()
 ```
 
-### 关系的注解
+### 关系上的注解
 
 ```python
 from sqlobjects.expressions import func
 
-# 计算相关对象
+# 计数关联对象
 users = await User.objects.annotate(
     post_count=func.count(User.posts)
 ).all()
 
-# 聚合相关字段
+# 聚合关联字段
 users = await User.objects.annotate(
     latest_post=func.max(User.posts.created_at),
     avg_post_length=func.avg(func.length(User.posts.content))
@@ -259,10 +260,10 @@ active_authors = await User.objects.annotate(
 ).all()
 ```
 
-### 关系的子查询
+### 关系上的子查询
 
 ```python
-# 存在子查询
+# EXISTS 子查询
 has_posts = Post.objects.filter(Post.author_id == User.id).subquery(query_type="exists")
 authors = await User.objects.filter(has_posts).all()
 
@@ -303,7 +304,7 @@ posts_with_details = await Post.objects.join(
 ).all()
 ```
 
-### 子查询的 JOIN
+### 带子查询的 JOIN
 
 ```python
 # 与子查询连接
@@ -316,10 +317,10 @@ posts = await Post.objects.join(
 
 ## 关系管理
 
-### 添加相关对象
+### 添加关联对象
 
 ```python
-# 创建相关对象
+# 创建关联对象
 user = await User.objects.create(username="author")
 post = await Post.objects.create(
     title="My Post",
@@ -359,30 +360,30 @@ await PostTag.objects.bulk_create(associations)
 ### 关系加载最佳实践
 
 ```python
-# 好的做法：对外键使用 select_related
+# 好：对外键使用 select_related
 posts = await Post.objects.select_related("author", "category").all()
 
-# 好的做法：对反向关系使用 prefetch_related
+# 好：对反向关系使用 prefetch_related
 users = await User.objects.prefetch_related("posts", "comments").all()
 
 # 避免：N+1 查询
 posts = await Post.objects.all()
 for post in posts:
-    author = await post.author  # N 次额外查询！
+    author = await post.author.fetch()  # N 个额外查询！
 
-# 好的做法：组合加载策略
+# 好：组合加载策略
 posts = await Post.objects.select_related("author").prefetch_related("tags").all()
 ```
 
 ### 选择性字段加载
 
 ```python
-# 只从相关对象加载需要的字段
+# 仅从关联对象加载需要的字段
 posts = await Post.objects.select_related("author").only(
     "title", "content", "author__username", "author__email"
 ).all()
 
-# 延迟相关对象的重字段
+# 从关联对象延迟重字段
 posts = await Post.objects.select_related("author").defer(
     "content", "author__bio"
 ).all()
@@ -391,7 +392,7 @@ posts = await Post.objects.select_related("author").defer(
 ### 关系计数
 
 ```python
-# 高效计数不加载对象
+# 高效计数而不加载对象
 user_count = await User.objects.filter(User.posts__isnull=False).distinct().count()
 
 # 带注解的计数
@@ -408,16 +409,16 @@ users_with_counts = await User.objects.annotate(
 ```python
 class Category(ObjectModel):
     name: Column[str] = StringColumn(length=100)
-    parent_id: Column[int] = foreign_key("categories.id", nullable=True)
-  
-    # 自引用关系
-    parent: Column["Category"] = relationship("Category", remote_side="id", back_populates="children")
-    children: Column[list["Category"]] = relationship("Category", back_populates="parent")
+    parent_id: Column[int] = column(type="integer", foreign_key=ForeignKey("categories.id"), nullable=True)
 
-# 用法
+    # 自引用关系
+    parent: Related["Category"] = relationship("Category", foreign_keys="parent_id", uselist=False)
+    children: Related[list["Category"]] = relationship("Category", foreign_keys="Category.parent_id")
+
+# 使用
 category = await Category.objects.get(Category.id == 1)
-parent = await category.parent
-children = await category.children.all()
+parent = await category.parent.fetch()
+children = await category.children.fetch()
 ```
 
 ### 多态关系
@@ -438,30 +439,30 @@ class Video(Content):
 contents = await Content.objects.filter(Content.content_type == "article").all()
 ```
 
-### 通过模型的关系
+### 通过模型关系
 
 ```python
 class Membership(ObjectModel):
-    user_id: Column[int] = foreign_key("users.id", primary_key=True)
-    group_id: Column[int] = foreign_key("groups.id", primary_key=True)
+    user_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"), primary_key=True)
+    group_id: Column[int] = column(type="integer", foreign_key=ForeignKey("groups.id"), primary_key=True)
     role: Column[str] = StringColumn(length=50, default="member")
-    joined_at: Column[datetime] = DateTimeColumn(default_factory=datetime.now)
+    joined_at: Column[datetime] = column(type="datetime", default_factory=datetime.now)
 
 class User(ObjectModel):
-    groups: Column[list["Group"]] = relationship(
+    groups: Related[list["Group"]] = relationship(
         "Group",
         secondary="memberships",
         back_populates="users"
     )
 
 class Group(ObjectModel):
-    users: Column[list["User"]] = relationship(
+    users: Related[list["User"]] = relationship(
         "User",
         secondary="memberships", 
         back_populates="groups"
     )
 
-# 访问通过模型的数据
+# 访问通过模型数据
 memberships = await Membership.objects.filter(
     Membership.user_id == 1,
     Membership.role == "admin"
@@ -473,24 +474,24 @@ memberships = await Membership.objects.filter(
 ### 关系设计
 
 ```python
-# 使用描述性的关系名称
+# 使用描述性关系名称
 class Order(ObjectModel):
-    customer_id: Column[int] = foreign_key("users.id")
-    customer: Column["User"] = relationship("User", back_populates="orders")
+    customer_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
+    customer: Related["User"] = relationship("User", back_populates="orders")
 
 class User(ObjectModel):
-    orders: Column[list["Order"]] = relationship("Order", back_populates="customer")
+    orders: Related[list["Order"]] = relationship("Order", back_populates="customer")
 ```
 
 ### 加载策略选择
 
 ```python
-# 在以下情况使用 select_related：
+# 使用 select_related 用于：
 # - 外键关系（多对一）
 # - 一对一关系
 posts = await Post.objects.select_related("author", "category").all()
 
-# 在以下情况使用 prefetch_related：
+# 使用 prefetch_related 用于：
 # - 反向外键关系（一对多）
 # - 多对多关系
 users = await User.objects.prefetch_related("posts", "groups").all()
@@ -501,17 +502,17 @@ users = await User.objects.prefetch_related("posts", "groups").all()
 ```python
 from sqlobjects.exceptions import DoesNotExist
 
-# 处理缺失的相关对象
+# 处理缺失的关联对象
 try:
     post = await Post.objects.get(Post.id == 1)
-    author = await post.author
+    author = await post.author.fetch()
 except DoesNotExist:
     # 处理作者被删除的情况
     author = None
 
 # 检查空关系
 user = await User.objects.get(User.id == 1)
-profile = await user.profile  # 对于一对一关系可能为 None
+profile = await user.profile.fetch()  # 一对一关系可能为 None
 if profile:
     bio = profile.bio
 ```

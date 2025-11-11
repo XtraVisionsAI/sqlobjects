@@ -10,39 +10,45 @@ and unified state management, it offers seamless integration capabilities for co
 
 ### 1. Built-in Signal System
 
-ObjectModel includes SignalMixin by default, providing complete model lifecycle signals and intelligent operation
-detection:
+ObjectModel includes SignalMixin by default, providing complete model lifecycle signals with method name convention discovery:
 
 ```python
 from sqlobjects.model import ObjectModel  # SignalMixin already built-in
 from sqlobjects.fields import Column, StringColumn
+from sqlobjects.signals import SignalContext, Operation
 from datetime import datetime
 
 class User(ObjectModel):  # Automatically has signal functionality
     name: Column[str] = StringColumn(length=50)
   
-    # Instance-level signals - automatically integrated
-    async def before_save(self, context):
-        # context.actual_operation shows actual operation type
+    # Instance-level signals - discovered by method name convention
+    async def before_save(self, context: SignalContext):
+        # context.actual_operation shows detected operation (CREATE or UPDATE)
         self.updated_at = datetime.now()
   
-    async def before_create(self, context):
+    async def before_create(self, context: SignalContext):
         self.created_at = datetime.now()
   
-    async def after_create(self, context):
+    async def after_create(self, context: SignalContext):
         await self.send_welcome_email()
   
     # Class-level batch signals
     @classmethod
-    async def before_bulk_create(cls, context):
+    async def before_bulk_create(cls, context: SignalContext):
         print(f"Creating {context.affected_count} users")
 
-# @emit_signals decorator automatically handles signal emission
+# Signal handler discovery mechanism:
+# - Uses getattr() to find methods by name (before_save, after_create, etc.)
+# - @emit_signals decorator calls _determine_save_operation() to detect CREATE/UPDATE
+# - Emits dual signals for SAVE operations (both SAVE and CREATE/UPDATE)
+
 user = User(name="John")  # No primary key value
-await user.save()  # Auto-detects CREATE, emits dual signals
+await user.save()  # _determine_save_operation() returns CREATE
+# Emits: before_save → before_create → after_save → after_create
 
 user.name = "John Updated"
-await user.save()  # Auto-detects UPDATE, only updates dirty fields
+await user.save()  # _determine_save_operation() returns UPDATE
+# Emits: before_save → before_update → after_save → after_update
 ```
 
 ### 2. Exception Handling
@@ -128,12 +134,16 @@ print(f"Field categories: {list(field_stats.keys())}")
 
 - **SignalMixin**: Signal mixin class, built into ObjectModel
 - **@emit_signals**: Signal decorator that automatically handles signal emission and operation detection
-- **Operation**: Operation type enumeration supporting SAVE/DELETE etc.
+- **_determine_save_operation()**: Function that checks _has_primary_key_values() to detect CREATE vs UPDATE
+- **_emit_signal()**: Function that discovers handlers by method name using getattr()
+- **Operation**: Operation type enumeration supporting SAVE/CREATE/UPDATE/DELETE
+- **SignalContext**: Dataclass containing operation, session, instance, and actual_operation
 
 **Proxy System Layer**
 
-- **DeferredFieldProxy**: Deferred field proxy supporting lazy loading and caching
-- **RelationFieldProxy**: Relationship field proxy supporting relationship lazy loading
+- **DeferredObject**: Deferred field proxy supporting lazy loading and caching
+- **RelatedObject**: Single relationship proxy (ForeignKey, OneToOne)
+- **RelatedCollection**: Collection relationship proxy (OneToMany, ManyToMany)
 - **FieldCacheMixin**: Integrates field cache and proxy system into __getattribute__
 
 **State Management Layer**
@@ -152,7 +162,9 @@ print(f"Field categories: {list(field_stats.keys())}")
 **Mixin Composition**: Avoids complex inheritance through Mixin composition, improving maintainability
 **Unified State**: StateManager unifies instance state management supporting multiple state types
 **Intelligent Proxy**: Integrates proxy system through __getattribute__ providing transparent lazy loading
-**Decorator-Driven**: @emit_signals decorator automatically handles signal emission and operation detection
+**Method Name Discovery**: Signal handlers discovered by method name convention using getattr()
+**Operation Detection**: _determine_save_operation() checks _has_primary_key_values() to detect CREATE/UPDATE
+**Dual Signal Emission**: SAVE operations emit both SAVE and specific CREATE/UPDATE signals
 **Built-in Performance**: Field caching, batch operations, and proxy system built into core components
 
 ### Integration with Other Modules
@@ -167,25 +179,28 @@ print(f"Field categories: {list(field_stats.keys())}")
 
 ```python
 # Signal functionality (built into ObjectModel)
+from sqlobjects.model import ObjectModel
+from sqlobjects.signals import SignalContext, Operation, emit_signals
+
 class Model(ObjectModel):
-    # Instance-level signals
-    async def before_save(self, context): pass
-    async def after_save(self, context): pass
-    async def before_create(self, context): pass
-    async def after_create(self, context): pass
-    async def before_update(self, context): pass
-    async def after_update(self, context): pass
-    async def before_delete(self, context): pass
-    async def after_delete(self, context): pass
+    # Instance-level signals - discovered by method name
+    async def before_save(self, context: SignalContext): pass
+    async def after_save(self, context: SignalContext): pass
+    async def before_create(self, context: SignalContext): pass
+    async def after_create(self, context: SignalContext): pass
+    async def before_update(self, context: SignalContext): pass
+    async def after_update(self, context: SignalContext): pass
+    async def before_delete(self, context: SignalContext): pass
+    async def after_delete(self, context: SignalContext): pass
   
     # Batch operation signals
     @classmethod
-    async def before_bulk_create(cls, context): pass
+    async def before_bulk_create(cls, context: SignalContext): pass
     @classmethod
-    async def after_bulk_create(cls, context): pass
+    async def after_bulk_create(cls, context: SignalContext): pass
 
-# Signal decorator
-@emit_signals(Operation.SAVE)
+# Signal decorator with operation detection
+@emit_signals(Operation.SAVE)  # Calls _determine_save_operation() for actual operation
 async def save(self): pass
 ```
 
@@ -249,16 +264,18 @@ get_model_metadata(model_class)
 # Basic signal usage
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, StringColumn
+from sqlobjects.signals import SignalContext
+from datetime import datetime
 
 class User(ObjectModel):  # Signal functionality already built-in
     name: Column[str] = StringColumn(length=50)
     email: Column[str] = StringColumn(length=100)
   
-    async def before_save(self, context):
+    async def before_save(self, context: SignalContext):
         # Pre-save processing
         self.updated_at = datetime.now()
   
-    async def after_create(self, context):
+    async def after_create(self, context: SignalContext):
         # Post-create processing
         await self.send_welcome_email()
 
@@ -283,24 +300,25 @@ model_name = to_camel_case(table_name)     # "UserProfile"
 ```python
 # Complex signal handling
 from sqlobjects.model import ObjectModel
-from sqlobjects.signals import Operation
+from sqlobjects.signals import SignalContext, Operation
 from datetime import datetime
 
 class User(ObjectModel):
-    async def before_save(self, context):
+    async def before_save(self, context: SignalContext):
         # Common save logic
+        # context.actual_operation set by _determine_save_operation()
         if context.actual_operation == Operation.CREATE:
             self.created_at = datetime.now()
         self.updated_at = datetime.now()
   
-    async def after_create(self, context):
+    async def after_create(self, context: SignalContext):
         # Post-create async tasks
         await self.create_user_profile()
         await self.send_welcome_email()
         await self.log_user_creation(context.session)
   
     @classmethod
-    async def before_bulk_create(cls, context):
+    async def before_bulk_create(cls, context: SignalContext):
         # Pre-bulk-create processing
         print(f"Creating {context.affected_count} users")
 

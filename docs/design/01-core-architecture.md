@@ -133,12 +133,19 @@ class Product(ObjectModel):
 
 - **ObjectModel**: Composition pattern model base class, integrates ModelMixin + ModelProcessor metaclass
 - **ModelProcessor**: Metaclass processor, automatically generates SQLAlchemy tables and objects manager
-- **ModelMixin**: Composes all functional Mixins, provides unified CRUD interface
+- **ModelMixin**: Composes all functional Mixins through inheritance chain:
+  - FieldCacheMixin (field caching and attribute access optimization)
+  - DataConversionMixin (data conversion functionality)
+  - DeferredLoadingMixin (deferred loading functionality)
+  - ValidationMixin (validation logic)
+  - PrimaryKeyMixin (primary key operations)
+  - SessionMixin (session management)
+  - BaseMixin (basic functionality and state management)
 
 **Functional Mixin Layer**
 
 - **FieldCacheMixin**: Field caching and intelligent attribute access, integrated proxy system
-- **SignalMixin**: Signal system, built into ObjectModel
+- **SignalMixin**: Signal system, built into ObjectModel through separate inheritance
 - **HistoryTrackingMixin**: History tracking and dirty field detection
 - **ValidationMixin**: Validation system integration
 - **DeferredLoadingMixin**: Deferred loading functionality

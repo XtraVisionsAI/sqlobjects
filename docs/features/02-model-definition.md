@@ -110,8 +110,9 @@ external_id: Column[str] = UuidColumn(default_factory=uuid.uuid4)
 file_data: Column[bytes] = BinaryColumn(length=1024)
 
 # Foreign key relationships
-author_id: Column[int] = foreign_key("users.id")
-category_id: Column[int] = foreign_key("categories.id", nullable=False, index=True)
+from sqlalchemy import ForeignKey
+author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
+category_id: Column[int] = column(type="integer", foreign_key=ForeignKey("categories.id"), nullable=False, index=True)
 ```
 
 ## Field Parameters
@@ -228,24 +229,30 @@ optional_param: Column[str] = column(type="string", kw_only=True)
 ## Foreign Key Fields
 
 ```python
-from sqlobjects.fields import foreign_key, ForeignKey, column
+from sqlobjects.fields import column
+from sqlalchemy import ForeignKey
 
 class Post(ObjectModel):
     title: Column[str] = StringColumn(length=200)
 
-    # Method 1: Using foreign_key() convenience function (recommended)
-    author_id: Column[int] = foreign_key("users.id")
-    category_id: Column[int] = foreign_key("categories.id", nullable=False, index=True)
-
-    # Method 2: Using column() with ForeignKey parameter
-    tag_id: Column[int] = column(
+    # Using column() with ForeignKey parameter
+    author_id: Column[int] = column(
         type="integer",
-        foreign_key=ForeignKey("tags.id"),
-        nullable=True
+        foreign_key=ForeignKey("users.id")
+    )
+    
+    category_id: Column[int] = column(
+        type="integer",
+        foreign_key=ForeignKey("categories.id"),
+        nullable=False,
+        index=True
     )
 
     # Foreign key with custom type
-    uuid_ref: Column[str] = foreign_key("external_table.uuid", type="string")
+    uuid_ref: Column[str] = column(
+        type="string",
+        foreign_key=ForeignKey("external_table.uuid")
+    )
 ```
 
 ## Field Shortcuts
@@ -254,13 +261,14 @@ class Post(ObjectModel):
 
 ```python
 from sqlobjects.model import ObjectModel
-from sqlobjects.fields import Column, StringColumn, identity, column
+from sqlobjects.fields import Column, StringColumn, IdentityColumn, column
+from sqlalchemy import ForeignKey
 from datetime import datetime
 
 class Post(ObjectModel):
-    id: Column[int] = identity()  # Auto-increment primary key
+    id: Column[int] = IdentityColumn()  # Auto-increment primary key
     title: Column[str] = StringColumn(length=200)
-    author_id: Column[int] = column(type="integer", nullable=False)
+    author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"), nullable=False)
     created_at: Column[datetime] = column(type="datetime", default_factory=datetime.now)
     updated_at: Column[datetime] = column(type="datetime", onupdate=datetime.now)
 ```
@@ -269,27 +277,25 @@ class Post(ObjectModel):
 
 ```python
 from sqlobjects.model import ObjectModel
-from sqlobjects.fields import Column, NumericColumn, computed, identity
+from sqlobjects.fields import Column, NumericColumn, IdentityColumn, ComputedColumn
 from decimal import Decimal
 
 class Order(ObjectModel):
     # Identity column with custom configuration
-    id: Column[int] = identity(start=1000, increment=1)
-    order_number: Column[int] = identity(start=1000, increment=1, cache=10)
+    id: Column[int] = IdentityColumn(start=1000, increment=1)
+    order_number: Column[int] = IdentityColumn(start=1000, increment=1, cache=10)
 
     subtotal: Column[Decimal] = NumericColumn(precision=10, scale=2)
     tax_rate: Column[Decimal] = NumericColumn(precision=5, scale=4)
 
     # Computed column
-    total: Column[Decimal] = computed(
+    total: Column[Decimal] = ComputedColumn(
         "subtotal * (1 + tax_rate)", 
-        column_type="numeric", 
-        precision=10, 
-        scale=2
+        column_type="numeric"
     )
 
     # Persisted computed column (stored in database)
-    total_cached: Column[Decimal] = computed(
+    total_cached: Column[Decimal] = ComputedColumn(
         "subtotal * (1 + tax_rate)",
         persisted=True,
         column_type="numeric"

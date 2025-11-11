@@ -15,24 +15,29 @@ Column descriptors support unified definition of database fields and relationshi
 `__set_name__`:
 
 ```python
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, StringColumn, IntegerColumn, BooleanColumn, JsonColumn, column
+from sqlobjects.fields.relations import relationship, Related
+from sqlalchemy import ForeignKey
+
 class User(ObjectModel):
-    # Database fields - using ColumnAttribute
+    # Database fields - using Column descriptor
     name: Column[str] = StringColumn(length=50)
     age: Column[int] = IntegerColumn()
     email: Column[str] = StringColumn(length=100, unique=True)
     is_active: Column[bool] = BooleanColumn(default=True)
     metadata: Column[dict] = JsonColumn(default=dict)
   
-    # Relationship fields - using RelationshipDescriptor
-    posts: Column[List["Post"]] = relationship("Post", foreign_keys="Post.author_id")
+    # Relationship fields - using Related container
+    posts: Related[list["Post"]] = relationship("Post", foreign_keys="author_id")
 
 # Column descriptor dual access mode:
 # - Class access: User.name returns ColumnAttribute for queries
 # - Instance access: user.name returns field value with type conversion support
 
-# Automatic type inference - using Auto type placeholder
-id: Column[int] = column(type=Auto(), primary_key=True)  # Replaced during ModelProcessor
-name: Column[str] = column(type=Auto())  # Uses Auto() instance for type inference
+# Automatic type inference - using type="auto" parameter
+id: Column[int] = column(type="auto", primary_key=True)  # Infers from Column[int]
+name: Column[str] = column(type="auto")  # Infers from Column[str]
 
 # Comprehensive parameter system
 username: Column[str] = column(
@@ -45,6 +50,9 @@ username: Column[str] = column(
     # Code generation parameters
     init=True, repr=True, compare=False, hash=None, kw_only=False
 )
+
+# Foreign key fields
+author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
 ```
 
 ### 2. Function Expression Chaining
@@ -121,7 +129,8 @@ class User(ObjectModel):
 **Type System Layer**
 
 - **TypeRegistry**: Global type registration system supporting lazy initialization and automatic parameter extraction
-- **Auto**: Type inference placeholder replaced with concrete types during ModelProcessor processing
+- **create_type_instance()**: Function that creates SQLAlchemy type instances from type names and parameters
+- **_infer_type_from_annotation()**: Function that infers type from Column[T] annotations when type="auto"
 - **Enhanced Types**: SQLAlchemy types + Comparator supporting database function chaining
 
 **Function Expression Layer**
@@ -164,6 +173,8 @@ column(
     deferred=False, deferred_group=None, active_history=False, deferred_raiseload=None,
     # Code generation parameters
     init=None, repr=None, compare=None, hash=None, kw_only=None,
+    # Foreign key constraint
+    foreign_key=None, on_delete=OnDelete.NO_ACTION,
     **kwargs  # Type-specific parameters
 )
 
@@ -225,12 +236,13 @@ field.case(*conditions, else_=None) / field.greatest(*args) / field.least(*args)
 identity(start=1, increment=1, minvalue=None, maxvalue=None, cycle=False, cache=None, **kwargs)
 computed(sqltext, persisted=None, column_type="auto", **kwargs)
 
-# Foreign key constraints
-foreign_key(reference, type="integer", nullable=True, **kwargs)
+# Foreign key fields (use SQLAlchemy ForeignKey)
+from sqlalchemy import ForeignKey
+author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
 
 # Type system
 register_field_type(field_type, type_name, comparator=None, aliases=None, default_params=None)
-create_type_instance(type_name, kwargs)
+create_type_instance(type_name, type_params)  # Creates SQLAlchemy type from name and params
 get_type_definition(type_name)
 
 # SQLAlchemy integration
@@ -254,8 +266,8 @@ registry.register_type(field_type, name, comparator, aliases, default_params)
 registry.get_type_config(name)
 registry.create_enhanced_type(name, **params)
 
-# Auto type
-Auto()  # Automatic type inference placeholder
+# Auto type inference
+column(type="auto")  # Infers type from Column[T] annotation using _infer_type_from_annotation()
 
 # ColumnAttribute enhanced features
 attr.validate_value(value, field_name)
@@ -269,6 +281,9 @@ attr.get_codegen_params()
 ### Basic Usage
 
 ```python
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, StringColumn, IntegerColumn, BooleanColumn
+
 # Basic field definition
 class User(ObjectModel):
     name: Column[str] = StringColumn(length=50)
@@ -297,6 +312,11 @@ class Product(ObjectModel):
 ### Advanced Usage
 
 ```python
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, column, IdentityColumn, ComputedColumn
+from sqlalchemy import ForeignKey
+from datetime import datetime
+
 # Complex field configuration
 class User(ObjectModel):
     username: Column[str] = column(
@@ -326,15 +346,15 @@ class User(ObjectModel):
     )
   
     # Identity and computed columns
-    id: Column[int] = identity()
-    full_name: Column[str] = computed(
+    id: Column[int] = IdentityColumn()
+    full_name: Column[str] = ComputedColumn(
         "first_name || ' ' || last_name",
         column_type="string"
     )
   
     # Foreign key fields
-    author_id: Column[int] = foreign_key("users.id")
-    category_id: Column[int] = foreign_key("categories.id", nullable=False, index=True)
+    author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
+    category_id: Column[int] = column(type="integer", foreign_key=ForeignKey("categories.id"), nullable=False, index=True)
 
 # Chained function calls
 users = await User.objects.annotate(
@@ -378,6 +398,7 @@ class User(ObjectModel):
 
 # Type registration and custom types
 from sqlalchemy import INET
+from sqlobjects.fields.types import register_field_type
 
 register_field_type(
     INET, 'inet',

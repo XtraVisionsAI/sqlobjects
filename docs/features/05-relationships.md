@@ -11,8 +11,9 @@ strategies, and intuitive relationship traversal syntax.
 
 ```python
 from sqlobjects.model import ObjectModel
-from sqlobjects.fields import Column, StringColumn, TextColumn, foreign_key
-from sqlobjects.relations import relationship
+from sqlobjects.fields import Column, StringColumn, TextColumn, column
+from sqlobjects.fields.relations import relationship, Related
+from sqlalchemy import ForeignKey
 
 class User(ObjectModel):
     username: Column[str] = StringColumn(length=50)
@@ -21,13 +22,13 @@ class User(ObjectModel):
 class Post(ObjectModel):
     title: Column[str] = StringColumn(length=200)
     content: Column[str] = TextColumn()
-    author_id: Column[int] = foreign_key("users.id")  # Foreign key constraint
+    author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
 
     # Define relationships using unified relationship() function
-    author = relationship("User", foreign_keys="author_id")
+    author: Related[User] = relationship("User", foreign_keys="author_id")
 
 # Add reverse relationship to User
-User.posts = relationship("Post", foreign_keys="Post.author_id")
+User.posts: Related[list[Post]] = relationship("Post", foreign_keys="Post.author_id")
 ```
 
 ### Using Relations
@@ -35,11 +36,11 @@ User.posts = relationship("Post", foreign_keys="Post.author_id")
 ```python
 # Access related objects
 post = await Post.objects.get(Post.id == 1)
-author = await post.author  # Lazy loading
+author = await post.author.fetch()  # Lazy loading via RelatedObject proxy
 
 # Reverse relationship
 user = await User.objects.get(User.id == 1)
-user_posts = await user.posts.all()  # QuerySet for reverse relationship
+user_posts = await user.posts.fetch()  # Fetch via RelatedCollection proxy
 ```
 
 ## Relationship Types
@@ -52,20 +53,20 @@ class Department(ObjectModel):
 
 class Employee(ObjectModel):
     name: Column[str] = StringColumn(length=100)
-    department_id: Column[int] = foreign_key("departments.id")  # Create foreign key constraint
+    department_id: Column[int] = column(type="integer", foreign_key=ForeignKey("departments.id"))
 
     # Many-to-one relationship
-    department = relationship("Department", foreign_keys="department_id")
+    department: Related[Department] = relationship("Department", foreign_keys="department_id")
 
 # Add reverse relationship to Department
-Department.employees = relationship("Employee", foreign_keys="Employee.department_id")
+Department.employees: Related[list[Employee]] = relationship("Employee", foreign_keys="Employee.department_id")
 
 # Usage
 employee = await Employee.objects.get(Employee.id == 1)
-dept = await employee.department  # Single object
+dept = await employee.department.fetch()  # Single object via RelatedObject
 
 department = await Department.objects.get(Department.id == 1)
-employees = await department.employees.all()  # List of objects
+employees = await department.employees.fetch()  # List via RelatedCollection
 ```
 
 ### One-to-One
@@ -76,20 +77,20 @@ class User(ObjectModel):
 
 class Profile(ObjectModel):
     bio: Column[str] = TextColumn()
-    user_id: Column[int] = foreign_key("users.id", unique=True)  # Unique constraint
+    user_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"), unique=True)
 
     # One-to-one relationship
-    user = relationship("User", foreign_keys="user_id")
+    user: Related[User] = relationship("User", foreign_keys="user_id")
 
 # Add reverse one-to-one relationship to User
-User.profile = relationship("Profile", foreign_keys="Profile.user_id", unique=True)
+User.profile: Related[Profile] = relationship("Profile", foreign_keys="Profile.user_id", uselist=False)
 
 # Usage
 profile = await Profile.objects.get(Profile.id == 1)
-user = await profile.user  # Single object
+user = await profile.user.fetch()  # Single object via RelatedObject
 
 user = await User.objects.get(User.id == 1)
-profile = await user.profile  # Single object (or None)
+profile = await user.profile.fetch()  # Single object (or None) via RelatedObject
 ```
 
 ### Many-to-Many
@@ -101,21 +102,21 @@ class Post(ObjectModel):
 class Tag(ObjectModel):
     name: Column[str] = StringColumn(length=50)
 
-# Association table (automatically created)
+# Association table
 class PostTag(ObjectModel):
-    post_id: Column[int] = foreign_key("posts.id", primary_key=True)
-    tag_id: Column[int] = foreign_key("tags.id", primary_key=True)
+    post_id: Column[int] = column(type="integer", foreign_key=ForeignKey("posts.id"), primary_key=True)
+    tag_id: Column[int] = column(type="integer", foreign_key=ForeignKey("tags.id"), primary_key=True)
 
-# Add many-to-many relationships using through parameter
-Post.tags = relationship("Tag", through="PostTag")
-Tag.posts = relationship("Post", through="PostTag")
+# Add many-to-many relationships using secondary parameter
+Post.tags: Related[list[Tag]] = relationship("Tag", secondary="post_tags")
+Tag.posts: Related[list[Post]] = relationship("Post", secondary="post_tags")
 
 # Usage
 post = await Post.objects.get(Post.id == 1)
-tags = await post.tags.all()  # List of tags
+tags = await post.tags.fetch()  # List of tags via ManyToManyRelation
 
 tag = await Tag.objects.get(Tag.id == 1)
-posts = await tag.posts.all()  # List of posts
+posts = await tag.posts.fetch()  # List of posts via ManyToManyRelation
 ```
 
 ## Loading Strategies
@@ -125,12 +126,12 @@ posts = await tag.posts.all()  # List of posts
 ```python
 # Lazy loading - queries database when accessed
 post = await Post.objects.get(Post.id == 1)
-author = await post.author  # Executes separate query here
+author = await post.author.fetch()  # Executes separate query here
 
 # N+1 query problem example
 posts = await Post.objects.all()
 for post in posts:
-    author = await post.author  # Executes N additional queries!
+    author = await post.author.fetch()  # Executes N additional queries!
 ```
 
 ### Eager Loading with select_related
@@ -157,12 +158,12 @@ posts = await Post.objects.select_related("author").all()
 # Use prefetch_related for reverse foreign keys and many-to-many relationships
 users = await User.objects.prefetch_related("posts").all()
 for user in users:
-    posts = await user.posts.all()  # No additional queries
+    posts = await user.posts.fetch()  # No additional queries
 
 # Many-to-many relationships
 posts = await Post.objects.prefetch_related("tags").all()
 for post in posts:
-    tags = await post.tags.all()  # No additional queries
+    tags = await post.tags.fetch()  # No additional queries
 
 # Multiple prefetches
 users = await User.objects.prefetch_related("posts", "groups", "permissions").all()
@@ -369,7 +370,7 @@ users = await User.objects.prefetch_related("posts", "comments").all()
 # Avoid: N+1 queries
 posts = await Post.objects.all()
 for post in posts:
-    author = await post.author  # N additional queries!
+    author = await post.author.fetch()  # N additional queries!
 
 # Good: Combine loading strategies
 posts = await Post.objects.select_related("author").prefetch_related("tags").all()
@@ -409,16 +410,16 @@ users_with_counts = await User.objects.annotate(
 ```python
 class Category(ObjectModel):
     name: Column[str] = StringColumn(length=100)
-    parent_id: Column[int] = foreign_key("categories.id", nullable=True)
+    parent_id: Column[int] = column(type="integer", foreign_key=ForeignKey("categories.id"), nullable=True)
 
     # Self-referencing relationships
-    parent: Column["Category"] = relationship("Category", remote_side="id", back_populates="children")
-    children: Column[list["Category"]] = relationship("Category", back_populates="parent")
+    parent: Related["Category"] = relationship("Category", foreign_keys="parent_id", uselist=False)
+    children: Related[list["Category"]] = relationship("Category", foreign_keys="Category.parent_id")
 
 # Usage
 category = await Category.objects.get(Category.id == 1)
-parent = await category.parent
-children = await category.children.all()
+parent = await category.parent.fetch()
+children = await category.children.fetch()
 ```
 
 ### Polymorphic Relations
@@ -443,20 +444,20 @@ contents = await Content.objects.filter(Content.content_type == "article").all()
 
 ```python
 class Membership(ObjectModel):
-    user_id: Column[int] = foreign_key("users.id", primary_key=True)
-    group_id: Column[int] = foreign_key("groups.id", primary_key=True)
+    user_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"), primary_key=True)
+    group_id: Column[int] = column(type="integer", foreign_key=ForeignKey("groups.id"), primary_key=True)
     role: Column[str] = StringColumn(length=50, default="member")
-    joined_at: Column[datetime] = DateTimeColumn(default_factory=datetime.now)
+    joined_at: Column[datetime] = column(type="datetime", default_factory=datetime.now)
 
 class User(ObjectModel):
-    groups: Column[list["Group"]] = relationship(
+    groups: Related[list["Group"]] = relationship(
         "Group",
         secondary="memberships",
         back_populates="users"
     )
 
 class Group(ObjectModel):
-    users: Column[list["User"]] = relationship(
+    users: Related[list["User"]] = relationship(
         "User",
         secondary="memberships", 
         back_populates="groups"
@@ -476,11 +477,11 @@ memberships = await Membership.objects.filter(
 ```python
 # Use descriptive relationship names
 class Order(ObjectModel):
-    customer_id: Column[int] = foreign_key("users.id")
-    customer: Column["User"] = relationship("User", back_populates="orders")
+    customer_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
+    customer: Related["User"] = relationship("User", back_populates="orders")
 
 class User(ObjectModel):
-    orders: Column[list["Order"]] = relationship("Order", back_populates="customer")
+    orders: Related[list["Order"]] = relationship("Order", back_populates="customer")
 ```
 
 ### Loading Strategy Selection
@@ -505,14 +506,14 @@ from sqlobjects.exceptions import DoesNotExist
 # Handle missing related objects
 try:
     post = await Post.objects.get(Post.id == 1)
-    author = await post.author
+    author = await post.author.fetch()
 except DoesNotExist:
     # Handle case where author was deleted
     author = None
 
 # Check for null relationships
 user = await User.objects.get(User.id == 1)
-profile = await user.profile  # May be None for one-to-one relationships
+profile = await user.profile.fetch()  # May be None for one-to-one relationships
 if profile:
     bio = profile.bio
 ```

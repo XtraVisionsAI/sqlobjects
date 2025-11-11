@@ -3,17 +3,17 @@
 ## Signal System Architecture
 
 ### Signal System Integration
-**ObjectModel built-in signal functionality**
+**ObjectModel with SignalMixin provides signal functionality**
 ```python
 from sqlobjects.model import ObjectModel
-from sqlobjects.signals import SignalContext
+from sqlobjects.signals import SignalContext, Operation
 from datetime import datetime
 
-class User(ObjectModel):  # Built-in signal functionality
+class User(ObjectModel):  # Inherits SignalMixin through ModelMixin
     username: Column[str] = StringColumn(length=50)
     email: Column[str] = StringColumn(length=100)
     
-    # Signal handlers auto-registered
+    # Signal handlers discovered by method name convention
     async def before_save(self, context: SignalContext):
         self.updated_at = datetime.now()
     
@@ -114,14 +114,14 @@ class User(ObjectModel):
 ## Smart SAVE Operation Signal Architecture
 
 ### Dual Signal Emission for save() Operations
-**Intelligent signal triggering based on operation detection**
+**Automatic operation detection and dual signal emission**
 ```python
-# For new instances (no primary key)
+# For new instances (no primary key values)
 user = User(username="new_user", email="new@example.com")
 await user.save()
 # Triggers: before_save → before_create → after_save → after_create
 
-# For existing instances (has primary key and in session)
+# For existing instances (has primary key values)
 user.email = "updated@example.com"
 await user.save()
 # Triggers: before_save → before_update → after_save → after_update
@@ -132,15 +132,61 @@ await detached_user.save()
 # Triggers: before_save → before_update → after_save → after_update
 ```
 
+**Implementation Details**:
+```python
+def _determine_save_operation(self_or_cls) -> Operation:
+    """Determine whether SAVE is CREATE or UPDATE."""
+    if hasattr(self_or_cls, "_has_primary_key_values"):
+        return Operation.UPDATE if self_or_cls._has_primary_key_values() else Operation.CREATE
+    return Operation.CREATE
+
+@emit_signals(Operation.SAVE)
+async def save(self, validate: bool = True, cascade: bool | None = None, session=None):
+    """Save with automatic operation detection.
+    
+    emit_signals decorator:
+    1. Calls _determine_save_operation() to detect CREATE or UPDATE
+    2. Sets context.actual_operation to detected operation
+    3. Emits before_save signal
+    4. Emits before_create or before_update signal
+    5. Executes save operation
+    6. Emits after_save signal
+    7. Emits after_create or after_update signal
+    """
+    pass
+```
+
 ### SignalContext Information Architecture
 **Comprehensive context information for signal handlers**
 ```python
 from sqlobjects.signals import SignalContext, Operation
 
+@dataclass
+class SignalContext:
+    """Context object for signal handlers."""
+    operation: Operation                    # SAVE, CREATE, UPDATE, DELETE
+    session: AsyncSession                   # Database session
+    model_class: Any                        # Model class
+    instance: Any | None = None             # Model instance (single operations)
+    affected_count: int | None = None       # Row count (bulk operations)
+    update_data: dict[str, Any] | None = None  # Update data (bulk updates)
+    actual_operation: Operation | None = None  # Detected operation for SAVE
+    
+    @property
+    def is_bulk(self) -> bool:
+        """Check if this is a bulk operation."""
+        return self.instance is None
+    
+    @property
+    def is_single(self) -> bool:
+        """Check if this is a single-instance operation."""
+        return self.instance is not None
+
+# Usage in signal handlers
 async def before_save(self, context: SignalContext):
     # Operation information
     print(f"Operation: {context.operation}")           # SAVE, CREATE, UPDATE, DELETE
-    print(f"Actual operation: {context.actual_operation}")  # Detected operation for SAVE
+    print(f"Actual operation: {context.actual_operation}")  # CREATE or UPDATE for SAVE
     
     # Session and model information
     print(f"Session: {context.session}")               # Database session
@@ -148,19 +194,16 @@ async def before_save(self, context: SignalContext):
     print(f"Instance: {context.instance}")             # Model instance
     
     # Bulk operation information
-    print(f"Affected count: {context.affected_count}") # For bulk operations
-    print(f"Update data: {context.update_data}")       # For bulk updates
-    
-    # Additional metadata
-    print(f"Timestamp: {context.timestamp}")           # Operation timestamp
-    print(f"User context: {context.user_context}")     # Optional user context
+    print(f"Is bulk: {context.is_bulk}")               # True for bulk operations
+    print(f"Affected count: {context.affected_count}") # Row count for bulk operations
+    print(f"Update data: {context.update_data}")       # Data for bulk updates
 ```
 
 ## Signal Naming Convention System
 
 ### Instance Signal Naming Rules
 ```python
-# Single record operations
+# Single record operations - instance methods
 async def before_save(self, context):     # Universal save (CREATE or UPDATE)
 async def after_save(self, context):      # Universal save (CREATE or UPDATE)
 async def before_create(self, context):   # CREATE operations only
@@ -173,7 +216,11 @@ async def after_delete(self, context):    # DELETE operations
 
 ### Bulk Signal Naming Rules
 ```python
-# Bulk operations (class methods)
+# Bulk operations - class methods
+@classmethod
+async def before_bulk_save(cls, context):     # Bulk SAVE
+@classmethod
+async def after_bulk_save(cls, context):      # Bulk SAVE
 @classmethod
 async def before_bulk_create(cls, context):   # Bulk CREATE
 @classmethod
@@ -186,6 +233,53 @@ async def after_bulk_update(cls, context):    # Bulk UPDATE
 async def before_bulk_delete(cls, context):   # Bulk DELETE
 @classmethod
 async def after_bulk_delete(cls, context):    # Bulk DELETE
+```
+
+### Signal Handler Discovery
+**Signals discovered by method name convention**
+```python
+async def _emit_signal(target, timing: str, context: SignalContext) -> None:
+    """Emit signal by discovering handler methods.
+    
+    Discovery process:
+    1. Determine if bulk operation from context.is_bulk
+    2. Build signal name: f"{timing}_{bulk_prefix}{operation.value}"
+    3. Use getattr() to find handler method
+    4. Check if handler is callable
+    5. Detect async vs sync using inspect.iscoroutinefunction()
+    6. Call handler with context
+    """
+    is_bulk = context.is_bulk
+    bulk_prefix = "bulk_" if is_bulk else ""
+    
+    # For SAVE operations, emit both SAVE and specific signals
+    if context.operation == Operation.SAVE and context.actual_operation:
+        # Emit SAVE signal
+        save_signal_name = f"{timing}_{bulk_prefix}save"
+        save_handler = getattr(target, save_signal_name, None)
+        if save_handler and callable(save_handler):
+            if inspect.iscoroutinefunction(save_handler):
+                await save_handler(context)
+            else:
+                save_handler(context)
+        
+        # Emit specific CREATE/UPDATE signal
+        specific_signal_name = f"{timing}_{bulk_prefix}{context.actual_operation.value}"
+        specific_handler = getattr(target, specific_signal_name, None)
+        if specific_handler and callable(specific_handler):
+            if inspect.iscoroutinefunction(specific_handler):
+                await specific_handler(context)
+            else:
+                specific_handler(context)
+    else:
+        # For non-SAVE operations, emit single signal
+        signal_name = f"{timing}_{bulk_prefix}{context.operation.value}"
+        handler = getattr(target, signal_name, None)
+        if handler and callable(handler):
+            if inspect.iscoroutinefunction(handler):
+                await handler(context)
+            else:
+                handler(context)
 ```
 
 ### Signal Integration with Operations
