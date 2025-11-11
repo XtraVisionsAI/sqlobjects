@@ -1,10 +1,13 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, overload
 
 from ...cascade import OnDelete
 
 
 if TYPE_CHECKING:
     from ...model import ObjectModel
+
+
+T = TypeVar("T")
 
 
 class RelationshipType:
@@ -77,8 +80,8 @@ class RelationshipProperty:
         self.extra_kwargs = kwargs
 
 
-class RelationshipDescriptor:
-    """Unified relationship field descriptor."""
+class RelationshipDescriptor(Generic[T]):
+    """Unified relationship field descriptor with proper type hints."""
 
     def __init__(self, property_: RelationshipProperty):
         """Initialize relationship descriptor.
@@ -88,6 +91,7 @@ class RelationshipDescriptor:
         """
         self.property = property_
         self.name: str | None = None
+        self._is_relationship = True  # Mark as relationship for Column compatibility
 
     def __set_name__(self, owner: type, name: str) -> None:
         """Set descriptor name and register with model.
@@ -103,6 +107,12 @@ class RelationshipDescriptor:
         if not hasattr(owner, "_relationships"):
             owner._relationships = {}
         owner._relationships[name] = self
+
+    @overload
+    def __get__(self, instance: None, owner: type) -> "RelationshipDescriptor[T]": ...
+
+    @overload
+    def __get__(self, instance: "ObjectModel", owner: type) -> T: ...
 
     def __get__(self, instance: "ObjectModel | None", owner: type) -> Any:
         """Get relationship value.
@@ -129,14 +139,8 @@ class RelationshipDescriptor:
                 return getattr(instance, cache_attr)
 
         # Return different objects based on lazy strategy
-        from .proxies import (
-            M2MRelatedCollection,
-            NoLoadProxy,
-            OneToManyCollection,
-            RaiseProxy,
-            RelatedObjectProxy,
-            RelatedQuerySet,
-        )
+        from ..proxies import ManyToManyProxy, OneToManyProxy, RelatedObjectProxy
+        from .strategies import NoLoadProxy, RaiseProxy, RelatedQuerySet
 
         if self.property.lazy == "dynamic":
             return RelatedQuerySet(instance, self)
@@ -145,8 +149,8 @@ class RelationshipDescriptor:
         elif self.property.lazy == "raise":
             return RaiseProxy(instance, self)
         elif self.property.is_many_to_many:
-            return M2MRelatedCollection(instance, self)
+            return ManyToManyProxy(instance, self)
         elif self.property.uselist:
-            return OneToManyCollection(instance, self)
+            return OneToManyProxy(instance, self)
         else:
             return RelatedObjectProxy(instance, self)

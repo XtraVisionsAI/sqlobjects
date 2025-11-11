@@ -1,14 +1,18 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from sqlalchemy import Column, ForeignKey, Table
 
 from ...cascade import CascadeType, normalize_cascade
-from .descriptors import RelationshipProperty, RelationshipType
+from .descriptors import RelationshipDescriptor, RelationshipProperty, RelationshipType
 
 
 if TYPE_CHECKING:
     from ...model import ObjectModel
+    from ..proxies import RelatedObjectProxy
+
+
+T = TypeVar("T")
 
 
 @dataclass
@@ -117,7 +121,7 @@ def relationship(
     cascade: CascadeType = None,
     passive_deletes: bool = False,
     **kwargs: Any,
-):
+) -> "RelationshipDescriptor[RelatedObjectProxy]":
     """Define model relationship with SQLAlchemy-compatible cascade behavior.
 
     Args:
@@ -190,10 +194,8 @@ def relationship(
         property_.m2m_definition = m2m_def  # type: ignore[reportAttributeAccessIssue]
         property_.is_many_to_many = True
 
-    # Return our own Column instance, marked as relationship field
-    from ..core import Column
-
-    return Column[Any](is_relationship=True, relationship_property=property_)
+    # Return descriptor that provides proper type hints
+    return RelationshipDescriptor(property_)
 
 
 class RelationshipAnalyzer:

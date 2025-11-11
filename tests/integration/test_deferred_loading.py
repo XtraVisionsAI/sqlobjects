@@ -2,9 +2,9 @@
 
 import pytest
 
-from sqlobjects.exceptions import DeferredFieldError, PrimaryKeyError
+from sqlobjects.exceptions import PrimaryKeyError
 from sqlobjects.fields import Column, StringColumn, column, foreign_key, identity
-from sqlobjects.fields.proxies import DeferredFieldProxy, RelationFieldProxy
+from sqlobjects.fields.proxies import DeferredFieldProxy
 from tests.conftest import TestModel
 
 
@@ -379,53 +379,6 @@ class TestDeferredFieldQueryOperations:
         assert loaded_user.username == "only_fields_user"
         assert loaded_user.email == "test@example.com"
         assert loaded_user.is_field_deferred("bio")
-
-
-class TestRelationshipFieldProxyIntegration:
-    """Test relationship field proxy integration (basic functionality)"""
-
-    async def test_relationship_proxy_creation(self, session):
-        """Test relationship proxy objects are created correctly"""
-        # Create test user
-        user = await DeferredUser.objects.using(session).create(username="author", email="author@example.com")
-
-        # Simulate relationship field in cache (since we don't have actual relationships set up)
-        field_cache = user._get_field_cache()
-        field_cache["relationship_fields"].add("posts")
-
-        # Accessing relationship should create proxy
-        posts_proxy = user.posts
-        assert isinstance(posts_proxy, RelationFieldProxy)
-        assert posts_proxy.field_name == "posts"
-        assert posts_proxy.instance == user
-
-    def test_relationship_proxy_caching(self):
-        """Test relationship proxy objects are cached properly"""
-        # Create test user
-        user = DeferredUser(username="author", email="author@example.com")
-
-        # Create and cache proxy
-        proxy1 = RelationFieldProxy(user, "posts")
-        user._state_manager.update_object_cache("posts", proxy1)
-
-        # Accessing again should return cached proxy
-        cached_proxy = user._state_manager.get_object_cache().get("posts")
-        assert cached_proxy is proxy1
-
-    def test_relationship_proxy_error_handling(self):
-        """Test relationship proxy error handling"""
-        user = DeferredUser(username="author", email="author@example.com")
-        proxy = RelationFieldProxy(user, "posts")
-
-        # Should raise appropriate errors for unloaded relationships
-        with pytest.raises(DeferredFieldError):
-            iter(proxy)
-
-        with pytest.raises(DeferredFieldError):
-            len(proxy)
-
-        with pytest.raises(DeferredFieldError):
-            bool(proxy)
 
 
 class TestDeferredFieldPerformance:

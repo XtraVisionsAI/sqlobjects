@@ -4,7 +4,7 @@ import pytest
 
 from sqlobjects.exceptions import DeferredFieldError
 from sqlobjects.fields import Column, StringColumn, column, foreign_key, identity
-from sqlobjects.fields.proxies import DeferredFieldProxy, RelationFieldProxy
+from sqlobjects.fields.proxies import DeferredFieldProxy
 from tests.conftest import TestModel
 
 
@@ -161,121 +161,6 @@ class TestDeferredFieldProxy:
         assert result2 is proxy._cached_value
 
 
-class TestRelationFieldProxy:
-    """Test RelationFieldProxy behavior and error handling"""
-
-    def test_relation_field_proxy_creation(self):
-        """Test RelationFieldProxy can be created with proper parameters"""
-        user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = RelationFieldProxy(user, "posts")
-
-        assert proxy.instance == user
-        assert proxy.field_name == "posts"
-        assert proxy._cached_objects is None
-        assert proxy._is_loaded is False
-
-    def test_relation_field_proxy_string_representation(self):
-        """Test RelationFieldProxy string representations"""
-        user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = RelationFieldProxy(user, "posts")
-
-        assert str(proxy) == "<RelationField: posts>"
-        assert repr(proxy) == "RelationFieldProxy(field_name='posts')"
-
-    def test_relation_field_proxy_error_on_iteration(self):
-        """Test RelationFieldProxy raises error when trying to iterate"""
-        user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = RelationFieldProxy(user, "posts")
-
-        with pytest.raises(DeferredFieldError) as exc_info:
-            iter(proxy)
-
-        assert "Cannot iterate over unloaded relationship 'posts'" in str(exc_info.value)
-        assert "DeferredTestUser" in str(exc_info.value)
-
-    def test_relation_field_proxy_error_on_length(self):
-        """Test RelationFieldProxy raises error when trying to get length"""
-        user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = RelationFieldProxy(user, "posts")
-
-        with pytest.raises(DeferredFieldError) as exc_info:
-            len(proxy)
-
-        assert "Cannot get length of unloaded relationship 'posts'" in str(exc_info.value)
-        assert "DeferredTestUser" in str(exc_info.value)
-
-    def test_relation_field_proxy_error_on_boolean(self):
-        """Test RelationFieldProxy raises error when checking boolean value"""
-        user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = RelationFieldProxy(user, "posts")
-
-        with pytest.raises(DeferredFieldError) as exc_info:
-            bool(proxy)
-
-        assert "Cannot check boolean value of unloaded relationship 'posts'" in str(exc_info.value)
-        assert "DeferredTestUser" in str(exc_info.value)
-
-    def test_relation_field_proxy_error_on_getitem(self):
-        """Test RelationFieldProxy raises error when accessing items"""
-        user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = RelationFieldProxy(user, "posts")
-
-        with pytest.raises(DeferredFieldError) as exc_info:
-            proxy[0]  # noqa
-
-        assert "Cannot access items of unloaded relationship 'posts'" in str(exc_info.value)
-        assert "DeferredTestUser" in str(exc_info.value)
-
-    def test_relation_field_proxy_error_on_contains(self):
-        """Test RelationFieldProxy raises error when checking containment"""
-        user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = RelationFieldProxy(user, "posts")
-
-        with pytest.raises(DeferredFieldError) as exc_info:
-            "test" in proxy  # noqa  # type: ignore
-
-        assert "Cannot check containment in unloaded relationship 'posts'" in str(exc_info.value)
-        assert "DeferredTestUser" in str(exc_info.value)
-
-    def test_relation_field_proxy_error_on_arithmetic(self):
-        """Test RelationFieldProxy raises error on arithmetic operations"""
-        user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = RelationFieldProxy(user, "posts")
-
-        with pytest.raises(DeferredFieldError) as exc_info:
-            proxy + []  # noqa  # type: ignore
-
-        assert "Cannot perform arithmetic on unloaded relationship 'posts'" in str(exc_info.value)
-        assert "DeferredTestUser" in str(exc_info.value)
-
-    def test_relation_field_proxy_is_loaded_status(self):
-        """Test RelationFieldProxy correctly reports loaded status"""
-        user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = RelationFieldProxy(user, "posts")
-
-        # Initially not loaded
-        assert not proxy.is_loaded()
-        assert proxy.is_deferred()
-
-        # Simulate cached relationship
-        user._posts_cache = []
-        assert proxy.is_loaded()
-        assert not proxy.is_deferred()
-
-    def test_relation_field_proxy_get_cached_objects(self):
-        """Test RelationFieldProxy retrieves cached objects correctly"""
-        user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = RelationFieldProxy(user, "posts")
-
-        # No cache initially
-        assert proxy._get_cached_objects() is None
-
-        # With cache
-        cached_posts = [{"title": "Test Post"}]
-        user._posts_cache = cached_posts
-        assert proxy._get_cached_objects() == cached_posts
-
-
 class TestDeferredFieldIntegration:
     """Test deferred field integration with model system"""
 
@@ -379,39 +264,6 @@ class TestDeferredFieldIntegration:
         assert loaded_user.profile_data == "Profile data content"
 
 
-class TestRelationFieldIntegration:
-    """Test relationship field integration with model system"""
-
-    async def test_relation_field_automatic_proxy_creation(self):
-        """Test that relationship fields automatically create proxy objects"""
-        # This test would require actual relationship setup
-        # For now, test the proxy creation mechanism
-        user = DeferredTestUser(username="test", email="test@example.com")
-
-        # Simulate relationship field in cache
-        field_cache = user._get_field_cache()
-        field_cache["relationship_fields"].add("posts")
-
-        # Accessing relationship field should return proxy
-        posts_proxy = user.posts
-        assert isinstance(posts_proxy, RelationFieldProxy)
-        assert posts_proxy.field_name == "posts"
-
-    def test_relation_field_cache_integration(self):
-        """Test relationship field proxy cache integration"""
-        user = DeferredTestUser(username="test", email="test@example.com")
-
-        # Create proxy
-        proxy = RelationFieldProxy(user, "posts")
-
-        # Test cache storage in state manager
-        user._state_manager.update_object_cache("posts", proxy)
-
-        # Verify cache retrieval
-        cached_proxy = user._state_manager.get_object_cache().get("posts")
-        assert cached_proxy is proxy
-
-
 class TestProxyErrorMessages:
     """Test proxy error messages are clear and helpful"""
 
@@ -429,32 +281,13 @@ class TestProxyErrorMessages:
         assert "'bio'" in error_msg
         assert "DeferredTestUser" in error_msg
 
-    def test_relation_field_error_messages_are_descriptive(self):
-        """Test that relationship field error messages provide clear guidance"""
-        user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = RelationFieldProxy(user, "posts")
-
-        # Test iteration error message
-        with pytest.raises(DeferredFieldError) as exc_info:
-            iter(proxy)
-        error_msg = str(exc_info.value)
-        assert "Cannot iterate" in error_msg
-        assert "unloaded relationship" in error_msg
-        assert "'posts'" in error_msg
-        assert "DeferredTestUser" in error_msg
-
     def test_error_messages_include_model_class_name(self):
         """Test that error messages include the model class name for context"""
         user = DeferredTestUser(username="test", email="test@example.com")
 
         deferred_proxy = DeferredFieldProxy(user, "bio")
-        relation_proxy = RelationFieldProxy(user, "posts")
 
-        # Both should include model class name
+        # Should include model class name
         with pytest.raises(DeferredFieldError) as exc_info:
             len(deferred_proxy)
-        assert "DeferredTestUser" in str(exc_info.value)
-
-        with pytest.raises(DeferredFieldError) as exc_info:
-            len(relation_proxy)
         assert "DeferredTestUser" in str(exc_info.value)

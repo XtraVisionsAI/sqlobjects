@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from sqlalchemy import Table, and_, select
 
 from .exceptions import PrimaryKeyError, ValidationError
-from .fields.proxies import DeferredFieldProxy, RelationFieldProxy
+from .fields.proxies import DeferredFieldProxy
 from .fields.utils import get_column_from_field, is_field_definition
 from .session import AsyncSession, get_session
 
@@ -645,9 +645,12 @@ class FieldCacheMixin(DataConversionMixin):
             if name in cascade_relationships:
                 return cascade_relationships[name]
 
-            # Create and cache relationship proxy
-            proxy = RelationFieldProxy(self, name)
-            self._update_cache(name, proxy)
-            return proxy
+            # Return the actual relationship proxy directly
+            relationships = getattr(self.__class__, "_relationships", {})
+            if name in relationships:
+                descriptor = relationships[name]
+                proxy = descriptor.__get__(self, self.__class__)
+                self._update_cache(name, proxy)
+                return proxy
 
         return super().__getattribute__(name)

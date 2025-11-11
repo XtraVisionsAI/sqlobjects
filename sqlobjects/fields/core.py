@@ -69,7 +69,8 @@ class Column(Generic[T]):
         self.name = name
         self._private_name = f"_{name}"
 
-        if self._is_relationship:
+        # Check if this is actually a RelationshipDescriptor wrapped in Column annotation
+        if hasattr(self, "_is_relationship") and self._is_relationship:
             self._setup_relationship(owner, name)
         else:
             self._setup_column(owner, name)

@@ -1,14 +1,7 @@
+from ..proxies import BaseRelatedCollection, ManyToManyProxy, OneToManyProxy
 from .descriptors import RelationshipDescriptor, RelationshipProperty, RelationshipType
 from .prefetch import PrefetchHandler
-from .proxies import (
-    BaseRelatedCollection,
-    M2MRelatedCollection,
-    NoLoadProxy,
-    OneToManyCollection,
-    RaiseProxy,
-    RelatedObjectProxy,
-    RelatedQuerySet,
-)
+from .strategies import NoLoadProxy, RaiseProxy, RelatedQuerySet
 from .utils import M2MTable, RelationshipAnalyzer, RelationshipResolver, relationship
 
 
@@ -18,18 +11,17 @@ __all__ = [
     "RelationshipProperty",
     "RelationshipDescriptor",
     "RelationshipResolver",
-    # Relationship managers
-    "RelatedObjectProxy",
+    # Proxy classes (now in fields/proxies.py)
     "BaseRelatedCollection",
-    "OneToManyCollection",
-    "M2MRelatedCollection",
+    "OneToManyProxy",
+    "ManyToManyProxy",
+    # Special loading strategies
     "RelatedQuerySet",
     "NoLoadProxy",
     "RaiseProxy",
     # Utilities
     "M2MTable",
     "relationship",
-    # New components
     "RelationshipAnalyzer",
     "PrefetchHandler",
 ]
