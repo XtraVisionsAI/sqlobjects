@@ -398,6 +398,32 @@ class DeferredLoadingMixin(ValidationMixin):
                 self._state_manager.update_object_cache(field, value)
                 self._state_manager.add_loaded_deferred_field(field)
 
+    async def load_relation(self, field_name: str):
+        """Load a single relationship field.
+
+        Args:
+            field_name: Name of the relationship field to load
+
+        Returns:
+            Loaded relationship data
+        """
+        proxy = getattr(self, field_name)
+        return await proxy.fetch()
+
+    async def load_relations(self, *field_names: str) -> dict[str, Any]:
+        """Load multiple relationship fields.
+
+        Args:
+            *field_names: Names of relationship fields to load
+
+        Returns:
+            Dictionary mapping field names to loaded data
+        """
+        results = {}
+        for name in field_names:
+            results[name] = await self.load_relation(name)
+        return results
+
 
 class DataConversionMixin(DeferredLoadingMixin):
     """Data conversion functionality - Layer 5."""
@@ -599,7 +625,11 @@ class FieldCacheMixin(DataConversionMixin):
         if name.startswith("_") or name in (
             "get_table",
             "load_deferred_fields",
+            "load_deferred_field",
+            "load_relation",
+            "load_relations",
             "validate_all_fields",
+            "validate_field",
             "save",
             "delete",
             "refresh",
@@ -610,8 +640,6 @@ class FieldCacheMixin(DataConversionMixin):
             "is_field_loaded",
             "get_deferred_fields",
             "get_session",
-            "validate_field",
-            "load_deferred_field",
             "is_from_database",
         ):
             return super().__getattribute__(name)

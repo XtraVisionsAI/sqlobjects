@@ -3,7 +3,7 @@
 import pytest
 
 from sqlobjects.exceptions import PrimaryKeyError
-from sqlobjects.fields import Column, StringColumn, column, foreign_key, identity
+from sqlobjects.fields import Column, Related, StringColumn, column, foreign_key, identity, relationship
 from sqlobjects.fields.proxies import DeferredObject
 from tests.conftest import TestModel
 
@@ -28,6 +28,10 @@ class DeferredUser(TestModel):
     )  # Field-level deferred with raiseload
     settings: Column[str] = column(type="json", deferred=True)  # Field-level deferred JSON
 
+    # Relationships
+    posts: Related[list["DeferredPost"]] = relationship("DeferredPost", back_populates="author")
+    comments: Related[list["DeferredComment"]] = relationship("DeferredComment", back_populates="author")
+
     class Config:
         table_name = "deferred_users"
 
@@ -41,6 +45,10 @@ class DeferredPost(TestModel):
     summary: Column[str] = column(type="text", deferred=True)
     author_id: Column[int] = foreign_key("deferred_users.id")
 
+    # Relationships
+    author: Related["DeferredUser"] = relationship("DeferredUser", back_populates="posts")
+    comments: Related[list["DeferredComment"]] = relationship("DeferredComment", back_populates="post")
+
     class Config:
         table_name = "deferred_posts"
 
@@ -53,6 +61,10 @@ class DeferredComment(TestModel):
     metadata: Column[str] = column(type="json", deferred=True)
     post_id: Column[int] = foreign_key("deferred_posts.id")
     author_id: Column[int] = foreign_key("deferred_users.id")
+
+    # Relationships
+    post: Related["DeferredPost"] = relationship("DeferredPost", back_populates="comments")
+    author: Related["DeferredUser"] = relationship("DeferredUser", back_populates="comments")
 
     class Config:
         table_name = "deferred_comments"
@@ -515,3 +527,94 @@ class TestDeferredFieldEdgeCases:
         # Load empty list (should be no-op)
         await loaded_user.load_deferred_fields([])
         assert not loaded_user.is_field_loaded("bio")
+
+
+class TestRelationshipLoading:
+    """Test relationship loading methods"""
+
+    async def test_load_single_relation(self, session):
+        """Test loading a single relationship field"""
+        # Create test data
+        user = await DeferredUser.objects.using(session).create(username="relation_user", email="test@example.com")
+
+        await DeferredPost.objects.using(session).create(title="Post 1", content="Content 1", author_id=user.id)
+        await DeferredPost.objects.using(session).create(title="Post 2", content="Content 2", author_id=user.id)
+
+        # Load user without prefetch
+        loaded_user = await DeferredUser.objects.using(session).get(DeferredUser.id == user.id)
+
+        # Load relationship using model method
+        posts = await loaded_user.load_relation("posts")
+
+        assert len(posts) == 2
+        assert any(p.title == "Post 1" for p in posts)
+        assert any(p.title == "Post 2" for p in posts)
+
+    async def test_load_multiple_relations(self, session):
+        """Test loading multiple relationship fields"""
+        # Create test data
+        user = await DeferredUser.objects.using(session).create(
+            username="multi_relation_user", email="test@example.com"
+        )
+
+        post = await DeferredPost.objects.using(session).create(title="Test Post", content="Content", author_id=user.id)
+
+        await DeferredComment.objects.using(session).create(content="Test Comment", post_id=post.id, author_id=user.id)
+
+        # Load user without prefetch
+        loaded_user = await DeferredUser.objects.using(session).get(DeferredUser.id == user.id)
+
+        # Load multiple relationships
+        data = await loaded_user.load_relations("posts", "comments")
+
+        assert "posts" in data
+        assert "comments" in data
+        assert len(data["posts"]) == 1
+        assert len(data["comments"]) == 1
+        assert data["posts"][0].title == "Test Post"
+        assert data["comments"][0].content == "Test Comment"
+
+    async def test_load_relation_empty_result(self, session):
+        """Test loading relationship with no related objects"""
+        # Create user without any posts
+        user = await DeferredUser.objects.using(session).create(username="no_posts_user", email="test@example.com")
+
+        # Load relationship
+        posts = await user.load_relation("posts")
+
+        assert posts == []
+
+    async def test_load_relation_single_object(self, session):
+        """Test loading single object relationship"""
+        # Create test data
+        user = await DeferredUser.objects.using(session).create(username="profile_user", email="test@example.com")
+
+        post = await DeferredPost.objects.using(session).create(title="Test Post", content="Content", author_id=user.id)
+
+        # Load post
+        loaded_post = await DeferredPost.objects.using(session).get(DeferredPost.id == post.id)
+
+        # Load author relationship
+        author = await loaded_post.load_relation("author")
+
+        assert author is not None
+        assert author.username == "profile_user"
+
+    async def test_load_relations_consistency_with_proxy(self, session):
+        """Test that load_relation returns same data as proxy.fetch()"""
+        # Create test data
+        user = await DeferredUser.objects.using(session).create(username="consistency_user", email="test@example.com")
+
+        await DeferredPost.objects.using(session).create(title="Post 1", content="Content 1", author_id=user.id)
+
+        # Load user
+        loaded_user = await DeferredUser.objects.using(session).get(DeferredUser.id == user.id)
+
+        # Load via model method
+        posts_via_method = await loaded_user.load_relation("posts")
+
+        # Load via proxy
+        posts_via_proxy = await loaded_user.posts.fetch()
+
+        assert len(posts_via_method) == len(posts_via_proxy)
+        assert posts_via_method[0].title == posts_via_proxy[0].title
