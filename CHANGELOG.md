@@ -1,3 +1,11 @@
+## 1.0.8 (2025-11-11)
+
+### Feat
+
+- add model-level relationship loading methods
+- improve relation field type inference
+- refactor relationship proxies
+
 ## 1.0.7 (2025-10-14)
 
 ### Feat
