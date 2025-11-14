@@ -1,3 +1,9 @@
+## 1.0.9 (2025-11-14)
+
+### Feat
+
+- add optional tables parameter to create_tables/drop_tables
+
 ## 1.0.8 (2025-11-11)
 
 ### Feat

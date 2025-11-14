@@ -1,6 +1,6 @@
 [project]
 name = "sqlobjects"
-version = "1.0.8"
+version = "1.0.9"
 description = "Django-style async ORM library based on SQLAlchemy with chainable queries, Q objects, and relationship loading"
 readme = "README.md"
 license = { text = "MIT" }
