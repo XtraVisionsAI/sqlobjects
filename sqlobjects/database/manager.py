@@ -174,37 +174,49 @@ class Database:
 
         return event.listens_for(target, event_name)
 
-    async def create_tables(self, base_class) -> None:
-        """Create all tables defined in the model registry of SQLObjects base class
+    async def create_tables(self, base_class, tables: list[type] | None = None) -> None:
+        """Create tables defined in the model registry of SQLObjects base class
 
-        Creates all tables, indexes, and constraints defined in the provided
+        Creates tables, indexes, and constraints defined in the provided
         SQLAlchemy metadata object using the database engine.
 
         Args:
             base_class: SQLObjects base class containing model registry
+            tables: List of model classes to create tables for, creates all if None
 
         Examples:
             >>> from sqlobjects.base import ObjectModel
-            >>> await db.create_tables(ObjectModel)
+            >>> await db.create_tables(ObjectModel)  # Create all tables
+            >>> await db.create_tables(ObjectModel, [User, Post])  # Create specific tables
         """
         async with self.engine.begin() as conn:
-            await conn.run_sync(base_class.__registry__.create_all)
+            if tables is None:
+                await conn.run_sync(base_class.__registry__.create_all)
+            else:
+                table_objects = [model.__table__ for model in tables]
+                await conn.run_sync(base_class.__registry__.create_all, tables=table_objects)
 
-    async def drop_tables(self, base_class) -> None:
-        """Drop all tables defined in the model registry of SQLObjects base class
+    async def drop_tables(self, base_class, tables: list[type] | None = None) -> None:
+        """Drop tables defined in the model registry of SQLObjects base class
 
-        Drops all tables, indexes, and constraints defined in the provided
+        Drops tables, indexes, and constraints defined in the provided
         SQLAlchemy metadata object from the database.
 
         Args:
             base_class: SQLObjects base class containing model registry
+            tables: List of model classes to drop tables for, drops all if None
 
         Examples:
             >>> from sqlobjects.base import ObjectModel
-            >>> await db.drop_tables(ObjectModel)
+            >>> await db.drop_tables(ObjectModel)  # Drop all tables
+            >>> await db.drop_tables(ObjectModel, [User, Post])  # Drop specific tables
         """
         async with self.engine.begin() as conn:
-            await conn.run_sync(base_class.__registry__.drop_all)
+            if tables is None:
+                await conn.run_sync(base_class.__registry__.drop_all)
+            else:
+                table_objects = [model.__table__ for model in tables]
+                await conn.run_sync(base_class.__registry__.drop_all, tables=table_objects)
 
     async def disconnect(self) -> None:
         """Disconnect database and clean up resources
@@ -286,15 +298,16 @@ class _DatabaseManager:
         return database.engine
 
     @classmethod
-    async def create_tables(cls, base_class, db_name: str | None = None) -> None:
-        """Create all tables defined in the base class registry
+    async def create_tables(cls, base_class, db_name: str | None = None, tables: list[type] | None = None) -> None:
+        """Create tables defined in the base class registry
 
-        Creates all tables, indexes, and constraints for models registered
+        Creates tables, indexes, and constraints for models registered
         in the base class registry using the specified database connection.
 
         Args:
             base_class: SQLObjects base class containing model registry
             db_name: Database name to use, uses default database if None
+            tables: List of model classes to create tables for, creates all if None
 
         Raises:
             ValueError: When specified database does not exist
@@ -303,20 +316,22 @@ class _DatabaseManager:
             >>> from sqlobjects.base import ObjectModel
             >>> await DatabaseManager.create_tables(ObjectModel)
             >>> await DatabaseManager.create_tables(ObjectModel, "analytics")
+            >>> await DatabaseManager.create_tables(ObjectModel, tables=[User, Post])
         """
         database = cls.get_database(db_name)
-        await database.create_tables(base_class)
+        await database.create_tables(base_class, tables)
 
     @classmethod
-    async def drop_tables(cls, base_class, db_name: str | None = None) -> None:
-        """Drop all tables defined in the base class registry
+    async def drop_tables(cls, base_class, db_name: str | None = None, tables: list[type] | None = None) -> None:
+        """Drop tables defined in the base class registry
 
-        Drops all tables, indexes, and constraints for models registered
+        Drops tables, indexes, and constraints for models registered
         in the base class registry from the specified database connection.
 
         Args:
             base_class: SQLObjects base class containing model registry
             db_name: Database name to use, uses default database if None
+            tables: List of model classes to drop tables for, drops all if None
 
         Raises:
             ValueError: When specified database does not exist
@@ -325,9 +340,10 @@ class _DatabaseManager:
             >>> from sqlobjects.base import ObjectModel
             >>> await DatabaseManager.drop_tables(ObjectModel)
             >>> await DatabaseManager.drop_tables(ObjectModel, "analytics")
+            >>> await DatabaseManager.drop_tables(ObjectModel, tables=[User, Post])
         """
         database = cls.get_database(db_name)
-        await database.drop_tables(base_class)
+        await database.drop_tables(base_class, tables)
 
     @classmethod
     async def close(cls, db_name: str | None = None, auto_default: bool = False) -> None:
@@ -476,36 +492,48 @@ async def init_dbs(
     return tuple(db_instances)
 
 
-async def create_tables(base_class, db_name: str | None = None) -> None:
-    """Create all tables defined in the base class registry
+async def create_tables(base_class, db_name: str | None = None, tables: list[type] | None = None) -> None:
+    """Create tables defined in the base class registry
 
-    Creates all tables, indexes, and constraints for models registered
+    Creates tables, indexes, and constraints for models registered
     in the base class registry using the specified database connection.
 
     Args:
         base_class: SQLObjects base class containing model registry
         db_name: Name of the database, uses default if None
+        tables: List of model classes to create tables for, creates all if None
 
     Raises:
         ValueError: When specified database does not exist
+
+    Examples:
+        >>> from sqlobjects.model import ObjectModel
+        >>> await create_tables(ObjectModel)  # Create all tables
+        >>> await create_tables(ObjectModel, tables=[User, Post])  # Create specific tables
     """
-    await _DatabaseManager.create_tables(base_class, db_name)
+    await _DatabaseManager.create_tables(base_class, db_name, tables)
 
 
-async def drop_tables(base_class, db_name: str | None = None) -> None:
-    """Drop all tables defined in the base class registry
+async def drop_tables(base_class, db_name: str | None = None, tables: list[type] | None = None) -> None:
+    """Drop tables defined in the base class registry
 
-    Drops all tables, indexes, and constraints for models registered
+    Drops tables, indexes, and constraints for models registered
     in the base class registry from the specified database connection.
 
     Args:
         base_class: SQLObjects base class containing model registry
         db_name: Name of the database, uses default if None
+        tables: List of model classes to drop tables for, drops all if None
 
     Raises:
         ValueError: When specified database does not exist
+
+    Examples:
+        >>> from sqlobjects.model import ObjectModel
+        >>> await drop_tables(ObjectModel)  # Drop all tables
+        >>> await drop_tables(ObjectModel, tables=[User, Post])  # Drop specific tables
     """
-    await _DatabaseManager.drop_tables(base_class, db_name)
+    await _DatabaseManager.drop_tables(base_class, db_name, tables)
 
 
 async def close_db(db_name: str | None = None, auto_default: bool = False) -> None:
