@@ -247,7 +247,7 @@ older_users = await User.objects.filter(User.age > avg_age).all()
 
 # Manual joins and locking
 posts = await Post.objects.join(
-    User.__table__, 
+    User,  # Using Model class (recommended)
     Post.author_id == User.id
 ).select_for_update(nowait=True).all()
 

@@ -247,7 +247,7 @@ older_users = await User.objects.filter(User.age > avg_age).all()
 
 # 手动连接和锁定
 posts = await Post.objects.join(
-    User.__table__, 
+    User,  # 使用 Model 类（推荐）
     Post.author_id == User.id
 ).select_for_update(nowait=True).all()
 

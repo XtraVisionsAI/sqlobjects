@@ -18,6 +18,7 @@ from sqlalchemy import (
     select,
     text,
 )
+from sqlalchemy.sql.selectable import Subquery
 
 from .exceptions import DoesNotExist, MultipleObjectsReturned
 from .expressions import (
@@ -53,6 +54,9 @@ QueryType = Union[
     ClauseElement,
     Any,  # For FunctionExpression and other SQLObjects expressions
 ]
+
+# Supported table-like types for JOIN operations
+TableLike = Union[type, Table, Subquery]  # noqa: UP007
 
 
 class Q:
@@ -609,20 +613,86 @@ class QuerySet(Generic[T]):
         new_builder = self._builder.add_having(*conditions)
         return self._create_new_queryset(new_builder)
 
-    def join(self, target_table: Table, on_condition: Any, join_type: str = "inner") -> "QuerySet[T]":
-        """Perform manual JOIN with another table."""
+    def join(self, target: TableLike, on_condition: Any, join_type: str = "inner") -> "QuerySet[T]":
+        """Perform manual JOIN with another table.
+
+        Args:
+            target: Model class, Table object, or Subquery
+            on_condition: JOIN condition expression
+            join_type: Type of join ('inner', 'left', 'outer')
+
+        Examples:
+            # Using Model class (recommended)
+            posts = await Post.objects.join(User, Post.author_id == User.id).all()
+
+            # Using Table object (backward compatible)
+            posts = await Post.objects.join(User.__table__, Post.author_id == User.id).all()
+
+            # Using Subquery
+            active_users = User.objects.filter(User.is_active == True).subquery("active")
+            posts = await Post.objects.join(active_users, Post.author_id == active_users.c.id).all()
+        """
+        target_table = self._resolve_table_like(target)
         new_builder = self._builder.add_join(target_table, on_condition, join_type)
         return self._create_new_queryset(new_builder)
 
-    def leftjoin(self, target_table: Table, on_condition: Any) -> "QuerySet[T]":
-        """Perform LEFT JOIN with another table."""
+    def leftjoin(self, target: TableLike, on_condition: Any) -> "QuerySet[T]":
+        """Perform LEFT JOIN with another table.
+
+        Args:
+            target: Model class, Table object, or Subquery
+            on_condition: JOIN condition expression
+
+        Examples:
+            # Using Model class
+            posts = await Post.objects.leftjoin(Comment, Comment.post_id == Post.id).all()
+        """
+        target_table = self._resolve_table_like(target)
         new_builder = self._builder.add_join(target_table, on_condition, "left")
         return self._create_new_queryset(new_builder)
 
-    def outerjoin(self, target_table: Table, on_condition: Any) -> "QuerySet[T]":
-        """Perform OUTER JOIN with another table."""
+    def outerjoin(self, target: TableLike, on_condition: Any) -> "QuerySet[T]":
+        """Perform OUTER JOIN with another table.
+
+        Args:
+            target: Model class, Table object, or Subquery
+            on_condition: JOIN condition expression
+
+        Examples:
+            # Using Model class
+            posts = await Post.objects.outerjoin(Tag, Post.id == Tag.post_id).all()
+        """
+        target_table = self._resolve_table_like(target)
         new_builder = self._builder.add_join(target_table, on_condition, "left")
         return self._create_new_queryset(new_builder)
+
+    @staticmethod
+    def _resolve_table_like(target: TableLike) -> Table | Subquery:
+        """Resolve table-like object to actual Table or Subquery.
+
+        Args:
+            target: Model class, Table object, or Subquery
+
+        Returns:
+            Table or Subquery object
+
+        Raises:
+            TypeError: If target is not a valid table-like object
+        """
+        # Check if it's already a Table or Subquery
+        if isinstance(target, (Table, Subquery)):
+            return target
+
+        # Check if it's a Model class with __table__ attribute
+        if hasattr(target, "__table__"):
+            table = target.__table__
+            if isinstance(table, Table):
+                return table
+
+        # Invalid type
+        raise TypeError(
+            f"Invalid target type for JOIN: {type(target).__name__}. Expected Model class, Table, or Subquery."
+        )
 
     def select_for_update(self, nowait: bool = False, skip_locked: bool = False) -> "QuerySet[T]":
         """Apply row-level locking using FOR UPDATE."""

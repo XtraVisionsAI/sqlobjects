@@ -209,21 +209,21 @@ dept_stats = await User.objects.group_by("department").having(
     avg_salary=func.avg(User.salary)
 )
 
-# 复杂查询的手动连接
+# 复杂查询的手动连接（使用 Model 类 - 推荐）
 posts = await Post.objects.join(
-    User.__table__, 
+    User, 
     Post.author_id == User.id,
     join_type="inner"
 ).all()
 
 # 左连接和外连接
 posts = await Post.objects.leftjoin(
-    Comment.__table__,
+    Comment,
     Comment.post_id == Post.id
 ).all()
 
 posts = await Post.objects.outerjoin(
-    Tag.__table__,
+    Tag,
     Tag.post_id == Post.id
 ).all()
 
@@ -288,21 +288,21 @@ monthly_stats = await Sale.objects.group_by(
 
 ```python
 # 连接类型
-# 内连接（默认）
+# 内连接（默认）- 使用 Model 类（推荐）
 posts = await Post.objects.join(
-    User.__table__,
+    User,
     Post.author_id == User.id
 ).all()
 
 # 左连接
 posts = await Post.objects.leftjoin(
-    Comment.__table__,
+    Comment,
     Comment.post_id == Post.id
 ).all()
 
 # 外连接
 posts = await Post.objects.outerjoin(
-    Tag.__table__,
+    Tag,
     Tag.post_id == Post.id
 ).all()
 

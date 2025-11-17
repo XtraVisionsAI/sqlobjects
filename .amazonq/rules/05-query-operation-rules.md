@@ -42,9 +42,9 @@ User.objects.distinct("department")              # Duplicate elimination
 User.objects.annotate(post_count=func.count())   # Calculated fields
 User.objects.group_by("department")              # Grouping
 User.objects.having(func.count() > 5)            # Group filtering
-User.objects.join(Post.__table__, condition)     # Manual joins
-User.objects.leftjoin(Post.__table__, condition) # Left joins
-User.objects.outerjoin(Post.__table__, condition)# Outer joins
+User.objects.join(Post, condition)               # Manual joins (Model class)
+User.objects.leftjoin(Comment, condition)        # Left joins (Model class)
+User.objects.outerjoin(Tag, condition)           # Outer joins (Model class)
 User.objects.select_for_update(nowait=True)      # Row locking
 User.objects.select_for_share(skip_locked=True)  # Shared locking
 User.objects.extra(columns={"custom": "1"})      # Extra SQL
@@ -280,9 +280,9 @@ User.objects.distinct("department")
 User.objects.annotate(count=func.count())
 User.objects.group_by("department")
 User.objects.having(func.count() > 5)
-User.objects.join(Post.__table__, condition)
-User.objects.leftjoin(Post.__table__, condition)
-User.objects.outerjoin(Post.__table__, condition)
+User.objects.join(Post, condition)               # Supports Model class, Table, or Subquery
+User.objects.leftjoin(Comment, condition)        # Supports Model class, Table, or Subquery
+User.objects.outerjoin(Tag, condition)           # Supports Model class, Table, or Subquery
 User.objects.select_for_update(nowait=True)
 User.objects.select_for_share(skip_locked=True)
 User.objects.extra(columns={"custom": "1"})
@@ -481,10 +481,13 @@ async for item in executor.iterator(query, chunk_size=1000):
 
 ### Manual Joins
 ```python
-# Explicit table joins
-.join(Post.__table__, User.id == Post.author_id, join_type="inner")
-.leftjoin(Comment.__table__, Post.id == Comment.post_id)
-.outerjoin(Tag.__table__, Post.id == Tag.post_id)
+# Manual joins (supports Model class, Table object, or Subquery)
+.join(Post, User.id == Post.author_id, join_type="inner")      # Using Model class (recommended)
+.leftjoin(Comment, Post.id == Comment.post_id)                 # Using Model class
+.outerjoin(Tag, Post.id == Tag.post_id)                        # Using Model class
+
+# Backward compatible: using Table object
+.join(Post.__table__, User.id == Post.author_id)
 ```
 
 ### Row Locking

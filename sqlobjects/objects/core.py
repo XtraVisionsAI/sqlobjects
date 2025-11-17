@@ -9,7 +9,7 @@ from typing import Any, Generic, Literal, overload
 from sqlalchemy import insert, text
 
 from ..exceptions import DoesNotExist, MultipleObjectsReturned
-from ..queryset import QuerySet, T
+from ..queryset import QuerySet, T, TableLike
 from ..session import AsyncSession, get_session
 from ..signals import Operation, emit_signals
 from .bulk import BulkResult, ConflictResolution, ErrorHandling, TransactionMode
@@ -190,42 +190,57 @@ class ObjectsManager(Generic[T]):
         """
         return self.filter().having(*conditions)
 
-    def join(self, target_table, on_condition, join_type: str = "inner") -> QuerySet[T]:
+    def join(self, target: TableLike, on_condition: Any, join_type: str = "inner") -> QuerySet[T]:
         """Perform manual JOIN with another table.
 
         Args:
-            target_table: Table to join with
+            target: Model class, Table object, or Subquery
             on_condition: JOIN condition expression
             join_type: Type of join ('inner', 'left', 'outer')
 
         Returns:
             QuerySet with JOIN applied
-        """
-        return self.filter().join(target_table, on_condition, join_type)
 
-    def leftjoin(self, target_table, on_condition) -> QuerySet[T]:
+        Examples:
+            # Using Model class (recommended)
+            posts = await Post.objects.join(User, Post.author_id == User.id).all()
+
+            # Using Table object (backward compatible)
+            posts = await Post.objects.join(User.__table__, Post.author_id == User.id).all()
+        """
+        return self.filter().join(target, on_condition, join_type)
+
+    def leftjoin(self, target: TableLike, on_condition: Any) -> QuerySet[T]:
         """Perform LEFT JOIN with another table.
 
         Args:
-            target_table: Table to join with
+            target: Model class, Table object, or Subquery
             on_condition: JOIN condition expression
 
         Returns:
             QuerySet with LEFT JOIN applied
-        """
-        return self.filter().leftjoin(target_table, on_condition)
 
-    def outerjoin(self, target_table, on_condition) -> QuerySet[T]:
+        Examples:
+            # Using Model class
+            posts = await Post.objects.leftjoin(Comment, Comment.post_id == Post.id).all()
+        """
+        return self.filter().leftjoin(target, on_condition)
+
+    def outerjoin(self, target: TableLike, on_condition: Any) -> QuerySet[T]:
         """Perform OUTER JOIN with another table.
 
         Args:
-            target_table: Table to join with
+            target: Model class, Table object, or Subquery
             on_condition: JOIN condition expression
 
         Returns:
             QuerySet with OUTER JOIN applied
+
+        Examples:
+            # Using Model class
+            posts = await Post.objects.outerjoin(Tag, Post.id == Tag.post_id).all()
         """
-        return self.filter().outerjoin(target_table, on_condition)
+        return self.filter().outerjoin(target, on_condition)
 
     def select_for_update(self, nowait: bool = False, skip_locked: bool = False) -> QuerySet[T]:
         """Apply row-level locking using FOR UPDATE.

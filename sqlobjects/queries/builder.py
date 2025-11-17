@@ -9,6 +9,7 @@ from sqlalchemy import (
     select,
     text,
 )
+from sqlalchemy.sql.selectable import Subquery
 
 
 # Export classes for use in other modules
@@ -41,7 +42,7 @@ class QueryBuilder:
         self.annotations: dict[str, Any] = {}
         self.group_clauses: list[Any] = []
         self.having_conditions: list[Any] = []
-        self.joins: list[tuple[Table, Any, str]] = []  # (table, condition, join_type)
+        self.joins: list[tuple[Table | Subquery, Any, str]] = []  # (table, condition, join_type)
         self.lock_mode: str | None = None
         self.lock_options: dict[str, bool] = {}
         self.extra_columns: dict[str, str] = {}
@@ -236,11 +237,11 @@ class QueryBuilder:
         new_builder.having_conditions.extend(conditions)
         return new_builder
 
-    def add_join(self, table: Table, condition: Any, join_type: str = "inner"):
+    def add_join(self, table: Table | Subquery, condition: Any, join_type: str = "inner"):
         """Add JOIN clause to the query.
 
         Args:
-            table: Table to join with
+            table: Table or Subquery to join with
             condition: JOIN condition expression
             join_type: Type of join ('inner', 'left', 'outer')
 

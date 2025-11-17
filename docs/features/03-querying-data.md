@@ -210,21 +210,21 @@ dept_stats = await User.objects.group_by("department").having(
     avg_salary=func.avg(User.salary)
 )
 
-# Manual joins for complex queries
+# Manual joins for complex queries (using Model class - recommended)
 posts = await Post.objects.join(
-    User.__table__, 
+    User, 
     Post.author_id == User.id,
     join_type="inner"
 ).all()
 
 # Left joins and outer joins
 posts = await Post.objects.leftjoin(
-    Comment.__table__,
+    Comment,
     Comment.post_id == Post.id
 ).all()
 
 posts = await Post.objects.outerjoin(
-    Tag.__table__,
+    Tag,
     Tag.post_id == Post.id
 ).all()
 
@@ -288,35 +288,35 @@ monthly_stats = await Sale.objects.group_by(
 ### Manual Joins and Locking
 
 ```python
-# Join types
+# Join types (using Model class - recommended)
 # Inner join (default)
 posts = await Post.objects.join(
-    User.__table__,
+    User,
     Post.author_id == User.id
 ).all()
 
 # Left join
 posts = await Post.objects.leftjoin(
-    Comment.__table__,
+    Comment,
     Comment.post_id == Post.id
 ).all()
 
 # Outer join
 posts = await Post.objects.outerjoin(
-    Tag.__table__,
+    Tag,
     Tag.post_id == Post.id
 ).all()
 
 # Multi-table joins
 posts = await Post.objects.join(
-    User.__table__, Post.author_id == User.id
+    User, Post.author_id == User.id
 ).leftjoin(
-    Comment.__table__, Comment.post_id == Post.id
+    Comment, Comment.post_id == Post.id
 ).all()
 
 # Complex join conditions
 posts = await Post.objects.join(
-    User.__table__,
+    User,
     and_(
         Post.author_id == User.id,
         User.is_active == True,
