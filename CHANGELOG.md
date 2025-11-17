@@ -1,3 +1,9 @@
+## 1.0.10 (2025-11-17)
+
+### Feat
+
+- support Model class in join methods for cleaner API
+
 ## 1.0.9 (2025-11-14)
 
 ### Feat
