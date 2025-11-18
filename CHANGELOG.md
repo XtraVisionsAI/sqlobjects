@@ -1,3 +1,9 @@
+## 1.0.12 (2025-11-18)
+
+### Refactor
+
+- move rules installer to independent scripts
+
 ## 1.0.11 (2025-11-18)
 
 ### Feat
