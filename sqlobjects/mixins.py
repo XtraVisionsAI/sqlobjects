@@ -425,7 +425,129 @@ class DeferredLoadingMixin(ValidationMixin):
         return results
 
 
-class DataConversionMixin(DeferredLoadingMixin):
+class FieldCacheMixin(DeferredLoadingMixin):
+    """Field caching and attribute access optimization - Layer 6."""
+
+    @classmethod
+    def _get_field_cache(cls):
+        """Get field cache from metadata system.
+
+        Returns:
+            Dictionary containing categorized field information
+        """
+        return getattr(
+            cls, "_field_cache", {"deferred_fields": set(), "relationship_fields": set(), "regular_fields": set()}
+        )
+
+    def _update_cache(self, name: str, value: Any):
+        """Update object cache entry.
+
+        Args:
+            name: Field name
+            value: Value to cache
+        """
+        self._state_manager.update_object_cache(name, value)
+
+    def _clear_cache_entry(self, name: str):
+        """Clear specific cache entry.
+
+        Args:
+            name: Field name to clear
+        """
+        self._state_manager.clear_cache_entry(name)
+
+    def _get_relationship_fields(self) -> set[str]:
+        """Get relationship field names from model metadata."""
+        relationships = getattr(self.__class__, "_relationships", {})
+        return set(relationships.keys())
+
+    def __setattr__(self, name: str, value):
+        """Override setattr to handle relationship field assignments."""
+        if hasattr(self, "_get_relationship_fields") and name in self._get_relationship_fields():
+            self._handle_relationship_assignment(name, value)
+        else:
+            super().__setattr__(name, value)
+
+    def _handle_relationship_assignment(self, field_name: str, value):
+        """Handle assignment of relationship objects for cascade save."""
+        if not hasattr(self, "_state_manager"):
+            return
+
+        relationship_value = value if isinstance(value, list) else [value]
+        self._state_manager.set_cascade_relationship(field_name, relationship_value)
+
+    def __getattribute__(self, name: str):
+        """Optimized attribute access using unified proxy cache.
+
+        Args:
+            name: Attribute name to access
+
+        Returns:
+            Attribute value, cached data, or proxy object
+        """
+        if name.startswith("_") or name in (
+            "get_table",
+            "load_deferred_fields",
+            "load_deferred_field",
+            "load_relation",
+            "load_relations",
+            "validate_all_fields",
+            "validate_field",
+            "save",
+            "delete",
+            "refresh",
+            "to_dict",
+            "from_dict",
+            "using",
+            "is_field_deferred",
+            "is_field_loaded",
+            "get_deferred_fields",
+            "get_session",
+            "is_from_database",
+        ):
+            return super().__getattribute__(name)
+
+        # Check object cache first
+        object_cache = self._state_manager.get_object_cache()
+        if name in object_cache:
+            return object_cache[name]  # May be actual value, prefetch data, or proxy object
+
+        model_class = super().__getattribute__("__class__")
+        field_cache = model_class._get_field_cache()  # noqa
+
+        # Handle deferred fields
+        deferred_fields = field_cache.get("deferred_fields", set())
+        if isinstance(deferred_fields, set) and name in deferred_fields:
+            if (
+                name in self._deferred_fields
+                and not self.is_field_loaded(name)
+                and self._state_manager.is_from_database()
+            ):
+                # Create and cache deferred field proxy
+                proxy = DeferredObject(self, name)
+                self._update_cache(name, proxy)
+                return proxy
+
+        # Handle relationship fields
+        relationship_fields = field_cache.get("relationship_fields", set())
+        if isinstance(relationship_fields, set) and name in relationship_fields:
+            # Check cascade_relationships (manually assigned values)
+            cascade_relationships = self._state_manager.get_cascade_relationships()
+            if name in cascade_relationships:
+                return cascade_relationships[name]
+
+            # Return the actual relationship proxy directly
+            relationships = getattr(self.__class__, "_relationships", {})
+            if name in relationships:
+                descriptor = relationships[name]
+                proxy = descriptor.__get__(self, self.__class__)
+                self._update_cache(name, proxy)
+                return proxy
+
+        return super().__getattribute__(name)
+
+
+class DataConversionMixin(FieldCacheMixin):
     """Data conversion functionality - Layer 5."""
 
     def to_dict(
@@ -433,6 +555,8 @@ class DataConversionMixin(DeferredLoadingMixin):
         include: list[str] | None = None,
         exclude: list[str] | None = None,
         include_deferred: bool = False,
+        include_relations: bool = False,
+        include_annotations: bool = False,
         safe_access: bool = True,
     ) -> dict[str, Any]:
         """Convert model instance to dictionary.
@@ -441,12 +565,21 @@ class DataConversionMixin(DeferredLoadingMixin):
             include: List of fields to include, or None for all fields
             exclude: List of fields to exclude
             include_deferred: Whether to include deferred fields
+            include_relations: Whether to include relationship fields (requires loaded data)
+            include_annotations: Whether to include annotate fields (dynamic attributes)
             safe_access: Whether to skip unloaded deferred fields safely
 
         Returns:
             Dictionary representation of the model instance
         """
+        from .fields.proxies import (
+            ManyToManyRelation,
+            OneToManyRelation,
+            RelatedObject,
+        )
+
         all_fields = set(self._get_field_names())
+        relationship_fields = self._get_relationship_fields()
 
         if include is not None:
             fields = set(include) & all_fields
@@ -469,6 +602,46 @@ class DataConversionMixin(DeferredLoadingMixin):
                 if not safe_access:
                     raise
                 continue
+
+        # Include relationship fields if requested
+        if include_relations:
+            for rel_name in relationship_fields:
+                if exclude and rel_name in exclude:
+                    continue
+                try:
+                    rel_value = getattr(self, rel_name)
+                    # Skip proxy objects if not loaded
+                    if isinstance(rel_value, (RelatedObject, OneToManyRelation, ManyToManyRelation)):
+                        if safe_access:
+                            continue  # Skip unloaded relationship proxies
+                    # Handle loaded relationship data
+                    elif isinstance(rel_value, list):
+                        # Collection of related objects
+                        result[rel_name] = [item.to_dict() if hasattr(item, "to_dict") else item for item in rel_value]
+                    elif rel_value is not None and hasattr(rel_value, "to_dict"):
+                        # Single related object
+                        result[rel_name] = rel_value.to_dict()
+                    else:
+                        result[rel_name] = rel_value
+                except AttributeError:
+                    if not safe_access:
+                        raise
+                    continue
+
+        # Include annotate fields (dynamic attributes not in model definition)
+        if include_annotations:
+            for attr_name in dir(self):
+                if (
+                    not attr_name.startswith("_")
+                    and attr_name not in all_fields
+                    and attr_name not in relationship_fields
+                    and attr_name not in result
+                    and not callable(getattr(self, attr_name, None))
+                ):
+                    try:
+                        result[attr_name] = getattr(self, attr_name)
+                    except AttributeError:
+                        continue
 
         return result
 
@@ -560,125 +733,3 @@ class DataConversionMixin(DeferredLoadingMixin):
                 default_value = self._get_field_default_value(field_name)
                 if default_value is not None:
                     kwargs[field_name] = default_value
-
-
-class FieldCacheMixin(DataConversionMixin):
-    """Field caching and attribute access optimization - Layer 6."""
-
-    @classmethod
-    def _get_field_cache(cls):
-        """Get field cache from metadata system.
-
-        Returns:
-            Dictionary containing categorized field information
-        """
-        return getattr(
-            cls, "_field_cache", {"deferred_fields": set(), "relationship_fields": set(), "regular_fields": set()}
-        )
-
-    def _update_cache(self, name: str, value: Any):
-        """Update object cache entry.
-
-        Args:
-            name: Field name
-            value: Value to cache
-        """
-        self._state_manager.update_object_cache(name, value)
-
-    def _clear_cache_entry(self, name: str):
-        """Clear specific cache entry.
-
-        Args:
-            name: Field name to clear
-        """
-        self._state_manager.clear_cache_entry(name)
-
-    def _get_relationship_fields(self) -> set[str]:
-        """Get relationship field names from model metadata."""
-        relationships = getattr(self.__class__, "_relationships", {})
-        return set(relationships.keys())
-
-    def __setattr__(self, name: str, value):
-        """Override setattr to handle relationship field assignments."""
-        if hasattr(self, "_get_relationship_fields") and name in self._get_relationship_fields():
-            self._handle_relationship_assignment(name, value)
-        else:
-            super().__setattr__(name, value)
-
-    def _handle_relationship_assignment(self, field_name: str, value):
-        """Handle assignment of relationship objects for cascade save."""
-        if not hasattr(self, "_state_manager"):
-            return
-
-        relationship_value = value if isinstance(value, list) else [value]
-        self._state_manager.set_cascade_relationship(field_name, relationship_value)
-
-    def __getattribute__(self, name: str):
-        """Optimized attribute access using unified proxy cache.
-
-        Args:
-            name: Attribute name to access
-
-        Returns:
-            Attribute value, cached data, or proxy object
-        """
-        if name.startswith("_") or name in (
-            "get_table",
-            "load_deferred_fields",
-            "load_deferred_field",
-            "load_relation",
-            "load_relations",
-            "validate_all_fields",
-            "validate_field",
-            "save",
-            "delete",
-            "refresh",
-            "to_dict",
-            "from_dict",
-            "using",
-            "is_field_deferred",
-            "is_field_loaded",
-            "get_deferred_fields",
-            "get_session",
-            "is_from_database",
-        ):
-            return super().__getattribute__(name)
-
-        # Check object cache first
-        object_cache = self._state_manager.get_object_cache()
-        if name in object_cache:
-            return object_cache[name]  # May be actual value, prefetch data, or proxy object
-
-        model_class = super().__getattribute__("__class__")
-        field_cache = model_class._get_field_cache()
-
-        # Handle deferred fields
-        deferred_fields = field_cache.get("deferred_fields", set())
-        if isinstance(deferred_fields, set) and name in deferred_fields:
-            if (
-                name in self._deferred_fields
-                and not self.is_field_loaded(name)
-                and self._state_manager.is_from_database()
-            ):
-                # Create and cache deferred field proxy
-                proxy = DeferredObject(self, name)
-                self._update_cache(name, proxy)
-                return proxy
-
-        # Handle relationship fields
-        relationship_fields = field_cache.get("relationship_fields", set())
-        if isinstance(relationship_fields, set) and name in relationship_fields:
-            # Check cascade_relationships (manually assigned values)
-            cascade_relationships = self._state_manager.get_cascade_relationships()
-            if name in cascade_relationships:
-                return cascade_relationships[name]
-
-            # Return the actual relationship proxy directly
-            relationships = getattr(self.__class__, "_relationships", {})
-            if name in relationships:
-                descriptor = relationships[name]
-                proxy = descriptor.__get__(self, self.__class__)
-                self._update_cache(name, proxy)
-                return proxy
-
-        return super().__getattribute__(name)

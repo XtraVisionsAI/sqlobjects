@@ -301,9 +301,10 @@ class QueryExecutor:
         # Convert Row to dictionary
         data = dict(row._mapping)  # noqa
 
-        # Separate main model data from related model data
+        # Separate main model data from related model data and annotate fields
         main_data = {}
         related_data = {}
+        annotate_data = {}  # Store annotate fields
 
         # Get all field names from model
         all_fields = set(model_class._get_field_names())  # noqa
@@ -318,6 +319,9 @@ class QueryExecutor:
             elif key in all_fields:
                 # This is a main model field
                 main_data[key] = value
+            else:
+                # This is an annotate field (not in model definition)
+                annotate_data[key] = value
 
         # Calculate actual deferred fields based on what was loaded vs what should be deferred
         loaded_fields = set(main_data.keys())
@@ -348,6 +352,10 @@ class QueryExecutor:
         # Set deferred field state
         instance._state_manager.set_deferred_fields(actual_deferred_fields)  # noqa
         instance._state_manager.mark_from_database(True)  # noqa
+
+        # Attach annotate fields as dynamic attributes
+        for key, value in annotate_data.items():
+            setattr(instance, key, value)
 
         # Create and attach related objects
         if related_data and relationships:
