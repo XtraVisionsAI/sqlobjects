@@ -1,3 +1,9 @@
+## 1.0.16 (2025-11-18)
+
+### Fix
+
+- correct ModelMixin inheritance
+
 ## 1.0.15 (2025-11-18)
 
 ### Feat
