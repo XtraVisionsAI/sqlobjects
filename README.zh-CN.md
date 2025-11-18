@@ -186,6 +186,28 @@ SQLObjects 建立在坚实的基础之上，具有清晰的架构原则：
 
 ## 📖 文档
 
+### AI 助手规则（快速参考）
+
+为 AI 编码助手优化的最佳实践和使用模式：
+
+- [AI 规则概览](docs/rules/README.md) - 快速导航和用途
+- [数据库和会话指南](docs/rules/01-database-session-guide.md) - 连接管理和事务
+- [模型定义指南](docs/rules/02-model-definition-guide.md) - 模型创建和字段配置
+- [查询操作指南](docs/rules/03-query-operations-guide.md) - 过滤、排序和数据检索
+- [CRUD 操作指南](docs/rules/04-crud-operations-guide.md) - 创建、读取、更新、删除操作
+- [关系指南](docs/rules/05-relationships-guide.md) - 模型关系和加载策略
+- [验证和信号指南](docs/rules/06-validation-signals-guide.md) - 数据验证和生命周期钩子
+- [性能指南](docs/rules/07-performance-guide.md) - 优化技术和最佳实践
+
+**安装**: 
+```bash
+# 安装包
+pip install sqlobjects
+
+# 为你的 AI 助手安装规则
+sqlobjects-install-rules amazonq  # 或 cursor, claude, kiro
+```
+
 ### 功能文档
 
 - [数据库设置](docs-zh/features/01-database-setup.md) - 数据库配置和连接管理

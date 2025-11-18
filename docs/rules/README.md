@@ -42,13 +42,17 @@ These rules complement the full documentation:
 
 ## Installation
 
-These rules are automatically installed when you use:
+Install the package, then install rules for your AI assistant:
 
 ```bash
-pip install sqlobjects[amazonq]  # For Amazon Q
-pip install sqlobjects[cursor]   # For Cursor
-pip install sqlobjects[claude]   # For Claude
-pip install sqlobjects[kiro]     # For Kiro
+# Install SQLObjects
+pip install sqlobjects
+
+# Install rules for your AI assistant
+sqlobjects-install-rules amazonq  # For Amazon Q
+sqlobjects-install-rules cursor   # For Cursor
+sqlobjects-install-rules claude   # For Claude
+sqlobjects-install-rules kiro     # For Kiro
 ```
 
 ## Version

@@ -199,7 +199,14 @@ Best practices and usage patterns optimized for AI coding assistants:
 - [Validation & Signals Guide](docs/rules/06-validation-signals-guide.md) - Data validation and lifecycle hooks
 - [Performance Guide](docs/rules/07-performance-guide.md) - Optimization techniques and best practices
 
-**Installation**: Rules are automatically installed with `pip install sqlobjects[amazonq]` (or `[cursor]`, `[claude]`, `[kiro]`)
+**Installation**: 
+```bash
+# Install package
+pip install sqlobjects
+
+# Install rules for your AI assistant
+sqlobjects-install-rules amazonq  # or cursor, claude, kiro
+```
 
 ### Feature Documentation
 

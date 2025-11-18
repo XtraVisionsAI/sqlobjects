@@ -38,11 +38,8 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.43",
 ]
 
-[project.optional-dependencies]
-amazonq = []
-kiro = []
-claude = []
-cursor = []
+[project.scripts]
+sqlobjects-install-rules = "scripts.install_rules:main"
 
 [project.urls]
 Homepage = "https://github.com/XtraVisionsAI/sqlobjects"
@@ -75,10 +72,13 @@ build-backend = "setuptools.build_meta"
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["sqlobjects*"]
+include = ["sqlobjects*", "scripts*"]
 
 [tool.setuptools.package-data]
 sqlobjects = ["py.typed"]
+
+[tool.setuptools.data-files]
+"docs/rules" = ["docs/rules/*.md"]
 
 [[tool.uv.index]]
 name = "tsinghua"
