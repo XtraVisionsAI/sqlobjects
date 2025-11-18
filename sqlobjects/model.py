@@ -6,7 +6,7 @@ from .cascade import CascadeExecutor
 from .exceptions import PrimaryKeyError
 from .internal import SQLOperations
 from .metadata import ModelProcessor
-from .mixins import FieldCacheMixin
+from .mixins import DataConversionMixin
 from .signals import Operation, SignalMixin, emit_signals
 
 
@@ -14,7 +14,7 @@ from .signals import Operation, SignalMixin, emit_signals
 M = TypeVar("M", bound="ModelMixin")
 
 
-class ModelMixin(FieldCacheMixin, SignalMixin):
+class ModelMixin(DataConversionMixin, SignalMixin):
     """Optimized mixin class with linear inheritance and performance improvements.
 
     Combines field caching, signal handling, and history tracking into a single
