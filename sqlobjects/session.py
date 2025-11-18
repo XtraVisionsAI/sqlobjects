@@ -11,7 +11,7 @@ from .database.manager import get_database, get_default
 from .exceptions import convert_sqlalchemy_error
 
 
-__all__ = ["AsyncSession", "ctx_session", "ctx_sessions", "get_session"]
+__all__ = ["AsyncSession", "ctx_session", "ctx_sessions", "get_session", "has_session"]
 
 
 # Explicit session management (highest priority)
@@ -347,3 +347,20 @@ def get_session(db_name: str | None = None, readonly: bool = True, auto_commit: 
         - Create a new AsyncSession with specified parameters if no explicit session
     """
     return _SessionContextManager.get_session(db_name, readonly, auto_commit)
+
+
+def has_session(db_name: str | None = None) -> bool:
+    """Check if an explicit session exists in current context.
+
+    Args:
+        db_name: Database name (uses default database if None)
+
+    Returns:
+        True if explicit session exists, False otherwise
+    """
+    name = db_name or get_default()
+    try:
+        explicit_sessions = _explicit_sessions.get({})
+        return name in explicit_sessions
+    except LookupError:
+        return False
