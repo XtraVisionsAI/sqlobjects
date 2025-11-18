@@ -186,6 +186,21 @@ SQLObjects is built on a solid foundation with clear architectural principles:
 
 ## 📖 Documentation
 
+### AI Assistant Rules (Quick Reference)
+
+Best practices and usage patterns optimized for AI coding assistants:
+
+- [AI Rules Overview](docs/rules/README.md) - Quick navigation and purpose
+- [Database & Session Guide](docs/rules/01-database-session-guide.md) - Connection management and transactions
+- [Model Definition Guide](docs/rules/02-model-definition-guide.md) - Model creation and field configuration
+- [Query Operations Guide](docs/rules/03-query-operations-guide.md) - Filtering, sorting, and data retrieval
+- [CRUD Operations Guide](docs/rules/04-crud-operations-guide.md) - Create, read, update, delete operations
+- [Relationships Guide](docs/rules/05-relationships-guide.md) - Model relationships and loading strategies
+- [Validation & Signals Guide](docs/rules/06-validation-signals-guide.md) - Data validation and lifecycle hooks
+- [Performance Guide](docs/rules/07-performance-guide.md) - Optimization techniques and best practices
+
+**Installation**: Rules are automatically installed with `pip install sqlobjects[amazonq]` (or `[cursor]`, `[claude]`, `[kiro]`)
+
 ### Feature Documentation
 
 - [Database Setup](docs/features/01-database-setup.md) - Database configuration and connection management
