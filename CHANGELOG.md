@@ -1,3 +1,9 @@
+## 1.0.11 (2025-11-18)
+
+### Feat
+
+- add AI assistant rules with auto-install support
+
 ## 1.0.10 (2025-11-17)
 
 ### Feat
