@@ -1,3 +1,9 @@
+## 1.0.14 (2025-11-18)
+
+### Feat
+
+- add has_session() to check explicit session availability
+
 ## 1.0.13 (2025-11-18)
 
 ## 1.0.12 (2025-11-18)

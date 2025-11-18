@@ -372,7 +372,7 @@ asyncio = [
 
 [[package]]
 name = "sqlobjects"
-version = "1.0.13"
+version = "1.0.14"
 source = { editable = "." }
 dependencies = [
     { name = "sqlalchemy", extra = ["asyncio"] },
