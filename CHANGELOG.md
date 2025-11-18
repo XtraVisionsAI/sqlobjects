@@ -1,3 +1,9 @@
+## 1.0.15 (2025-11-18)
+
+### Feat
+
+- preserve annotate fields and add serialization options
+
 ## 1.0.14 (2025-11-18)
 
 ### Feat
