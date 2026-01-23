@@ -91,6 +91,18 @@ Optimize database operations for high-performance applications.
 - Performance monitoring and benchmarking
 - Best practices and optimization checklist
 
+### [08. Custom Field Types](08-custom-field-types.md)
+
+Extend SQLObjects with custom database-specific field types.
+
+**Core Topics:**
+
+- Type registration and configuration
+- Custom comparators for type-specific operations
+- PostgreSQL examples (tsvector, pgvector)
+- Best practices for custom types
+- Type registry API reference
+
 ## Getting Started
 
 If you're new to SQLObjects, we recommend following this learning path:
@@ -102,6 +114,7 @@ If you're new to SQLObjects, we recommend following this learning path:
 5. **Add [Relationships](05-relationships.md)** - Connect your models
 6. **Implement [Validation and Signals](06-validation-signals.md)** - Add business logic
 7. **Optimize with [Performance Optimization](07-performance-optimization.md)** - Scale your application
+8. **Extend with [Custom Field Types](08-custom-field-types.md)** - Add database-specific types (optional)
 
 ## Feature Categories
 

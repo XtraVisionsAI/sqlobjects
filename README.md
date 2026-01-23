@@ -217,6 +217,7 @@ sqlobjects-install-rules amazonq  # or cursor, claude, kiro
 - [Relationships](docs/features/05-relationships.md) - Model relationships and loading strategies
 - [Validation & Signals](docs/features/06-validation-signals.md) - Data validation and lifecycle hooks
 - [Performance Optimization](docs/features/07-performance-optimization.md) - Performance tuning and best practices
+- [Custom Field Types](docs/features/08-custom-field-types.md) - Extend with database-specific types
 
 ### Design Documentation
 
@@ -279,6 +280,29 @@ users = await User.objects.raw(
     {"age": 18}
 )
 ```
+
+### Custom Field Types
+
+```python
+# Extend with database-specific types
+from sqlobjects.fields.types.registry import register_field_type
+from sqlalchemy.dialects.postgresql import TSVECTOR
+
+register_field_type(
+    TSVECTOR, "tsvector",
+    comparator=TSVectorComparator
+)
+
+class Document(ObjectModel):
+    content_vector: Column = column(type="tsvector")  # PostgreSQL full-text search
+
+# Query with custom types
+docs = await Document.objects.filter(
+    Document.content_vector.match("python & programming")
+).all()
+```
+
+See [Custom Field Types](docs/features/08-custom-field-types.md) for complete examples.
 
 ## 🧪 Testing
 

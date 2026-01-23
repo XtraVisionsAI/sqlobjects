@@ -112,7 +112,14 @@ file_data: Column[bytes] = BinaryColumn(length=1024)
 from sqlalchemy import ForeignKey
 author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
 category_id: Column[int] = column(type="integer", foreign_key=ForeignKey("categories.id"), nullable=False, index=True)
+
+# 自定义类型（参见自定义字段类型文档）
+# 在模型中使用之前注册自定义类型
+content_vector: Column = column(type="tsvector")  # PostgreSQL 全文搜索
+embedding: Column = column(type="pgvector", dimensions=1536)  # 向量相似度
 ```
+
+对于像 `tsvector` 和 `pgvector` 这样的数据库特定类型，请参阅[自定义字段类型](08-custom-field-types.md)。
 
 ## 字段参数
 

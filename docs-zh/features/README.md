@@ -76,6 +76,16 @@
 - 性能监控和基准测试
 - 最佳实践和优化检查清单
 
+### [08. 自定义字段类型](08-custom-field-types.md)
+使用自定义数据库特定字段类型扩展SQLObjects。
+
+**核心主题：**
+- 类型注册和配置
+- 类型特定操作的自定义比较器
+- PostgreSQL示例（tsvector、pgvector）
+- 自定义类型的最佳实践
+- 类型注册表API参考
+
 ## 入门指南
 
 如果您是SQLObjects的新用户，我们建议按照以下学习路径：
@@ -87,6 +97,7 @@
 5. **添加[关系操作](05-relationships.md)** - 连接您的模型
 6. **实现[验证和信号](06-validation-signals.md)** - 添加业务逻辑
 7. **使用[性能优化](07-performance-optimization.md)优化** - 扩展您的应用程序
+8. **使用[自定义字段类型](08-custom-field-types.md)扩展** - 添加数据库特定类型（可选）
 
 ## 功能分类
 

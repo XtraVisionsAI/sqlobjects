@@ -113,7 +113,14 @@ file_data: Column[bytes] = BinaryColumn(length=1024)
 from sqlalchemy import ForeignKey
 author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
 category_id: Column[int] = column(type="integer", foreign_key=ForeignKey("categories.id"), nullable=False, index=True)
+
+# Custom types (see Custom Field Types documentation)
+# Register custom types before using them in models
+content_vector: Column = column(type="tsvector")  # PostgreSQL full-text search
+embedding: Column = column(type="pgvector", dimensions=1536)  # Vector similarity
 ```
+
+For database-specific types like `tsvector` and `pgvector`, see [Custom Field Types](08-custom-field-types.md).
 
 ## Field Parameters
 

@@ -217,6 +217,7 @@ sqlobjects-install-rules amazonq  # 或 cursor, claude, kiro
 - [关系](docs-zh/features/05-relationships.md) - 模型关系和加载策略
 - [验证和信号](docs-zh/features/06-validation-signals.md) - 数据验证和生命周期钩子
 - [性能优化](docs-zh/features/07-performance-optimization.md) - 性能调优和最佳实践
+- [自定义字段类型](docs-zh/features/08-custom-field-types.md) - 使用数据库特定类型扩展
 
 ### 设计文档
 
@@ -279,6 +280,29 @@ users = await User.objects.raw(
     {"age": 18}
 )
 ```
+
+### 自定义字段类型
+
+```python
+# 使用数据库特定类型扩展
+from sqlobjects.fields.types.registry import register_field_type
+from sqlalchemy.dialects.postgresql import TSVECTOR
+
+register_field_type(
+    TSVECTOR, "tsvector",
+    comparator=TSVectorComparator
+)
+
+class Document(ObjectModel):
+    content_vector: Column = column(type="tsvector")  # PostgreSQL 全文搜索
+
+# 使用自定义类型查询
+docs = await Document.objects.filter(
+    Document.content_vector.match("python & programming")
+).all()
+```
+
+查看 [自定义字段类型](docs-zh/features/08-custom-field-types.md) 获取完整示例。
 
 ## 🧪 测试
 

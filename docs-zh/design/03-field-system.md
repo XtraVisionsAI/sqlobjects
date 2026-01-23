@@ -256,7 +256,7 @@ get_model_metadata(model_class)
 ```python
 # TypeRegistry 核心方法
 registry = TypeRegistry()
-registry.register_type(field_type, name, comparator, aliases, default_params)
+register_field_type(field_type, name, comparator, aliases, default_params)
 registry.get_type_config(name)
 registry.create_enhanced_type(name, **params)
 
