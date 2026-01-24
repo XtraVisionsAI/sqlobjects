@@ -90,6 +90,7 @@ register_field_type(TSVECTOR, "tsvector", comparator=TSVectorComparator)
 
 **Model Usage:**
 ```python
+from sqlalchemy import Index
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, column
 
@@ -100,6 +101,22 @@ class Document(ObjectModel):
     
     class Config:
         table_name = "documents"
+        indexes = [
+            # GIN index for full-text search (recommended)
+            Index("idx_content_vector", "content_vector", postgresql_using="gin"),
+        ]
+```
+
+**Index Options:**
+```python
+class Config:
+    indexes = [
+        # GIN index (faster queries, slower updates, more space)
+        Index("idx_content_gin", "content_vector", postgresql_using="gin"),
+        
+        # GiST index (faster updates, slower queries, less space)
+        Index("idx_content_gist", "content_vector", postgresql_using="gist"),
+    ]
 ```
 
 **Query Examples:**
@@ -152,6 +169,8 @@ register_field_type(PGVECTOR, "pgvector", comparator=PGVectorComparator)
 
 **Model Usage:**
 ```python
+from sqlalchemy import Index
+
 class Document(ObjectModel):
     title: Column[str] = column(type="string", length=200)
     content: Column[str] = column(type="text")
@@ -159,6 +178,53 @@ class Document(ObjectModel):
     
     class Config:
         table_name = "documents"
+        indexes = [
+            # IVFFlat index for approximate nearest neighbor search
+            Index("idx_embedding", "embedding",
+                  postgresql_using="ivfflat",
+                  postgresql_ops={"embedding": "vector_l2_ops"}),
+        ]
+```
+
+**Index Options:**
+```python
+class Config:
+    indexes = [
+        # IVFFlat with L2 distance (Euclidean)
+        Index("idx_embedding_l2", "embedding",
+              postgresql_using="ivfflat",
+              postgresql_ops={"embedding": "vector_l2_ops"}),
+        
+        # IVFFlat with cosine distance
+        Index("idx_embedding_cosine", "embedding",
+              postgresql_using="ivfflat",
+              postgresql_ops={"embedding": "vector_cosine_ops"}),
+        
+        # IVFFlat with inner product
+        Index("idx_embedding_ip", "embedding",
+              postgresql_using="ivfflat",
+              postgresql_ops={"embedding": "vector_ip_ops"}),
+        
+        # HNSW index (faster queries, more memory)
+        Index("idx_embedding_hnsw", "embedding",
+              postgresql_using="hnsw",
+              postgresql_ops={"embedding": "vector_l2_ops"}),
+    ]
+```
+
+**Index Configuration:**
+```python
+# IVFFlat requires training - set lists parameter
+# Rule of thumb: lists = rows / 1000 (for datasets > 1M rows)
+async def create_ivfflat_index():
+    from sqlobjects.session import get_session
+    
+    session = get_session(readonly=False)
+    await session.execute(
+        "CREATE INDEX idx_embedding ON documents "
+        "USING ivfflat (embedding vector_l2_ops) WITH (lists = 100)"
+    )
+    await session.commit()
 ```
 
 **Query Examples:**
@@ -222,6 +288,7 @@ register_field_type(PGVECTOR, "pgvector", comparator=PGVectorComparator)
 
 ```python
 # models.py
+from sqlalchemy import Index
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, column
 from .custom_types import TSVECTOR, PGVECTOR  # Trigger registration
@@ -231,6 +298,15 @@ class Document(ObjectModel):
     content: Column[str] = column(type="text")
     content_vector: Column = column(type="tsvector")
     embedding: Column = column(type="pgvector", dimensions=1536)
+    
+    class Config:
+        table_name = "documents"
+        indexes = [
+            Index("idx_content_vector", "content_vector", postgresql_using="gin"),
+            Index("idx_embedding", "embedding",
+                  postgresql_using="ivfflat",
+                  postgresql_ops={"embedding": "vector_l2_ops"}),
+        ]
 ```
 
 ```python
@@ -314,6 +390,35 @@ async def setup_database():
     await session.commit()
 ```
 
+### 5. Index Creation
+
+Create indexes for optimal query performance:
+
+```python
+from sqlalchemy import Index
+
+class Config:
+    indexes = [
+        # tsvector: Use GIN for full-text search
+        Index("idx_content_vector", "content_vector", postgresql_using="gin"),
+        
+        # pgvector: Use IVFFlat or HNSW for similarity search
+        Index("idx_embedding", "embedding",
+              postgresql_using="ivfflat",
+              postgresql_ops={"embedding": "vector_l2_ops"}),
+    ]
+```
+
+**Index Selection Guide:**
+
+| Type | Method | Use Case | Speed | Memory |
+|------|--------|----------|-------|--------|
+| tsvector | GIN | Full-text search (recommended) | Fast query | High |
+| tsvector | GiST | Full-text with frequent updates | Medium | Low |
+| pgvector | IVFFlat | Large datasets (>100K vectors) | Fast | Medium |
+| pgvector | HNSW | Highest query speed | Fastest | Highest |
+| pgvector | None | Small datasets (<10K vectors) | Slow | None |
+
 ## Type Registry API
 
 ### register_field_type()
@@ -350,8 +455,67 @@ embedding2: Column = column(type="vector", dimensions=768)
 embedding3: Column = column(type="embedding", dimensions=768)
 ```
 
+## Performance Considerations
+
+### tsvector Indexes
+
+**GIN vs GiST:**
+```python
+# GIN: Better for read-heavy workloads
+Index("idx_gin", "content_vector", postgresql_using="gin")
+# - 3x faster queries
+# - 3x slower updates
+# - 2-3x more disk space
+
+# GiST: Better for write-heavy workloads  
+Index("idx_gist", "content_vector", postgresql_using="gist")
+# - Faster updates
+# - Slower queries
+# - Less disk space
+```
+
+### pgvector Indexes
+
+**IVFFlat Configuration:**
+```python
+# Lists parameter affects speed/accuracy tradeoff
+# More lists = faster queries, less accurate
+# Fewer lists = slower queries, more accurate
+
+# Small dataset (<100K): lists = 100
+# Medium dataset (100K-1M): lists = rows / 1000  
+# Large dataset (>1M): lists = sqrt(rows)
+
+Index("idx_embedding", "embedding",
+      postgresql_using="ivfflat",
+      postgresql_ops={"embedding": "vector_l2_ops"})
+```
+
+**HNSW Configuration:**
+```python
+# HNSW provides better query performance than IVFFlat
+# But requires more memory and build time
+
+Index("idx_embedding_hnsw", "embedding",
+      postgresql_using="hnsw",
+      postgresql_ops={"embedding": "vector_l2_ops"},
+      postgresql_with={"m": 16, "ef_construction": 64})
+# m: max connections per layer (higher = better recall, more memory)
+# ef_construction: build time quality (higher = better index, slower build)
+```
+
+**Distance Operator Selection:**
+```python
+# Choose operator based on your similarity metric
+operators = {
+    "vector_l2_ops": "L2 distance (Euclidean)",      # Most common
+    "vector_cosine_ops": "Cosine distance",          # Normalized vectors
+    "vector_ip_ops": "Inner product (negative)",     # Dot product
+}
+```
+
 ## See Also
 
 - [Model Definition](02-model-definition.md) - Basic field types
 - [Querying Data](03-querying-data.md) - Query building and filtering
-- [Performance Optimization](07-performance-optimization.md) - Index strategies for custom types
+- [Performance Optimization](07-performance-optimization.md) - Index strategies

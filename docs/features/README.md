@@ -100,6 +100,7 @@ Extend SQLObjects with custom database-specific field types.
 - Type registration and configuration
 - Custom comparators for type-specific operations
 - PostgreSQL examples (tsvector, pgvector)
+- Index creation and performance optimization
 - Best practices for custom types
 - Type registry API reference
 
