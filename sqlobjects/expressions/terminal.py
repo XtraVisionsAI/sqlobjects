@@ -22,6 +22,10 @@ class AllExpression(QueryExpression[list[T]]):
         self._builder = builder
         self._model_class = model_class
 
+    def get_query(self):
+        """Return SQLAlchemy query object."""
+        return self._builder.build(self._builder.model_class.get_table())
+
     async def execute(self) -> list[T]:
         if not self._executor:
             raise RuntimeError("No executor available for all execution")
@@ -41,6 +45,11 @@ class FirstExpression(QueryExpression[T | None]):
         super().__init__(executor)
         self._builder = builder
         self._model_class = model_class
+
+    def get_query(self):
+        """Return SQLAlchemy query object."""
+        limited_builder = self._builder.add_limit(1)
+        return limited_builder.build(limited_builder.model_class.get_table())
 
     async def execute(self) -> T | None:
         if not self._executor:
@@ -63,6 +72,12 @@ class LastExpression(QueryExpression[T | None]):
         super().__init__(executor)
         self._builder = builder
         self._model_class = model_class
+
+    def get_query(self):
+        """Return SQLAlchemy query object."""
+        reversed_builder = self._builder.set_reversed()
+        limited_builder = reversed_builder.add_limit(1)
+        return limited_builder.build(limited_builder.model_class.get_table())
 
     async def execute(self) -> T | None:
         if not self._executor:
@@ -88,6 +103,13 @@ class EarliestExpression(QueryExpression[T | None]):
         self._builder = builder
         self._model_class = model_class
         self._fields = fields
+
+    def get_query(self):
+        """Return SQLAlchemy query object."""
+        order_fields = [field.lstrip("-") for field in self._fields]
+        ordered_builder = self._builder.add_ordering(*order_fields)
+        limited_builder = ordered_builder.add_limit(1)
+        return limited_builder.build(limited_builder.model_class.get_table())
 
     async def execute(self) -> T | None:
         if not self._executor:
@@ -116,6 +138,13 @@ class LatestExpression(QueryExpression[T | None]):
         self._model_class = model_class
         self._fields = fields
 
+    def get_query(self):
+        """Return SQLAlchemy query object."""
+        order_fields = [f"-{field.lstrip('-')}" for field in self._fields]
+        ordered_builder = self._builder.add_ordering(*order_fields)
+        limited_builder = ordered_builder.add_limit(1)
+        return limited_builder.build(limited_builder.model_class.get_table())
+
     async def execute(self) -> T | None:
         if not self._executor:
             raise RuntimeError("No executor available for latest execution")
@@ -141,6 +170,10 @@ class ValuesExpression(QueryExpression[list[dict[str, Any]]]):
         super().__init__(executor)
         self._builder = builder
         self._fields = fields
+
+    def get_query(self):
+        """Return SQLAlchemy query object."""
+        return self._builder.build(self._builder.model_class.get_table())
 
     async def execute(self) -> list[dict[str, Any]]:
         if not self._executor:
@@ -169,6 +202,10 @@ class ValuesListExpression(QueryExpression[list[Any] | list[tuple[Any, ...]]]):
         self._fields = fields
         self._flat = flat
 
+    def get_query(self):
+        """Return SQLAlchemy query object."""
+        return self._builder.build(self._builder.model_class.get_table())
+
     async def execute(self) -> list[Any] | list[tuple[Any, ...]]:
         if not self._executor:
             raise RuntimeError("No executor available for values_list execution")
@@ -195,6 +232,10 @@ class DatesExpression(QueryExpression[list[date]]):
         self._kind = kind
         self._order = order
 
+    def get_query(self):
+        """Return SQLAlchemy query object."""
+        return self._builder.build(self._builder.model_class.get_table())
+
     async def execute(self) -> list[date]:
         if not self._executor:
             raise RuntimeError("No executor available for dates execution")
@@ -215,6 +256,10 @@ class DatetimesExpression(QueryExpression[list[datetime]]):
         self._kind = kind
         self._order = order
 
+    def get_query(self):
+        """Return SQLAlchemy query object."""
+        return self._builder.build(self._builder.model_class.get_table())
+
     async def execute(self) -> list[datetime]:
         if not self._executor:
             raise RuntimeError("No executor available for datetimes execution")
@@ -233,6 +278,23 @@ class GetItemExpression(QueryExpression[T | list[T]]):
         self._builder = builder
         self._model_class = model_class
         self._key = key
+
+    def get_query(self):
+        """Return SQLAlchemy query object."""
+        if isinstance(self._key, slice):
+            start = self._key.start or 0
+            stop = self._key.stop
+            if stop is not None:
+                limited_builder = self._builder.add_offset(start).add_limit(stop - start)
+            else:
+                limited_builder = self._builder.add_offset(start)
+        elif isinstance(self._key, int):
+            if self._key < 0:
+                raise ValueError("Negative indexing is not supported")
+            limited_builder = self._builder.add_offset(self._key).add_limit(1)
+        else:
+            raise TypeError("Invalid key type for indexing")
+        return limited_builder.build(limited_builder.model_class.get_table())
 
     async def execute(self) -> T | list[T]:
         if not self._executor:

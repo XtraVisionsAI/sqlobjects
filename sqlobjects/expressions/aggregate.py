@@ -30,6 +30,10 @@ class AggregateExpression(QueryExpression[dict[str, Any]]):
         self._builder = builder
         self._aggregations = aggregations
 
+    def get_query(self):
+        """Return SQLAlchemy query object."""
+        return self._builder.build(self._builder.model_class.get_table())
+
     async def execute(self) -> dict[str, Any]:
         """Execute aggregation query and return results dictionary.
 

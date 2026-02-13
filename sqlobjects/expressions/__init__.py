@@ -1,5 +1,6 @@
 from .aggregate import AggregateExpression
 from .base import ComparisonExpression, QueryExpression
+from .explain import ExplainResult
 from .function import FunctionExpression, func
 from .scalar import CountExpression, ExistsExpression, ScalarSubquery
 from .subquery import SubqueryExpression
@@ -23,6 +24,7 @@ __all__ = [
     "SubqueryExpression",
     "QueryExpression",
     "ComparisonExpression",
+    "ExplainResult",
     "AggregateExpression",
     "CountExpression",
     "ExistsExpression",

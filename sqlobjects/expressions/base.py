@@ -42,27 +42,42 @@ class QueryExpression(ABC, Generic[T_Result]):
         pass
 
     @abstractmethod
+    def get_query(self) -> Any:
+        """Get SQLAlchemy query object.
+
+        Returns:
+            SQLAlchemy Select/Update/Delete object
+        """
+        pass
+
     def get_sql(self) -> str:
-        """Generate SQL string for this expression.
+        """Generate SQL string for debugging.
 
         Returns:
             SQL string representation
         """
-        pass
+        query = self.get_query()
+        return str(query.compile(compile_kwargs={"literal_binds": True}))
 
-    def explain(self, analyze: bool = False, verbose: bool = False) -> str:
-        """Generate execution plan for this expression.
+    def explain(self, analyze: bool = False, verbose: bool = False):
+        """Return awaitable EXPLAIN result.
+
+        Usage:
+            plan = await expression.explain()
+            plan = await expression.explain(analyze=True, verbose=True)
 
         Args:
             analyze: Include actual execution statistics
             verbose: Include detailed execution information
 
         Returns:
-            Query execution plan
+            ExplainResult that can be awaited
         """
+        from .explain import ExplainResult
+
         if not self._executor:
             raise RuntimeError("No executor available for explain operation")
-        return self._executor.explain(self.get_sql(), analyze=analyze, verbose=verbose)
+        return ExplainResult(self, analyze, verbose)
 
     def __gt__(self, other) -> "ComparisonExpression":
         """Create greater-than comparison expression."""

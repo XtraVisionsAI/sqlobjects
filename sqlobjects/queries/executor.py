@@ -104,11 +104,11 @@ class QueryExecutor:
             if processed_chunks % 10 == 0:
                 gc.collect()
 
-    def explain(self, sql: str, analyze: bool = False, verbose: bool = False) -> str:
-        """Generate execution plan for SQL query.
+    async def explain(self, query, analyze: bool = False, verbose: bool = False) -> str:
+        """Execute EXPLAIN for SQLAlchemy query object.
 
         Args:
-            sql: SQL query string to analyze
+            query: SQLAlchemy Select/Update/Delete object
             analyze: Include actual execution statistics
             verbose: Include detailed execution information
 
@@ -118,63 +118,24 @@ class QueryExecutor:
         if not self.session:
             raise RuntimeError("No session available for explain operation")
 
-        # Build EXPLAIN query based on database dialect
-        explain_parts = ["EXPLAIN"]
+        # Get dialect handler
+        from .dialect import DialectHandler
 
-        if analyze:
-            explain_parts.append("ANALYZE")
-        if verbose:
-            explain_parts.append("VERBOSE")
+        dialect = DialectHandler.create(self.session)
 
-        explain_sql = f"{' '.join(explain_parts)} {sql}"
+        # Compile query to SQL
+        compiled = query.compile(dialect=self.session.bind.dialect, compile_kwargs={"literal_binds": True})
+        sql_str = str(compiled)
 
-        # Execute explain query synchronously since it's for debugging
-        import asyncio
+        # Build EXPLAIN query using dialect handler
+        explain_sql = dialect.build_explain_query(sql_str, analyze, verbose)
 
-        async def _execute_explain():
-            result = await self.session.execute(text(explain_sql))  # type: ignore[reportOptionalMemberAccess]
-            rows = result.fetchall()
-            return "\n".join(str(row[0]) for row in rows)
-
-        # If we're already in an async context, run directly
-        try:
-            loop = asyncio.get_running_loop()
-            # Create a task and run it
-            _ = loop.create_task(_execute_explain())
-            # This is a bit of a hack, but explain is typically used for debugging
-            # In a real implementation, this should be fully async
-            return "EXPLAIN query scheduled - use async explain for full results"
-        except RuntimeError:
-            # No running loop, we can use asyncio.run
-            return asyncio.run(_execute_explain())
-
-    async def async_explain(self, sql: str, analyze: bool = False, verbose: bool = False) -> str:
-        """Async version of explain method.
-
-        Args:
-            sql: SQL query string to analyze
-            analyze: Include actual execution statistics
-            verbose: Include detailed execution information
-
-        Returns:
-            Query execution plan as string
-        """
-        if not self.session:
-            raise RuntimeError("No session available for explain operation")
-
-        # Build EXPLAIN query based on database dialect
-        explain_parts = ["EXPLAIN"]
-
-        if analyze:
-            explain_parts.append("ANALYZE")
-        if verbose:
-            explain_parts.append("VERBOSE")
-
-        explain_sql = f"{' '.join(explain_parts)} {sql}"
-
+        # Execute query
         result = await self.session.execute(text(explain_sql))
         rows = result.fetchall()
-        return "\n".join(str(row[0]) for row in rows)
+
+        # Parse result using dialect handler
+        return dialect.parse_explain_result(rows)
 
     @staticmethod
     def _build_query_by_type(query, query_type: str, **kwargs):

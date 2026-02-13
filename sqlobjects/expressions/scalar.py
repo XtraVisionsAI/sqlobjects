@@ -24,6 +24,10 @@ class CountExpression(QueryExpression[int]):
         super().__init__(executor)
         self._builder = builder
 
+    def get_query(self):
+        """Return SQLAlchemy query object."""
+        return self._builder.build(self._builder.model_class.get_table())
+
     async def execute(self) -> int:
         """Execute count query and return integer result.
 
@@ -72,6 +76,10 @@ class ExistsExpression(QueryExpression[bool]):
         """
         super().__init__(executor)
         self._builder = builder
+
+    def get_query(self):
+        """Return SQLAlchemy query object."""
+        return self._builder.build(self._builder.model_class.get_table())
 
     async def execute(self) -> bool:
         """Execute exists query and return boolean result.

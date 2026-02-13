@@ -1204,20 +1204,6 @@ class QuerySet(Generic[T]):
         query = self._builder.build(self._table)
         return str(query.compile(compile_kwargs={"literal_binds": True}))
 
-    async def explain(self, analyze: bool = False, verbose: bool = False) -> str:
-        """Generate execution plan for current query.
-
-        Args:
-            analyze: Include actual execution statistics
-            verbose: Include detailed execution information
-
-        Returns:
-            Query execution plan
-        """
-        if not self._executor:
-            raise RuntimeError("No executor available for explain operation")
-        return await self._executor.async_explain(self.get_sql(), analyze=analyze, verbose=verbose)
-
     # ========================================
     # Utility Methods - Cache management and statistics
     # ========================================

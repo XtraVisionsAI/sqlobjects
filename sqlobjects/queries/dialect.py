@@ -40,6 +40,16 @@ class BaseDialect(ABC):
         """Generate datetime truncation expression."""
         pass
 
+    @abstractmethod
+    def build_explain_query(self, sql: str, analyze: bool, verbose: bool) -> str:
+        """Build EXPLAIN query for the database."""
+        pass
+
+    @abstractmethod
+    def parse_explain_result(self, rows: list) -> str:
+        """Parse EXPLAIN result for the database."""
+        pass
+
     def supports_returning(self) -> bool:
         """Check if database supports RETURNING clause."""
         return False
@@ -86,6 +96,22 @@ class PostgreSQLDialect(BaseDialect):
         """PostgreSQL supports RETURNING for all operations."""
         return True
 
+    def build_explain_query(self, sql: str, analyze: bool, verbose: bool) -> str:
+        """Build PostgreSQL EXPLAIN query."""
+        options = []
+        if analyze:
+            options.append("ANALYZE TRUE")
+        if verbose:
+            options.append("VERBOSE TRUE")
+
+        if options:
+            return f"EXPLAIN ({', '.join(options)}) {sql}"
+        return f"EXPLAIN {sql}"
+
+    def parse_explain_result(self, rows: list) -> str:
+        """Parse PostgreSQL EXPLAIN result."""
+        return "\n".join(str(row[0]) for row in rows)
+
 
 class MySQLDialect(BaseDialect):
     """MySQL dialect handler."""
@@ -118,6 +144,16 @@ class MySQLDialect(BaseDialect):
     def get_datetime_trunc_expression(self, field: Any, precision: str) -> Any:
         """Generate MySQL date_format expression for datetime."""
         return self.get_date_trunc_expression(field, precision)
+
+    def build_explain_query(self, sql: str, analyze: bool, verbose: bool) -> str:
+        """Build MySQL EXPLAIN query."""
+        if analyze:
+            return f"EXPLAIN ANALYZE {sql}"
+        return f"EXPLAIN {sql}"
+
+    def parse_explain_result(self, rows: list) -> str:
+        """Parse MySQL EXPLAIN result."""
+        return "\n".join(str(row[0]) for row in rows)
 
 
 class SQLiteDialect(BaseDialect):
@@ -155,6 +191,21 @@ class SQLiteDialect(BaseDialect):
     def supports_returning(self) -> bool:
         """SQLite 3.35+ supports RETURNING."""
         return True
+
+    def build_explain_query(self, sql: str, analyze: bool, verbose: bool) -> str:
+        """Build SQLite EXPLAIN query.
+
+        Note: SQLite doesn't support ANALYZE or VERBOSE in EXPLAIN.
+        """
+        return f"EXPLAIN QUERY PLAN {sql}"
+
+    def parse_explain_result(self, rows: list) -> str:
+        """Parse SQLite EXPLAIN result.
+
+        SQLite EXPLAIN QUERY PLAN returns: (id, parent, notused, detail)
+        We want the detail column (last column).
+        """
+        return "\n".join(str(row[-1]) for row in rows)
 
 
 class DialectHandler:
