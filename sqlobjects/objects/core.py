@@ -299,6 +299,27 @@ class ObjectsManager(Generic[T]):
         """
         return self.filter().subquery(name, query_type)  # type: ignore[reportArgumentType]
 
+    def with_cte(self, *ctes) -> QuerySet[T]:
+        """Use one or more CTEs in the query.
+
+        Args:
+            *ctes: One or more CTEExpression objects
+
+        Returns:
+            QuerySet with CTEs applied
+
+        Examples:
+            # Single CTE
+            adults = User.objects.filter(User.age >= 18).cte("adults")
+            result = await User.objects.with_cte(adults).all()
+
+            # Multiple CTEs
+            adults = User.objects.filter(User.age >= 18).cte("adults")
+            active = User.objects.filter(User.is_active == True).cte("active")
+            result = await User.objects.with_cte(adults, active).all()
+        """
+        return self.filter().with_cte(*ctes)
+
     # ========================================
     # 4. Query Execution Methods - Execute queries and return results
     # ========================================

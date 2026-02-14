@@ -37,6 +37,7 @@ from .expressions import (
     ValuesExpression,
     ValuesListExpression,
 )
+from .expressions.cte import CTEExpression
 from .fields.utils import get_column_from_field, is_field_definition
 from .queries import QueryBuilder, QueryExecutor
 from .session import AsyncSession
@@ -729,6 +730,63 @@ class QuerySet(Generic[T]):
     def reverse(self) -> "QuerySet[T]":
         """Reverse the ordering of the queryset."""
         new_builder = self._builder.set_reversed()
+        return self._create_new_queryset(new_builder)
+
+    def cte(self, name: str, recursive: bool = False) -> CTEExpression:
+        """Convert current QuerySet to CTE (Common Table Expression).
+
+        Args:
+            name: Name for the CTE
+            recursive: Whether this is a recursive CTE
+
+        Returns:
+            CTEExpression that can be used with .with_cte()
+
+        Examples:
+            # Basic CTE
+            adults = User.objects.filter(User.age >= 18).cte("adults")
+            result = await User.objects.with_cte(adults).filter(
+                adults.c.age < 30
+            ).all()
+
+            # Recursive CTE
+            base = Employee.objects.filter(
+                Employee.manager_id.is_(None)
+            ).cte("hierarchy", recursive=True)
+            recursive_part = Employee.objects.join(
+                base, Employee.manager_id == base.c.id
+            )
+            hierarchy = base.union_all(recursive_part)
+            all_employees = await Employee.objects.with_cte(
+                hierarchy
+            ).select_from(hierarchy).all()
+        """
+        return CTEExpression(self, name, recursive)
+
+    def with_cte(self, *ctes: CTEExpression) -> "QuerySet[T]":
+        """Use one or more CTEs in the query.
+
+        Args:
+            *ctes: One or more CTEExpression objects
+
+        Returns:
+            QuerySet with CTEs applied
+
+        Examples:
+            # Single CTE
+            adults = User.objects.filter(User.age >= 18).cte("adults")
+            result = await User.objects.with_cte(adults).all()
+
+            # Multiple CTEs
+            adults = User.objects.filter(User.age >= 18).cte("adults")
+            active = User.objects.filter(User.is_active == True).cte("active")
+            result = await User.objects.with_cte(adults, active).join(
+                adults, User.id == adults.c.id
+            ).all()
+        """
+        new_builder = self._builder
+        for cte in ctes:
+            new_builder = new_builder.add_cte(cte)
         return self._create_new_queryset(new_builder)
 
     # ========================================

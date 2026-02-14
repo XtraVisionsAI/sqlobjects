@@ -51,6 +51,7 @@ class QueryBuilder:
         self.is_none_query: bool = False
         self.is_reversed: bool = False
         self.prefetch_configs: dict[str, Any] = {}
+        self.ctes: list[Any] = []  # CTEExpression objects
 
     def add_filter(self, *conditions, **kwargs):
         """Add WHERE conditions to the query.
@@ -144,6 +145,19 @@ class QueryBuilder:
         """
         new_builder = self.copy()
         new_builder.prefetch_configs = {**self.prefetch_configs, **configs}
+        return new_builder
+
+    def add_cte(self, cte):
+        """Add CTE (Common Table Expression) to the query.
+
+        Args:
+            cte: CTEExpression object to add
+
+        Returns:
+            New QueryBuilder instance with CTE added
+        """
+        new_builder = self.copy()
+        new_builder.ctes = self.ctes + [cte]
         return new_builder
 
     def add_selected_fields(self, *fields):
@@ -446,6 +460,13 @@ class QueryBuilder:
         if self.is_none_query:
             return select(table).where(literal(False))
 
+        # Build CTEs first (they need to be available for the main query)
+        cte_objects = []
+        if self.ctes:
+            for cte in self.ctes:
+                cte_obj = cte._build_cte(table)  # noqa
+                cte_objects.append(cte_obj)
+
         # Get auto-deferred fields from model class
         auto_deferred_fields = set()
         if hasattr(self.model_class, "_get_field_cache"):
@@ -477,6 +498,11 @@ class QueryBuilder:
 
         # Create the base query
         query = select(*columns_to_select) if columns_to_select else select(table)
+
+        # Add CTEs to query
+        if cte_objects:
+            for cte_obj in cte_objects:
+                query = query.add_cte(cte_obj)
 
         # Apply manual joins
         for join_table, join_condition, join_type in self.joins:
@@ -667,4 +693,5 @@ class QueryBuilder:
         new_builder.is_reversed = self.is_reversed
         new_builder.prefetch_configs = self.prefetch_configs.copy()
         new_builder.prefetch_relationships = self.prefetch_relationships.copy()
+        new_builder.ctes = self.ctes.copy()
         return new_builder
