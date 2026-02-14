@@ -4,7 +4,7 @@ import pytest
 
 from sqlobjects.exceptions import DeferredFieldError
 from sqlobjects.fields import Column, StringColumn, column, foreign_key, identity
-from sqlobjects.fields.proxies import DeferredFieldProxy
+from sqlobjects.fields.proxies import DeferredObject
 from tests.conftest import TestModel
 
 
@@ -29,13 +29,13 @@ class DeferredTestPost(TestModel):
     author_id: Column[int] = foreign_key("deferred_test_users.id")
 
 
-class TestDeferredFieldProxy:
-    """Test DeferredFieldProxy behavior and error handling"""
+class TestDeferredObject:
+    """Test DeferredObject behavior and error handling"""
 
     def test_deferred_field_proxy_creation(self):
-        """Test DeferredFieldProxy can be created with proper parameters"""
+        """Test DeferredObject can be created with proper parameters"""
         user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = DeferredFieldProxy(user, "bio")
+        proxy = DeferredObject(user, "bio")
 
         assert proxy.instance == user
         assert proxy.field_name == "bio"
@@ -43,17 +43,17 @@ class TestDeferredFieldProxy:
         assert proxy._is_loaded is False
 
     def test_deferred_field_proxy_string_representation(self):
-        """Test DeferredFieldProxy string representations"""
+        """Test DeferredObject string representations"""
         user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = DeferredFieldProxy(user, "bio")
+        proxy = DeferredObject(user, "bio")
 
-        assert str(proxy) == "<DeferredField: bio>"
-        assert repr(proxy) == "DeferredFieldProxy(field_name='bio')"
+        assert str(proxy) == "<DeferredObject: bio>"
+        assert repr(proxy) == "DeferredObject(field_name='bio')"
 
     def test_deferred_field_proxy_error_on_iteration(self):
-        """Test DeferredFieldProxy raises error when trying to iterate"""
+        """Test DeferredObject raises error when trying to iterate"""
         user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = DeferredFieldProxy(user, "bio")
+        proxy = DeferredObject(user, "bio")
 
         with pytest.raises(DeferredFieldError) as exc_info:
             iter(proxy)
@@ -62,9 +62,9 @@ class TestDeferredFieldProxy:
         assert "DeferredTestUser" in str(exc_info.value)
 
     def test_deferred_field_proxy_error_on_length(self):
-        """Test DeferredFieldProxy raises error when trying to get length"""
+        """Test DeferredObject raises error when trying to get length"""
         user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = DeferredFieldProxy(user, "bio")
+        proxy = DeferredObject(user, "bio")
 
         with pytest.raises(DeferredFieldError) as exc_info:
             len(proxy)
@@ -73,9 +73,9 @@ class TestDeferredFieldProxy:
         assert "DeferredTestUser" in str(exc_info.value)
 
     def test_deferred_field_proxy_error_on_boolean(self):
-        """Test DeferredFieldProxy raises error when checking boolean value"""
+        """Test DeferredObject raises error when checking boolean value"""
         user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = DeferredFieldProxy(user, "bio")
+        proxy = DeferredObject(user, "bio")
 
         with pytest.raises(DeferredFieldError) as exc_info:
             bool(proxy)
@@ -84,9 +84,9 @@ class TestDeferredFieldProxy:
         assert "DeferredTestUser" in str(exc_info.value)
 
     def test_deferred_field_proxy_error_on_getitem(self):
-        """Test DeferredFieldProxy raises error when accessing items"""
+        """Test DeferredObject raises error when accessing items"""
         user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = DeferredFieldProxy(user, "bio")
+        proxy = DeferredObject(user, "bio")
 
         with pytest.raises(DeferredFieldError) as exc_info:
             proxy[0]  # noqa
@@ -95,9 +95,9 @@ class TestDeferredFieldProxy:
         assert "DeferredTestUser" in str(exc_info.value)
 
     def test_deferred_field_proxy_error_on_contains(self):
-        """Test DeferredFieldProxy raises error when checking containment"""
+        """Test DeferredObject raises error when checking containment"""
         user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = DeferredFieldProxy(user, "bio")
+        proxy = DeferredObject(user, "bio")
 
         with pytest.raises(DeferredFieldError) as exc_info:
             "test" in proxy  # noqa  # type: ignore
@@ -106,9 +106,9 @@ class TestDeferredFieldProxy:
         assert "DeferredTestUser" in str(exc_info.value)
 
     def test_deferred_field_proxy_error_on_arithmetic(self):
-        """Test DeferredFieldProxy raises error on arithmetic operations"""
+        """Test DeferredObject raises error on arithmetic operations"""
         user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = DeferredFieldProxy(user, "bio")
+        proxy = DeferredObject(user, "bio")
 
         with pytest.raises(DeferredFieldError) as exc_info:
             proxy + "test"  # noqa  # type: ignore
@@ -117,7 +117,7 @@ class TestDeferredFieldProxy:
         assert "DeferredTestUser" in str(exc_info.value)
 
     async def test_deferred_field_proxy_is_loaded_status(self, session):
-        """Test DeferredFieldProxy correctly reports loaded status"""
+        """Test DeferredObject correctly reports loaded status"""
         # Create user with deferred field
         user = await DeferredTestUser.objects.using(session).create(
             username="test", email="test@example.com", bio="Test bio"
@@ -126,7 +126,7 @@ class TestDeferredFieldProxy:
         # Load user with deferred field
         loaded_user = await DeferredTestUser.objects.using(session).defer("bio").get(DeferredTestUser.id == user.id)
 
-        proxy = DeferredFieldProxy(loaded_user, "bio")
+        proxy = DeferredObject(loaded_user, "bio")
 
         # Initially not loaded
         assert not proxy.is_loaded()
@@ -138,7 +138,7 @@ class TestDeferredFieldProxy:
         assert proxy.is_deferred()  # Still deferred, but loaded
 
     async def test_deferred_field_proxy_fetch_caching(self, session):
-        """Test DeferredFieldProxy caches fetched values"""
+        """Test DeferredObject caches fetched values"""
         # Create user with deferred field
         user = await DeferredTestUser.objects.using(session).create(
             username="test", email="test@example.com", bio="Test bio content"
@@ -147,7 +147,7 @@ class TestDeferredFieldProxy:
         # Load user with deferred field
         loaded_user = await DeferredTestUser.objects.using(session).defer("bio").get(DeferredTestUser.id == user.id)
 
-        proxy = DeferredFieldProxy(loaded_user, "bio")
+        proxy = DeferredObject(loaded_user, "bio")
 
         # First fetch should load and cache
         result1 = await proxy.fetch()
@@ -179,7 +179,7 @@ class TestDeferredFieldIntegration:
 
         # Accessing deferred field should return proxy
         bio_proxy = loaded_user.bio
-        assert isinstance(bio_proxy, DeferredFieldProxy)
+        assert isinstance(bio_proxy, DeferredObject)
         assert bio_proxy.field_name == "bio"
 
     async def test_deferred_field_loading_behavior(self, session):
@@ -270,7 +270,7 @@ class TestProxyErrorMessages:
     def test_deferred_field_error_messages_are_descriptive(self):
         """Test that deferred field error messages provide clear guidance"""
         user = DeferredTestUser(username="test", email="test@example.com")
-        proxy = DeferredFieldProxy(user, "bio")
+        proxy = DeferredObject(user, "bio")
 
         # Test iteration error message
         with pytest.raises(DeferredFieldError) as exc_info:
@@ -285,7 +285,7 @@ class TestProxyErrorMessages:
         """Test that error messages include the model class name for context"""
         user = DeferredTestUser(username="test", email="test@example.com")
 
-        deferred_proxy = DeferredFieldProxy(user, "bio")
+        deferred_proxy = DeferredObject(user, "bio")
 
         # Should include model class name
         with pytest.raises(DeferredFieldError) as exc_info:
