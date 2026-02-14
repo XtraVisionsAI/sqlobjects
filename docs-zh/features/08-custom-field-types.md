@@ -9,9 +9,7 @@
 ### 基础注册
 
 ```python
-from sqlalchemy.types import UserDefinedType
-from sqlobjects.fields.types.registry import register_field_type
-from sqlobjects.fields.types.comparators import DefaultComparator
+from sqlobjects.fields.types import register_field_type, DefaultComparator, UserDefinedType
 
 # 定义 SQLAlchemy 类型
 class TSVECTOR(UserDefinedType):
@@ -21,7 +19,6 @@ class TSVECTOR(UserDefinedType):
         return "TSVECTOR"
 
 # 注册到全局注册表
-# Use register_field_type() to register custom types
 register_field_type(TSVECTOR, "tsvector", comparator=DefaultComparator)
 ```
 
@@ -73,10 +70,9 @@ register_field_type(
 ### 全文搜索（tsvector）
 
 **类型定义：**
+
 ```python
-from sqlalchemy.types import UserDefinedType
-from sqlobjects.fields.types.comparators import DefaultComparator
-from sqlobjects.fields.types.registry import register_field_type
+from sqlobjects.fields.types import register_field_type, DefaultComparator, UserDefinedType
 
 class TSVECTOR(UserDefinedType):
     cache_ok = True
@@ -91,13 +87,13 @@ class TSVectorComparator(DefaultComparator):
         return func.to_tsquery(query).op('@@')(self)
 
 # 注册
-# Use register_field_type() to register custom types
 register_field_type(TSVECTOR, "tsvector", comparator=TSVectorComparator)
 ```
 
 **模型使用：**
+
 ```python
-from sqlalchemy import Index
+from sqlobjects.metadata import index
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, column
 
@@ -110,11 +106,12 @@ class Document(ObjectModel):
         table_name = "documents"
         indexes = [
             # 用于全文搜索的 GIN 索引（推荐）
-            Index("idx_content_vector", "content_vector", postgresql_using="gin"),
+            index("idx_content_vector", "content_vector", postgresql_using="gin"),
         ]
 ```
 
 **索引选项：**
+
 ```python
 class Config:
     indexes = [
@@ -127,6 +124,7 @@ class Config:
 ```
 
 **查询示例：**
+
 ```python
 # 简单全文搜索
 docs = await Document.objects.filter(
@@ -147,6 +145,7 @@ docs = await Document.objects.filter(
 ### 向量相似度搜索（pgvector）
 
 **类型定义：**
+
 ```python
 class PGVECTOR(UserDefinedType):
     cache_ok = True
@@ -175,8 +174,9 @@ register_field_type(PGVECTOR, "pgvector", comparator=PGVectorComparator)
 ```
 
 **模型使用：**
+
 ```python
-from sqlalchemy import Index
+from sqlobjects.metadata import index
 
 class Document(ObjectModel):
     title: Column[str] = column(type="string", length=200)
@@ -187,23 +187,24 @@ class Document(ObjectModel):
         table_name = "documents"
         indexes = [
             # 用于近似最近邻搜索的 IVFFlat 索引
-            Index("idx_embedding", "embedding",
+            index("idx_embedding", "embedding",
                   postgresql_using="ivfflat",
                   postgresql_ops={"embedding": "vector_l2_ops"}),
         ]
 ```
 
 **索引选项：**
+
 ```python
 class Config:
     indexes = [
         # 使用 L2 距离的 IVFFlat（欧几里得）
-        Index("idx_embedding_l2", "embedding",
+        index("idx_embedding_l2", "embedding",
               postgresql_using="ivfflat",
               postgresql_ops={"embedding": "vector_l2_ops"}),
         
         # 使用余弦距离的 IVFFlat
-        Index("idx_embedding_cosine", "embedding",
+        index("idx_embedding_cosine", "embedding",
               postgresql_using="ivfflat",
               postgresql_ops={"embedding": "vector_cosine_ops"}),
         
@@ -213,13 +214,14 @@ class Config:
               postgresql_ops={"embedding": "vector_ip_ops"}),
         
         # HNSW 索引（查询更快，占用更多内存）
-        Index("idx_embedding_hnsw", "embedding",
+        index("idx_embedding_hnsw", "embedding",
               postgresql_using="hnsw",
               postgresql_ops={"embedding": "vector_l2_ops"}),
     ]
 ```
 
 **索引配置：**
+
 ```python
 # IVFFlat 需要训练 - 设置 lists 参数
 # 经验法则：lists = rows / 1000（对于 > 1M 行的数据集）
@@ -235,6 +237,7 @@ async def create_ivfflat_index():
 ```
 
 **查询示例：**
+
 ```python
 # 使用 L2 距离查找相似文档
 query_vector = [0.1, 0.2, 0.3, ...]  # 1536 维
@@ -258,9 +261,7 @@ nearby_docs = await Document.objects.filter(
 
 ```python
 # custom_types.py
-from sqlalchemy.types import UserDefinedType
-from sqlobjects.fields.types.registry import register_field_type
-from sqlobjects.fields.types.comparators import DefaultComparator
+from sqlobjects.fields.types import register_field_type, UserDefinedType, DefaultComparator
 
 # 类型定义
 class TSVECTOR(UserDefinedType):
@@ -288,14 +289,13 @@ class PGVectorComparator(DefaultComparator):
         return self.op('<=>')(other)
 
 # 注册类型
-# Use register_field_type() to register custom types
 register_field_type(TSVECTOR, "tsvector", comparator=TSVectorComparator)
 register_field_type(PGVECTOR, "pgvector", comparator=PGVectorComparator)
 ```
 
 ```python
 # models.py
-from sqlalchemy import Index
+from sqlobjects.metadata import index
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, column
 from .custom_types import TSVECTOR, PGVECTOR  # 触发注册
@@ -309,8 +309,8 @@ class Document(ObjectModel):
     class Config:
         table_name = "documents"
         indexes = [
-            Index("idx_content_vector", "content_vector", postgresql_using="gin"),
-            Index("idx_embedding", "embedding",
+            index("idx_content_vector", "content_vector", postgresql_using="gin"),
+            index("idx_embedding", "embedding",
                   postgresql_using="ivfflat",
                   postgresql_ops={"embedding": "vector_l2_ops"}),
         ]
@@ -349,7 +349,6 @@ async def main():
 ```python
 # ✅ 好：在单独的模块中注册
 # custom_types.py
-# Use register_field_type() to register custom types
 register_field_type(TSVECTOR, "tsvector", comparator=TSVectorComparator)
 
 # models.py
@@ -402,15 +401,15 @@ async def setup_database():
 创建索引以获得最佳查询性能：
 
 ```python
-from sqlalchemy import Index
+from sqlobjects.metadata import index
 
 class Config:
     indexes = [
         # tsvector：使用 GIN 进行全文搜索
-        Index("idx_content_vector", "content_vector", postgresql_using="gin"),
+        index("idx_content_vector", "content_vector", postgresql_using="gin"),
         
         # pgvector：使用 IVFFlat 或 HNSW 进行相似度搜索
-        Index("idx_embedding", "embedding",
+        index("idx_embedding", "embedding",
               postgresql_using="ivfflat",
               postgresql_ops={"embedding": "vector_l2_ops"}),
     ]
@@ -418,13 +417,13 @@ class Config:
 
 **索引选择指南：**
 
-| 类型 | 方法 | 使用场景 | 速度 | 内存 |
-|------|--------|----------|------|------|
-| tsvector | GIN | 全文搜索（推荐） | 快速查询 | 高 |
-| tsvector | GiST | 频繁更新的全文搜索 | 中等 | 低 |
-| pgvector | IVFFlat | 大数据集（>100K 向量） | 快速 | 中等 |
-| pgvector | HNSW | 最高查询速度 | 最快 | 最高 |
-| pgvector | 无 | 小数据集（<10K 向量） | 慢 | 无 |
+| 类型       | 方法      | 使用场景           | 速度   | 内存 |
+|----------|---------|----------------|------|----|
+| tsvector | GIN     | 全文搜索（推荐）       | 快速查询 | 高  |
+| tsvector | GiST    | 频繁更新的全文搜索      | 中等   | 低  |
+| pgvector | IVFFlat | 大数据集（>100K 向量） | 快速   | 中等 |
+| pgvector | HNSW    | 最高查询速度         | 最快   | 最高 |
+| pgvector | 无       | 小数据集（<10K 向量）  | 慢    | 无  |
 
 ## 类型注册表 API
 
@@ -433,7 +432,7 @@ class Config:
 向全局注册表注册自定义类型：
 
 ```python
-from sqlobjects.fields.types.registry import register_field_type
+from sqlobjects.fields.types import register_field_type
 
 register_field_type(
     field_type: type,                    # SQLAlchemy 类型类
@@ -467,15 +466,16 @@ embedding3: Column = column(type="embedding", dimensions=768)
 ### tsvector 索引
 
 **GIN vs GiST：**
+
 ```python
 # GIN：更适合读密集型工作负载
-Index("idx_gin", "content_vector", postgresql_using="gin")
+index("idx_gin", "content_vector", postgresql_using="gin")
 # - 查询快 3 倍
 # - 更新慢 3 倍
 # - 磁盘空间多 2-3 倍
 
 # GiST：更适合写密集型工作负载
-Index("idx_gist", "content_vector", postgresql_using="gist")
+index("idx_gist", "content_vector", postgresql_using="gist")
 # - 更新更快
 # - 查询更慢
 # - 磁盘空间更少
@@ -484,6 +484,7 @@ Index("idx_gist", "content_vector", postgresql_using="gist")
 ### pgvector 索引
 
 **IVFFlat 配置：**
+
 ```python
 # lists 参数影响速度/准确性权衡
 # 更多 lists = 查询更快，准确性更低
@@ -493,17 +494,18 @@ Index("idx_gist", "content_vector", postgresql_using="gist")
 # 中等数据集（100K-1M）：lists = rows / 1000
 # 大数据集（>1M）：lists = sqrt(rows)
 
-Index("idx_embedding", "embedding",
+index("idx_embedding", "embedding",
       postgresql_using="ivfflat",
       postgresql_ops={"embedding": "vector_l2_ops"})
 ```
 
 **HNSW 配置：**
+
 ```python
 # HNSW 提供比 IVFFlat 更好的查询性能
 # 但需要更多内存和构建时间
 
-Index("idx_embedding_hnsw", "embedding",
+index("idx_embedding_hnsw", "embedding",
       postgresql_using="hnsw",
       postgresql_ops={"embedding": "vector_l2_ops"},
       postgresql_with={"m": 16, "ef_construction": 64})
@@ -512,6 +514,7 @@ Index("idx_embedding_hnsw", "embedding",
 ```
 
 **距离操作符选择：**
+
 ```python
 # 根据相似度度量选择操作符
 operators = {

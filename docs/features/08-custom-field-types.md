@@ -2,16 +2,15 @@
 
 ## Overview
 
-Extend SQLObjects with custom database-specific field types for specialized use cases like full-text search, vector similarity, or other database-specific features.
+Extend SQLObjects with custom database-specific field types for specialized use cases like full-text search, vector
+similarity, or other database-specific features.
 
 ## Registering Custom Types
 
 ### Basic Registration
 
 ```python
-from sqlalchemy.types import UserDefinedType
-from sqlobjects.fields.types.registry import register_field_type
-from sqlobjects.fields.types.comparators import DefaultComparator
+from sqlobjects.fields.types import register_field_type, DefaultComparator, UserDefinedType
 
 # Define SQLAlchemy type
 class TSVECTOR(UserDefinedType):
@@ -21,7 +20,6 @@ class TSVECTOR(UserDefinedType):
         return "TSVECTOR"
 
 # Register to global registry
-# Use register_field_type() to register custom types
 register_field_type(TSVECTOR, "tsvector", comparator=DefaultComparator)
 ```
 
@@ -66,10 +64,9 @@ register_field_type(
 ### Full-Text Search (tsvector)
 
 **Type Definition:**
+
 ```python
-from sqlalchemy.types import UserDefinedType
-from sqlobjects.fields.types.comparators import DefaultComparator
-from sqlobjects.fields.types.registry import register_field_type
+from sqlobjects.fields.types import register_field_type, DefaultComparator, UserDefinedType
 
 class TSVECTOR(UserDefinedType):
     cache_ok = True
@@ -84,13 +81,13 @@ class TSVectorComparator(DefaultComparator):
         return func.to_tsquery(query).op('@@')(self)
 
 # Register
-# Use register_field_type() to register custom types
 register_field_type(TSVECTOR, "tsvector", comparator=TSVectorComparator)
 ```
 
 **Model Usage:**
+
 ```python
-from sqlalchemy import Index
+from sqlobjects.metadata import index
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, column
 
@@ -103,11 +100,12 @@ class Document(ObjectModel):
         table_name = "documents"
         indexes = [
             # GIN index for full-text search (recommended)
-            Index("idx_content_vector", "content_vector", postgresql_using="gin"),
+            index("idx_content_vector", "content_vector", postgresql_using="gin"),
         ]
 ```
 
 **Index Options:**
+
 ```python
 class Config:
     indexes = [
@@ -120,6 +118,7 @@ class Config:
 ```
 
 **Query Examples:**
+
 ```python
 # Simple full-text search
 docs = await Document.objects.filter(
@@ -140,6 +139,7 @@ docs = await Document.objects.filter(
 ### Vector Similarity Search (pgvector)
 
 **Type Definition:**
+
 ```python
 class PGVECTOR(UserDefinedType):
     cache_ok = True
@@ -168,8 +168,9 @@ register_field_type(PGVECTOR, "pgvector", comparator=PGVectorComparator)
 ```
 
 **Model Usage:**
+
 ```python
-from sqlalchemy import Index
+from sqlobjects.metadata import index
 
 class Document(ObjectModel):
     title: Column[str] = column(type="string", length=200)
@@ -180,39 +181,41 @@ class Document(ObjectModel):
         table_name = "documents"
         indexes = [
             # IVFFlat index for approximate nearest neighbor search
-            Index("idx_embedding", "embedding",
+            index("idx_embedding", "embedding",
                   postgresql_using="ivfflat",
                   postgresql_ops={"embedding": "vector_l2_ops"}),
         ]
 ```
 
 **Index Options:**
+
 ```python
 class Config:
     indexes = [
         # IVFFlat with L2 distance (Euclidean)
-        Index("idx_embedding_l2", "embedding",
+        index("idx_embedding_l2", "embedding",
               postgresql_using="ivfflat",
               postgresql_ops={"embedding": "vector_l2_ops"}),
         
         # IVFFlat with cosine distance
-        Index("idx_embedding_cosine", "embedding",
+        index("idx_embedding_cosine", "embedding",
               postgresql_using="ivfflat",
               postgresql_ops={"embedding": "vector_cosine_ops"}),
         
         # IVFFlat with inner product
-        Index("idx_embedding_ip", "embedding",
+        index("idx_embedding_ip", "embedding",
               postgresql_using="ivfflat",
               postgresql_ops={"embedding": "vector_ip_ops"}),
         
         # HNSW index (faster queries, more memory)
-        Index("idx_embedding_hnsw", "embedding",
+        index("idx_embedding_hnsw", "embedding",
               postgresql_using="hnsw",
               postgresql_ops={"embedding": "vector_l2_ops"}),
     ]
 ```
 
 **Index Configuration:**
+
 ```python
 # IVFFlat requires training - set lists parameter
 # Rule of thumb: lists = rows / 1000 (for datasets > 1M rows)
@@ -228,6 +231,7 @@ async def create_ivfflat_index():
 ```
 
 **Query Examples:**
+
 ```python
 # Find similar documents using L2 distance
 query_vector = [0.1, 0.2, 0.3, ...]  # 1536 dimensions
@@ -251,9 +255,7 @@ nearby_docs = await Document.objects.filter(
 
 ```python
 # custom_types.py
-from sqlalchemy.types import UserDefinedType
-from sqlobjects.fields.types.registry import register_field_type
-from sqlobjects.fields.types.comparators import DefaultComparator
+from sqlobjects.fields.types import register_field_type, UserDefinedType, DefaultComparator
 
 # Type definitions
 class TSVECTOR(UserDefinedType):
@@ -281,14 +283,13 @@ class PGVectorComparator(DefaultComparator):
         return self.op('<=>')(other)
 
 # Register types
-# Use register_field_type() to register custom types
 register_field_type(TSVECTOR, "tsvector", comparator=TSVectorComparator)
 register_field_type(PGVECTOR, "pgvector", comparator=PGVectorComparator)
 ```
 
 ```python
 # models.py
-from sqlalchemy import Index
+from sqlobjects.metadata import index
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, column
 from .custom_types import TSVECTOR, PGVECTOR  # Trigger registration
@@ -302,8 +303,8 @@ class Document(ObjectModel):
     class Config:
         table_name = "documents"
         indexes = [
-            Index("idx_content_vector", "content_vector", postgresql_using="gin"),
-            Index("idx_embedding", "embedding",
+            index("idx_content_vector", "content_vector", postgresql_using="gin"),
+            index("idx_embedding", "embedding",
                   postgresql_using="ivfflat",
                   postgresql_ops={"embedding": "vector_l2_ops"}),
         ]
@@ -342,7 +343,6 @@ Register custom types before defining models:
 ```python
 # ✅ Good: Register in separate module
 # custom_types.py
-# Use register_field_type() to register custom types
 register_field_type(TSVECTOR, "tsvector", comparator=TSVectorComparator)
 
 # models.py
@@ -395,15 +395,15 @@ async def setup_database():
 Create indexes for optimal query performance:
 
 ```python
-from sqlalchemy import Index
+from sqlobjects.metadata import index
 
 class Config:
     indexes = [
         # tsvector: Use GIN for full-text search
-        Index("idx_content_vector", "content_vector", postgresql_using="gin"),
+        index("idx_content_vector", "content_vector", postgresql_using="gin"),
         
         # pgvector: Use IVFFlat or HNSW for similarity search
-        Index("idx_embedding", "embedding",
+        index("idx_embedding", "embedding",
               postgresql_using="ivfflat",
               postgresql_ops={"embedding": "vector_l2_ops"}),
     ]
@@ -411,13 +411,13 @@ class Config:
 
 **Index Selection Guide:**
 
-| Type | Method | Use Case | Speed | Memory |
-|------|--------|----------|-------|--------|
-| tsvector | GIN | Full-text search (recommended) | Fast query | High |
-| tsvector | GiST | Full-text with frequent updates | Medium | Low |
-| pgvector | IVFFlat | Large datasets (>100K vectors) | Fast | Medium |
-| pgvector | HNSW | Highest query speed | Fastest | Highest |
-| pgvector | None | Small datasets (<10K vectors) | Slow | None |
+| Type     | Method  | Use Case                        | Speed      | Memory  |
+|----------|---------|---------------------------------|------------|---------|
+| tsvector | GIN     | Full-text search (recommended)  | Fast query | High    |
+| tsvector | GiST    | Full-text with frequent updates | Medium     | Low     |
+| pgvector | IVFFlat | Large datasets (>100K vectors)  | Fast       | Medium  |
+| pgvector | HNSW    | Highest query speed             | Fastest    | Highest |
+| pgvector | None    | Small datasets (<10K vectors)   | Slow       | None    |
 
 ## Type Registry API
 
@@ -426,7 +426,7 @@ class Config:
 Register a custom type with the global registry:
 
 ```python
-from sqlobjects.fields.types.registry import register_field_type
+from sqlobjects.fields.types import register_field_type
 
 register_field_type(
     field_type: type,                    # SQLAlchemy type class
@@ -460,15 +460,16 @@ embedding3: Column = column(type="embedding", dimensions=768)
 ### tsvector Indexes
 
 **GIN vs GiST:**
+
 ```python
 # GIN: Better for read-heavy workloads
-Index("idx_gin", "content_vector", postgresql_using="gin")
+index("idx_gin", "content_vector", postgresql_using="gin")
 # - 3x faster queries
 # - 3x slower updates
 # - 2-3x more disk space
 
 # GiST: Better for write-heavy workloads  
-Index("idx_gist", "content_vector", postgresql_using="gist")
+index("idx_gist", "content_vector", postgresql_using="gist")
 # - Faster updates
 # - Slower queries
 # - Less disk space
@@ -477,6 +478,7 @@ Index("idx_gist", "content_vector", postgresql_using="gist")
 ### pgvector Indexes
 
 **IVFFlat Configuration:**
+
 ```python
 # Lists parameter affects speed/accuracy tradeoff
 # More lists = faster queries, less accurate
@@ -486,17 +488,18 @@ Index("idx_gist", "content_vector", postgresql_using="gist")
 # Medium dataset (100K-1M): lists = rows / 1000  
 # Large dataset (>1M): lists = sqrt(rows)
 
-Index("idx_embedding", "embedding",
+index("idx_embedding", "embedding",
       postgresql_using="ivfflat",
       postgresql_ops={"embedding": "vector_l2_ops"})
 ```
 
 **HNSW Configuration:**
+
 ```python
 # HNSW provides better query performance than IVFFlat
 # But requires more memory and build time
 
-Index("idx_embedding_hnsw", "embedding",
+index("idx_embedding_hnsw", "embedding",
       postgresql_using="hnsw",
       postgresql_ops={"embedding": "vector_l2_ops"},
       postgresql_with={"m": 16, "ef_construction": 64})
@@ -505,6 +508,7 @@ Index("idx_embedding_hnsw", "embedding",
 ```
 
 **Distance Operator Selection:**
+
 ```python
 # Choose operator based on your similarity metric
 operators = {

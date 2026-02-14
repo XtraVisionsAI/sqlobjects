@@ -8,7 +8,7 @@ from .comparators import (
     NumericComparator,
     StringComparator,
 )
-from .registry import Auto, create_type_instance, get_type_definition, register_field_type
+from .registry import Auto, UserDefinedType, create_type_instance, get_type_definition, register_field_type
 
 
 __all__ = [
@@ -24,4 +24,5 @@ __all__ = [
     "JSONComparator",
     "BooleanComparator",
     "DefaultComparator",
+    "UserDefinedType",
 ]

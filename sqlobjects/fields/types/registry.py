@@ -22,6 +22,7 @@ from sqlalchemy.sql.sqltypes import (
     Uuid,
 )
 from sqlalchemy.types import TypeEngine
+from sqlalchemy.types import UserDefinedType as _UserDefinedType
 
 from .comparators import (
     BooleanComparator,
@@ -32,6 +33,9 @@ from .comparators import (
     NumericComparator,
     StringComparator,
 )
+
+
+UserDefinedType = _UserDefinedType
 
 
 class Auto(TypeEngine):
