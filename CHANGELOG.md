@@ -1,3 +1,16 @@
+## 1.1.0 (2026-02-14)
+
+### Feat
+
+- update custom field type imports to use sqlobjects.fields.types
+- implement CTE (Common Table Expressions) support
+- add support for SQL window functions
+- add EXPLAIN support with dialect-based architecture
+
+### Fix
+
+- update test imports to use DeferredObject instead of DeferredFieldProxy
+
 ## 1.0.16 (2025-11-18)
 
 ### Fix
