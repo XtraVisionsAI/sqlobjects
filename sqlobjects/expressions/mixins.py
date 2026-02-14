@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func as _sa_func
 from sqlalchemy.sql.elements import ColumnElement
 
 from .function import FunctionExpression
@@ -116,7 +116,7 @@ class FunctionMixin:
             cases = list(conditions[0].items())
         else:
             cases = conditions
-        return self._create_result(func.case(*cases, else_=else_))
+        return self._create_result(_sa_func.case(*cases, else_=else_))
 
     def coalesce(self, *values) -> "FunctionExpression":
         """Return first non-NULL value
@@ -127,7 +127,7 @@ class FunctionMixin:
         Returns:
             FunctionExpression with COALESCE operation
         """
-        return self._create_result(func.coalesce(self._get_expression(), *values))
+        return self._create_result(_sa_func.coalesce(self._get_expression(), *values))
 
     def nullif(self, value) -> "FunctionExpression":
         """Return NULL if expression equals value
@@ -138,7 +138,7 @@ class FunctionMixin:
         Returns:
             FunctionExpression with NULLIF operation
         """
-        return self._create_result(func.nullif(self._get_expression(), value))
+        return self._create_result(_sa_func.nullif(self._get_expression(), value))
 
     # === Ordering methods ===
     def asc(self):

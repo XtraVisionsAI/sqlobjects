@@ -1,9 +1,21 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.sql.elements import ColumnElement
-from sqlalchemy.sql.functions import func
+from sqlalchemy.sql.functions import func as _sa_func
 
 from .subquery import SubqueryExpression
+from .window import (
+    DenseRankFunction,
+    FirstValueFunction,
+    LagFunction,
+    LastValueFunction,
+    LeadFunction,
+    NthValueFunction,
+    NtileFunction,
+    PercentRankFunction,
+    RankFunction,
+    RowNumberFunction,
+)
 
 
 if TYPE_CHECKING:
@@ -11,70 +23,120 @@ if TYPE_CHECKING:
     class _FunctionMethods:
         # String functions
         def upper(self) -> "FunctionExpression": ...
+
         def lower(self) -> "FunctionExpression": ...
+
         def trim(self) -> "FunctionExpression": ...
+
         def length(self) -> "FunctionExpression": ...
+
         def substring(self, start: int, length: int | None = None) -> "FunctionExpression": ...
+
         def concat(self, *args) -> "FunctionExpression": ...
+
         def replace(self, old: str, new: str) -> "FunctionExpression": ...
+
         def reverse(self) -> "FunctionExpression": ...
+
         def md5(self) -> "FunctionExpression": ...
+
         def left(self, length: int) -> "FunctionExpression": ...
+
         def right(self, length: int) -> "FunctionExpression": ...
+
         def lpad(self, length: int, fill_char: str = " ") -> "FunctionExpression": ...
+
         def rpad(self, length: int, fill_char: str = " ") -> "FunctionExpression": ...
+
         def ltrim(self, chars: str | None = None) -> "FunctionExpression": ...
+
         def rtrim(self, chars: str | None = None) -> "FunctionExpression": ...
 
         # Numeric functions
         def abs(self) -> "FunctionExpression": ...
+
         def round(self, precision: int = 0) -> "FunctionExpression": ...
+
         def ceil(self) -> "FunctionExpression": ...
+
         def floor(self) -> "FunctionExpression": ...
+
         def sqrt(self) -> "FunctionExpression": ...
+
         def power(self, exponent) -> "FunctionExpression": ...
+
         def mod(self, divisor) -> "FunctionExpression": ...
+
         def sign(self) -> "FunctionExpression": ...
+
         def trunc(self, precision: int = 0) -> "FunctionExpression": ...
+
         def exp(self) -> "FunctionExpression": ...
+
         def ln(self) -> "FunctionExpression": ...
+
         def log(self, base: int = 10) -> "FunctionExpression": ...
 
         # Aggregate functions
         def sum(self) -> "FunctionExpression": ...
+
         def avg(self) -> "FunctionExpression": ...
+
         def max(self) -> "FunctionExpression": ...
+
         def min(self) -> "FunctionExpression": ...
+
         def count(self) -> "FunctionExpression": ...
+
         def count_distinct(self) -> "FunctionExpression": ...
+
         def distinct(self) -> "FunctionExpression": ...
 
         # Date/Time functions
         def year(self) -> "FunctionExpression": ...
+
         def month(self) -> "FunctionExpression": ...
+
         def day(self) -> "FunctionExpression": ...
+
         def hour(self) -> "FunctionExpression": ...
+
         def minute(self) -> "FunctionExpression": ...
+
         def extract(self, field: str) -> "FunctionExpression": ...
+
         def date_trunc(self, precision: str) -> "FunctionExpression": ...
 
         # General functions
         def cast(self, type_: str, **kwargs) -> "FunctionExpression": ...
+
         def coalesce(self, *values) -> "FunctionExpression": ...
+
         def nullif(self, value) -> "FunctionExpression": ...
+
         def case(self, *conditions, else_=None) -> "FunctionExpression": ...
+
         def greatest(self, *args) -> "FunctionExpression": ...
+
         def least(self, *args) -> "FunctionExpression": ...
 
         # Comparison functions (chainable)
         def like(self, pattern: str) -> "FunctionExpression": ...
+
         def ilike(self, pattern: str) -> "FunctionExpression": ...
+
         def not_like(self, pattern: str) -> "FunctionExpression": ...
+
         def not_ilike(self, pattern: str) -> "FunctionExpression": ...
+
         def between(self, min_val, max_val) -> "FunctionExpression": ...
+
         def in_(self, values) -> "FunctionExpression": ...
+
         def not_in(self, values) -> "FunctionExpression": ...
+
         def is_(self, other) -> "FunctionExpression": ...
+
         def is_not(self, other) -> "FunctionExpression": ...
 
 
@@ -111,7 +173,7 @@ class FunctionExpression:
             return getattr(self.expression, name)
 
         # Then delegate to SQLAlchemy func - let database decide if function exists
-        db_func = getattr(func, name)
+        db_func = getattr(_sa_func, name)
         return lambda *args, **kwargs: FunctionExpression(db_func(self.expression, *args, **kwargs))
 
     def raw(self, sql: str, *args, **kwargs) -> "FunctionExpression":
@@ -156,8 +218,19 @@ class FunctionExpression:
                 all_args.append(literal(arg))
 
         # Use func to create the raw function call
-        raw_func = getattr(func, sql)
+        raw_func = getattr(_sa_func, sql)
         return FunctionExpression(raw_func(*all_args, **kwargs))
+
+    def __clause_element__(self):
+        """Return underlying SQLAlchemy expression for SQLAlchemy protocol.
+
+        This method allows FunctionExpression to be used directly in
+        SQLAlchemy contexts that expect clause elements.
+
+        Returns:
+            The underlying SQLAlchemy expression
+        """
+        return self.expression
 
     def resolve(self, table_or_model=None):
         """Resolve to underlying SQLAlchemy expression.
@@ -323,3 +396,49 @@ class FunctionExpression:
         if isinstance(other, FunctionExpression):
             other = other.expression
         return FunctionExpression(other % self.expression)
+
+
+class _FuncWrapper:
+    """Type-safe wrapper for SQLAlchemy func with window functions."""
+
+    if TYPE_CHECKING:
+        # Window functions type hints
+        def row_number(self) -> RowNumberFunction: ...
+
+        def rank(self) -> RankFunction: ...
+
+        def dense_rank(self) -> DenseRankFunction: ...
+
+        def percent_rank(self) -> PercentRankFunction: ...
+
+        def ntile(self, n: int) -> NtileFunction: ...
+
+        def lag(self, col: Any, offset: int = 1, default: Any = None) -> LagFunction: ...
+
+        def lead(self, col: Any, offset: int = 1, default: Any = None) -> LeadFunction: ...
+
+        def first_value(self, col: Any) -> FirstValueFunction: ...
+
+        def last_value(self, col: Any) -> LastValueFunction: ...
+
+        def nth_value(self, col: Any, n: int) -> NthValueFunction: ...
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate to SQLAlchemy func for all other functions."""
+        return getattr(_sa_func, name)
+
+
+# Create singleton instance
+func = _FuncWrapper()
+
+# Add window functions at runtime
+func.row_number = lambda: RowNumberFunction()  # type: ignore
+func.rank = lambda: RankFunction()  # type: ignore
+func.dense_rank = lambda: DenseRankFunction()  # type: ignore
+func.percent_rank = lambda: PercentRankFunction()  # type: ignore
+func.ntile = lambda n: NtileFunction(n)  # type: ignore
+func.lag = lambda col, offset=1, default=None: LagFunction(col, offset, default)  # type: ignore
+func.lead = lambda col, offset=1, default=None: LeadFunction(col, offset, default)  # type: ignore
+func.first_value = lambda col: FirstValueFunction(col)  # type: ignore
+func.last_value = lambda col: LastValueFunction(col)  # type: ignore
+func.nth_value = lambda col, n: NthValueFunction(col, n)  # type: ignore

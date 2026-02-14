@@ -16,6 +16,20 @@ from .terminal import (
     ValuesExpression,
     ValuesListExpression,
 )
+from .window import (
+    DenseRankFunction,
+    FirstValueFunction,
+    LagFunction,
+    LastValueFunction,
+    LeadFunction,
+    NthValueFunction,
+    NtileFunction,
+    PercentRankFunction,
+    RankFunction,
+    RowNumberFunction,
+    WindowFunction,
+    WindowSpec,
+)
 
 
 __all__ = [
@@ -39,4 +53,16 @@ __all__ = [
     "DatesExpression",
     "DatetimesExpression",
     "GetItemExpression",
+    "WindowFunction",
+    "WindowSpec",
+    "RowNumberFunction",
+    "RankFunction",
+    "DenseRankFunction",
+    "PercentRankFunction",
+    "NtileFunction",
+    "LagFunction",
+    "LeadFunction",
+    "FirstValueFunction",
+    "LastValueFunction",
+    "NthValueFunction",
 ]

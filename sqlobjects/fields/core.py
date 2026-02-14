@@ -690,6 +690,17 @@ class ColumnAttribute(ColumnAttributeFunctionMixin, Generic[T]):
         """
         return self.__column__.__hash__()
 
+    def __clause_element__(self):
+        """Return underlying SQLAlchemy column for SQL expression building.
+
+        This method is required by SQLAlchemy's _HasClauseElement protocol
+        to allow ColumnAttribute to be used in SQL expressions.
+
+        Returns:
+            The underlying SQLAlchemy Column instance
+        """
+        return self.__column__
+
     @property
     def include_in_repr(self) -> bool | None:
         """Check if field should be included in __repr__ method.
