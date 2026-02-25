@@ -1,6 +1,7 @@
 """Database dialect handlers for database-specific SQL generation."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import sqlalchemy as sa
@@ -46,7 +47,7 @@ class BaseDialect(ABC):
         pass
 
     @abstractmethod
-    def parse_explain_result(self, rows: list) -> str:
+    def parse_explain_result(self, rows: Sequence) -> str:
         """Parse EXPLAIN result for the database."""
         pass
 
@@ -108,7 +109,7 @@ class PostgreSQLDialect(BaseDialect):
             return f"EXPLAIN ({', '.join(options)}) {sql}"
         return f"EXPLAIN {sql}"
 
-    def parse_explain_result(self, rows: list) -> str:
+    def parse_explain_result(self, rows: Sequence) -> str:
         """Parse PostgreSQL EXPLAIN result."""
         return "\n".join(str(row[0]) for row in rows)
 
@@ -151,7 +152,7 @@ class MySQLDialect(BaseDialect):
             return f"EXPLAIN ANALYZE {sql}"
         return f"EXPLAIN {sql}"
 
-    def parse_explain_result(self, rows: list) -> str:
+    def parse_explain_result(self, rows: Sequence) -> str:
         """Parse MySQL EXPLAIN result."""
         return "\n".join(str(row[0]) for row in rows)
 
@@ -199,7 +200,7 @@ class SQLiteDialect(BaseDialect):
         """
         return f"EXPLAIN QUERY PLAN {sql}"
 
-    def parse_explain_result(self, rows: list) -> str:
+    def parse_explain_result(self, rows: Sequence) -> str:
         """Parse SQLite EXPLAIN result.
 
         SQLite EXPLAIN QUERY PLAN returns: (id, parent, notused, detail)

@@ -18,13 +18,22 @@ class QueryExecutor:
     aggregations, and memory-efficient iteration for large datasets.
     """
 
+    _WRITE_TYPES = frozenset({"update", "delete"})
+
     def __init__(self, session=None):
         """Initialize executor with optional session.
 
         Args:
-            session: Database session for query execution
+            session: Database session, database name string, or None
         """
-        self.session = session
+        self._db_or_session = session
+
+    def _get_session(self, query_type: str):
+        """Resolve session with appropriate readonly flag."""
+        from ..session import get_session
+
+        readonly = query_type not in self._WRITE_TYPES
+        return get_session(self._db_or_session, readonly=readonly)
 
     async def execute(
         self,
@@ -115,23 +124,24 @@ class QueryExecutor:
         Returns:
             Query execution plan as string
         """
-        if not self.session:
+        session = self._get_session("all")
+        if not session:
             raise RuntimeError("No session available for explain operation")
 
         # Get dialect handler
         from .dialect import DialectHandler
 
-        dialect = DialectHandler.create(self.session)
+        dialect = DialectHandler.create(session)
 
         # Compile query to SQL
-        compiled = query.compile(dialect=self.session.bind.dialect, compile_kwargs={"literal_binds": True})
+        compiled = query.compile(dialect=session.bind.dialect, compile_kwargs={"literal_binds": True})
         sql_str = str(compiled)
 
         # Build EXPLAIN query using dialect handler
         explain_sql = dialect.build_explain_query(sql_str, analyze, verbose)
 
         # Execute query
-        result = await self.session.execute(text(explain_sql))
+        result = await session.execute(text(explain_sql))
         rows = result.fetchall()
 
         # Parse result using dialect handler
@@ -196,7 +206,8 @@ class QueryExecutor:
         relationships=None,
     ):
         """Execute query and return appropriate result."""
-        if not self.session:
+        session = self._get_session(query_type)
+        if not session:
             if query_type == "all":
                 return []
             elif query_type in ("count", "update", "delete"):
@@ -206,7 +217,7 @@ class QueryExecutor:
             else:  # exists
                 return False
 
-        result = await self.session.execute(query)
+        result = await session.execute(query)
 
         if query_type == "all":
             rows = result.fetchall()
@@ -417,7 +428,7 @@ class QueryExecutor:
         if not instances or not prefetch_relationships:
             return instances
 
-        prefetch_handler = PrefetchHandler(self.session)
+        prefetch_handler = PrefetchHandler(self._get_session("all"))
         return await prefetch_handler.handle_prefetch_relationships(instances, prefetch_relationships)
 
     @staticmethod

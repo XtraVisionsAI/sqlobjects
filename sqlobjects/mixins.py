@@ -165,10 +165,7 @@ class SessionMixin(BaseMixin):
         Returns:
             AsyncSession instance for database operations
         """
-        bound_session = self._state_manager.get_bound_session()
-        if isinstance(bound_session, str):
-            return get_session(bound_session)
-        return bound_session or get_session()
+        return get_session(self._state_manager.get_bound_session())
 
     def using(self, db_or_session: str | AsyncSession):
         """Return self bound to specific database/connection.

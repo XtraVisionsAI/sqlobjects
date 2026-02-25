@@ -345,11 +345,13 @@ async def ctx_sessions(*db_names: str) -> AsyncGenerator[dict[str, AsyncSession]
             _SessionContextManager.clear_session(db_name)
 
 
-def get_session(db_name: str | None = None, readonly: bool = True, auto_commit: bool = True) -> AsyncSession:
+def get_session(
+    db_or_name: str | AsyncSession | None = None, readonly: bool = True, auto_commit: bool = True
+) -> AsyncSession:
     """Get database session with readonly optimization.
 
     Args:
-        db_name: Database name (uses default database if None)
+        db_or_name: Database name, existing AsyncSession, or None for default database
         readonly: True for readonly (no transaction), False for transactional
         auto_commit: True to auto-commit transactions (ignored if readonly=True)
 
@@ -357,10 +359,13 @@ def get_session(db_name: str | None = None, readonly: bool = True, auto_commit: 
         AsyncSession instance
 
     Priority:
+        - If db_or_name is an AsyncSession, return it directly
         - First try use explicitly set session (ctx_session, ctx_sessions)
         - Create a new AsyncSession with specified parameters if no explicit session
     """
-    return _SessionContextManager.get_session(db_name, readonly, auto_commit)
+    if isinstance(db_or_name, AsyncSession):
+        return db_or_name
+    return _SessionContextManager.get_session(db_or_name, readonly, auto_commit)
 
 
 def has_session(db_name: str | None = None) -> bool:

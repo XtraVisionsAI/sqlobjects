@@ -82,12 +82,7 @@ class ObjectsManager(Generic[T]):
         Returns:
             AsyncSession instance
         """
-        if self._db_or_session is None:
-            return get_session(readonly=readonly)
-        elif isinstance(self._db_or_session, str):
-            return get_session(self._db_or_session, readonly=readonly)
-        else:
-            return self._db_or_session
+        return get_session(self._db_or_session, readonly=readonly)
 
     def _validate_field_names(self, **kwargs) -> None:
         """Validate that all field names exist on the model.
