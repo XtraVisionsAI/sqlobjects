@@ -3,7 +3,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from sqlalchemy import CursorResult
+from sqlalchemy import CursorResult, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncResult
 
@@ -12,7 +12,6 @@ from .exceptions import convert_sqlalchemy_error
 
 
 __all__ = ["AsyncSession", "ctx_session", "ctx_sessions", "get_session", "has_session"]
-
 
 # Explicit session management (highest priority)
 _explicit_sessions: contextvars.ContextVar[dict[str, "AsyncSession"]] = contextvars.ContextVar("explicit_sessions")
@@ -64,8 +63,16 @@ class AsyncSession:
         return get_database(self._db_name).engine
 
     async def execute(self, statement: Any, parameters: Any = None) -> CursorResult[Any]:
-        """Execute statement with automatic transaction management."""
+        """Execute statement with automatic transaction management.
+
+        Supports both SQLAlchemy statement objects and raw SQL strings.
+        Raw SQL strings are automatically wrapped with text().
+        """
         await self._ensure_connection()
+
+        # Auto-wrap string SQL with text()
+        if isinstance(statement, str):
+            statement = text(statement)
 
         # Auto-begin transaction for non-readonly sessions
         if not self.readonly and self._trans is None:
@@ -89,6 +96,9 @@ class AsyncSession:
     async def stream(self, statement: Any, parameters: Any = None) -> AsyncResult[Any]:
         """Execute statement and return streaming result.
 
+        Supports both SQLAlchemy statement objects and raw SQL strings.
+        Raw SQL strings are automatically wrapped with text().
+
         Note: stream() is not supported with auto_commit=True sessions.
         Use explicit sessions (ctx_session) for streaming operations.
         """
@@ -98,6 +108,10 @@ class AsyncSession:
             )
 
         await self._ensure_connection()
+
+        # Auto-wrap string SQL with text()
+        if isinstance(statement, str):
+            statement = text(statement)
 
         # Auto-begin transaction for non-readonly sessions
         if not self.readonly and self._trans is None:

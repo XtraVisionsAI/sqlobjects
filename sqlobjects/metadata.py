@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Union, cast
 
-from sqlalchemy import CheckConstraint, Index, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, UniqueConstraint
 from sqlalchemy import MetaData as SqlAlchemyMetaData
 
 from .fields import ColumnAttribute
@@ -24,8 +24,8 @@ __all__ = [
     "unique",
 ]
 
-
 _FIELD_NAME_PATTERN = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b")
+_TEMP_INDEX_PREFIX = "__temp__idx_"
 
 
 @dataclass
@@ -574,7 +574,9 @@ class ModelProcessor(type):
 
     @classmethod
     def _normalize_all_indexes(mcs, indexes: list[Index], table_name: str) -> list[Index]:
-        """Force uniform naming format for all indexes.
+        """Normalize index names that need normalization.
+
+        Only normalizes indexes with temporary names (starting with __temp__idx_).
 
         Args:
             indexes: List of indexes to normalize
@@ -586,6 +588,11 @@ class ModelProcessor(type):
         normalized_indexes = []
 
         for idx in indexes:
+            # Only normalize temporary names
+            if not idx.name or not idx.name.startswith(_TEMP_INDEX_PREFIX):
+                normalized_indexes.append(idx)
+                continue
+
             # Get field name list
             if hasattr(idx, "columns") and idx.columns:
                 field_names = "_".join(col.name for col in idx.columns)  # noqa
@@ -597,10 +604,7 @@ class ModelProcessor(type):
                 continue
 
             # Generate standardized name
-            new_name = f"idx_{table_name}_{field_names}"
-
-            # Directly modify index name (instead of rebuilding)
-            idx.name = new_name  # type: ignore[reportAttributeAccessIssue]
+            idx.name = f"idx_{table_name}_{field_names}"  # type: ignore[reportAttributeAccessIssue]
             normalized_indexes.append(idx)
 
         return normalized_indexes
@@ -683,15 +687,20 @@ class ModelProcessor(type):
     def _post_process_table_indexes(mcs, table, table_name: str) -> None:
         """Normalize index names after table construction.
 
+        Only normalizes indexes with temporary names (starting with __temp__idx_).
+
         Args:
             table: SQLAlchemy Table instance
             table_name: Database table name
         """
         for idx in table.indexes:
+            # Only normalize temporary names
+            if not idx.name or not idx.name.startswith(_TEMP_INDEX_PREFIX):
+                continue
+
             if hasattr(idx, "columns") and idx.columns:
                 field_names = "_".join(col.name for col in idx.columns)
-                new_name = f"idx_{table_name}_{field_names}"
-                idx.name = new_name
+                idx.name = f"idx_{table_name}_{field_names}"
 
     @classmethod
     def _post_process_table_constraints(mcs, table, table_name: str) -> None:
@@ -714,6 +723,20 @@ class ModelProcessor(type):
                 elif isinstance(cst, UniqueConstraint) and hasattr(cst, "columns"):
                     field_names = "_".join(col.name for col in cst.columns)
                     cst.name = f"uq_{table_name}_{field_names}"
+                elif isinstance(cst, ForeignKeyConstraint) and hasattr(cst, "columns"):
+                    # Handle foreign key constraints
+                    field_names = "_".join(col.name for col in cst.columns)
+                    # Get referenced table and column names
+                    if cst.elements:
+                        try:
+                            ref_table = cst.elements[0].column.table.name
+                            ref_columns = "_".join(elem.column.name for elem in cst.elements)
+                            cst.name = f"fk_{table_name}_{field_names}_{ref_table}_{ref_columns}"
+                        except Exception:
+                            # Fallback if reference cannot be resolved yet
+                            cst.name = f"fk_{table_name}_{field_names}"
+                    else:
+                        cst.name = f"fk_{table_name}_{field_names}"
 
     @classmethod
     def _apply_dataclass_functionality(mcs, cls: Any) -> Any:
@@ -1114,11 +1137,9 @@ def index(
         >>> index("idx_users_status", "status", postgresql_where="status = 'active'")
         >>> index("idx_users_tags", "tags", postgresql_using="gin")
     """
-    # Note: Don't auto-generate name here because table_name is needed
-    # Actual name normalization is handled in _merge_indexes
     if name is None:
         field_part = "_".join(fields)
-        name = f"idx_{field_part}"  # Temporary name, will be replaced later
+        name = f"{_TEMP_INDEX_PREFIX}{field_part}"
 
     # Build dialect-specific kwargs
     dialect_kwargs = {}
