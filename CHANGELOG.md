@@ -1,3 +1,9 @@
+## 1.2.0 (2026-02-25)
+
+### Feat
+
+- **metadata**: improve constraint and index naming conventions
+
 ## 1.1.0 (2026-02-14)
 
 ### Feat
