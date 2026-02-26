@@ -957,11 +957,12 @@ class QuerySet(Generic[T]):
 
     async def raw(self, sql: str, params: dict | None = None) -> list[T]:
         """Execute raw SQL query and return model instances."""
-        if not self._executor.session:
+        session = self._executor._get_session("all")
+        if not session:
             return []
 
         query = text(sql)
-        result = await self._executor.session.execute(query, params or {})
+        result = await session.execute(query, params or {})
 
         instances = []
         for row in result:
@@ -1007,8 +1008,9 @@ class QuerySet(Generic[T]):
 
         # Get database dialect
         dialect_name = "unknown"
-        if hasattr(self._executor, "session") and self._executor.session and hasattr(self._executor.session, "bind"):
-            dialect_name = self._executor.session.bind.dialect.name
+        session = self._executor._get_session("all")
+        if session and hasattr(session, "bind"):
+            dialect_name = session.bind.dialect.name
 
         # Database-specific date expression
         if dialect_name == "postgresql":
@@ -1109,8 +1111,9 @@ class QuerySet(Generic[T]):
 
         # Get database dialect
         dialect_name = "unknown"
-        if hasattr(self._executor, "session") and self._executor.session and hasattr(self._executor.session, "bind"):
-            dialect_name = self._executor.session.bind.dialect.name
+        session = self._executor._get_session("all")
+        if session and hasattr(session, "bind"):
+            dialect_name = session.bind.dialect.name
 
         # Database-specific datetime expression
         if dialect_name == "postgresql":
