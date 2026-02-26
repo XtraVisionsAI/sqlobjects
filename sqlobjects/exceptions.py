@@ -458,7 +458,20 @@ def convert_sqlalchemy_error(error: Exception) -> SQLObjectsError:
         ... except SQLAlchemyError as e:
         ...     raise convert_sqlalchemy_error(e)
     """
+    # Build detailed error message with context
     error_msg = str(error)
+
+    # Add SQL statement if available
+    if hasattr(error, "statement") and getattr(error, "statement", None):
+        error_msg += f"\nSQL: {error.statement}"  # type: ignore[reportAttributeAccessIssue]
+
+    # Add parameters if available
+    if hasattr(error, "params") and getattr(error, "params", None):
+        error_msg += f"\nParams: {error.params}"  # type: ignore[reportAttributeAccessIssue]
+
+    # Add original database error if available
+    if hasattr(error, "orig") and getattr(error, "orig", None):
+        error_msg += f"\nOriginal: {error.orig}"  # type: ignore[reportAttributeAccessIssue]
 
     if isinstance(error, SQLAIntegrityError):
         return IntegrityError(error_msg, original_error=error)

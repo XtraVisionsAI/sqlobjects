@@ -189,12 +189,17 @@ class Database:
             >>> await db.create_tables(ObjectModel)  # Create all tables
             >>> await db.create_tables(ObjectModel, [User, Post])  # Create specific tables
         """
-        async with self.engine.begin() as conn:
-            if tables is None:
-                await conn.run_sync(base_class.__registry__.create_all)
-            else:
-                table_objects = [model.__table__ for model in tables]
-                await conn.run_sync(base_class.__registry__.create_all, tables=table_objects)
+        try:
+            async with self.engine.begin() as conn:
+                if tables is None:
+                    await conn.run_sync(base_class.__registry__.create_all)
+                else:
+                    table_objects = [model.__table__ for model in tables]
+                    await conn.run_sync(base_class.__registry__.create_all, tables=table_objects)
+        except Exception as e:
+            from ..exceptions import convert_sqlalchemy_error
+
+            raise convert_sqlalchemy_error(e) from e
 
     async def drop_tables(self, base_class, tables: list[type] | None = None) -> None:
         """Drop tables defined in the model registry of SQLObjects base class
@@ -211,12 +216,17 @@ class Database:
             >>> await db.drop_tables(ObjectModel)  # Drop all tables
             >>> await db.drop_tables(ObjectModel, [User, Post])  # Drop specific tables
         """
-        async with self.engine.begin() as conn:
-            if tables is None:
-                await conn.run_sync(base_class.__registry__.drop_all)
-            else:
-                table_objects = [model.__table__ for model in tables]
-                await conn.run_sync(base_class.__registry__.drop_all, tables=table_objects)
+        try:
+            async with self.engine.begin() as conn:
+                if tables is None:
+                    await conn.run_sync(base_class.__registry__.drop_all)
+                else:
+                    table_objects = [model.__table__ for model in tables]
+                    await conn.run_sync(base_class.__registry__.drop_all, tables=table_objects)
+        except Exception as e:
+            from ..exceptions import convert_sqlalchemy_error
+
+            raise convert_sqlalchemy_error(e) from e
 
     async def disconnect(self) -> None:
         """Disconnect database and clean up resources

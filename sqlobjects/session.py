@@ -172,6 +172,15 @@ class AsyncSession:
     async def _handle_exception(self, exc: Exception):
         """Handle exceptions with unified error processing."""
         await self.rollback()
+
+        # Log detailed error for debugging when echo is enabled
+        if hasattr(self.bind, "echo") and getattr(self.bind, "echo", False):
+            print(f"SQLObjects Session Error: {exc}")
+            if hasattr(exc, "statement"):
+                print(f"Statement: {exc.statement}")  # type: ignore[reportAttributeAccessIssue]
+            if hasattr(exc, "params"):
+                print(f"Parameters: {exc.params}")  # type: ignore[reportAttributeAccessIssue]
+
         if isinstance(exc, SQLAlchemyError):
             raise convert_sqlalchemy_error(exc) from exc
         raise
