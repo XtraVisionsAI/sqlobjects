@@ -45,25 +45,7 @@ class _RawModelConfig:
 
 @dataclass
 class ModelConfig:
-    """Complete model configuration with all required fields filled.
-
-    This dataclass holds all configuration options that can be applied to a model,
-    including basic settings, database constraints, metadata, and database-specific
-    optimizations. All required fields are guaranteed to have values.
-
-    Attributes:
-        table_name: Database table name (never None after processing)
-        verbose_name: Human-readable singular name for the model (never None)
-        verbose_name_plural: Human-readable plural name for the model (never None)
-        ordering: Default ordering for queries (e.g., ['-created_at', 'name'])
-        indexes: List of database indexes to create for the table
-        constraints: List of database constraints (check, unique) for the table
-        description: Detailed description of the model's purpose (can be None)
-        db_options: Database-specific configuration options by dialect
-        custom: Custom configuration values for application-specific use
-        field_validators: Field-level validators registry
-        field_metadata: Unified field metadata information
-    """
+    """Complete model configuration with all required fields filled."""
 
     table_name: str
     verbose_name: str
@@ -425,25 +407,10 @@ class ModelProcessor(type):
 
     @classmethod
     def _integrate_field_config(mcs, cls: Any, config: ModelConfig) -> ModelConfig:
-        """Integrate field-level configuration into model configuration - optimized version.
-
-        Args:
-            cls: Model class
-            config: Current model configuration
-
-        Returns:
-            Updated model configuration with field-level settings integrated
-        """
-        # Collect all field configuration in single pass
         field_indexes, field_validators, field_metadata = mcs._collect_all_field_config(cls, config.table_name)
-
-        # Merge indexes (avoid duplicates)
-        config.indexes = mcs._merge_indexes(field_indexes, config.indexes, config.table_name)
-
-        # Set validators and metadata
+        config.indexes = field_indexes + config.indexes
         config.field_validators = field_validators
         config.field_metadata = field_metadata
-
         return config
 
     @classmethod
@@ -534,82 +501,6 @@ class ModelProcessor(type):
         return indexes, validators, metadata
 
     @classmethod
-    def _merge_indexes(mcs, field_indexes: list[Index], table_indexes: list[Index], table_name: str) -> list[Index]:
-        """Merge field-level and table-level indexes, avoiding duplicates.
-
-        Args:
-            field_indexes: Indexes generated from field definitions
-            table_indexes: Indexes defined at table level
-            table_name: Database table name
-
-        Returns:
-            Merged list of unique indexes
-        """
-
-        def get_index_signature(idx):  # noqa
-            if hasattr(idx, "_columns") and idx._columns:  # noqa
-                columns = tuple(sorted(str(col) for col in idx._columns))  # noqa
-                return (columns, idx.unique)  # noqa
-            return None
-
-        # Collect table-level index signatures
-        table_signatures = set()
-        for idx in table_indexes:
-            sig = get_index_signature(idx)
-            if sig:
-                table_signatures.add(sig)
-
-        # Filter duplicate field-level indexes
-        merged_indexes = []
-        for idx in field_indexes:
-            sig = get_index_signature(idx)
-            if sig and sig not in table_signatures:
-                merged_indexes.append(idx)
-
-        # Add table-level indexes
-        merged_indexes.extend(table_indexes)
-
-        # Normalize all index naming format
-        return mcs._normalize_all_indexes(merged_indexes, table_name)
-
-    @classmethod
-    def _normalize_all_indexes(mcs, indexes: list[Index], table_name: str) -> list[Index]:
-        """Normalize index names that need normalization.
-
-        Only normalizes indexes with temporary names (starting with __temp__idx_).
-
-        Args:
-            indexes: List of indexes to normalize
-            table_name: Database table name
-
-        Returns:
-            List of indexes with normalized names
-        """
-        normalized_indexes = []
-
-        for idx in indexes:
-            # Only normalize temporary names
-            if not idx.name or not idx.name.startswith(_TEMP_INDEX_PREFIX):
-                normalized_indexes.append(idx)
-                continue
-
-            # Get field name list
-            if hasattr(idx, "columns") and idx.columns:
-                field_names = "_".join(col.name for col in idx.columns)  # noqa
-            elif hasattr(idx, "_columns") and idx._columns:  # noqa
-                # Handle indexes not yet bound to table
-                field_names = "_".join(str(col).split(".")[-1] for col in idx._columns)  # noqa
-            else:
-                normalized_indexes.append(idx)
-                continue
-
-            # Generate standardized name
-            idx.name = f"idx_{table_name}_{field_names}"  # type: ignore[reportAttributeAccessIssue]
-            normalized_indexes.append(idx)
-
-        return normalized_indexes
-
-    @classmethod
     def _register_field_validators(mcs, cls: Any, config: ModelConfig) -> None:
         """Register field-level validators to model class.
 
@@ -634,6 +525,14 @@ class ModelProcessor(type):
         """
         from sqlalchemy import Table
 
+        # Collect fields with explicit indexes to avoid duplicates
+        indexed_fields = set()
+        for idx in config.indexes:
+            if hasattr(idx, "_columns"):
+                for col in idx._columns:
+                    if isinstance(col, str):
+                        indexed_fields.add(col.split(".")[-1])
+
         # Collect column definitions and relationship fields
         columns = []
         relationships = {}
@@ -651,6 +550,10 @@ class ModelProcessor(type):
                     # Use create_table_column method to get independent Column instance
                     if hasattr(column_attr, "create_table_column"):
                         column = column_attr.create_table_column(name)
+                        # Clear index attributes if field has explicit index
+                        if name in indexed_fields:
+                            column.index = False
+                            column.unique = False
                     else:
                         # Fallback for non-ColumnAttribute fields
                         column = column_attr
@@ -685,22 +588,40 @@ class ModelProcessor(type):
 
     @classmethod
     def _post_process_table_indexes(mcs, table, table_name: str) -> None:
-        """Normalize index names after table construction.
+        def col_sig(idx):
+            return tuple(sorted(col.name for col in idx.columns)) if idx.columns else None
 
-        Only normalizes indexes with temporary names (starting with __temp__idx_).
+        full_sig_map: dict[tuple, list] = {}  # (cols, unique) -> indexes
+        col_map: dict[tuple, list] = {}  # cols -> indexes
 
-        Args:
-            table: SQLAlchemy Table instance
-            table_name: Database table name
-        """
-        for idx in table.indexes:
-            # Only normalize temporary names
-            if not idx.name or not idx.name.startswith(_TEMP_INDEX_PREFIX):
+        for idx in list(table.indexes):
+            cs = col_sig(idx)
+            if cs is None:
                 continue
+            full_sig_map.setdefault((cs, getattr(idx, "unique", False)), []).append(idx)
+            col_map.setdefault(cs, []).append(idx)
 
-            if hasattr(idx, "columns") and idx.columns:
-                field_names = "_".join(col.name for col in idx.columns)
-                idx.name = f"idx_{table_name}_{field_names}"
+        to_remove: set = set()
+
+        # Remove exact duplicates: prefer explicit names over SQLAlchemy auto-generated "ix_*"
+        for indexes in full_sig_map.values():
+            if len(indexes) > 1:
+                explicit = [i for i in indexes if not (i.name and i.name.startswith("ix_"))]
+                keep = explicit[0] if explicit else indexes[0]
+                to_remove.update(i for i in indexes if i is not keep)
+
+        # Remove non-unique when unique exists on same columns
+        for indexes in col_map.values():
+            if any(getattr(i, "unique", False) for i in indexes):
+                to_remove.update(i for i in indexes if not getattr(i, "unique", False))
+
+        for idx in to_remove:
+            table.indexes.discard(idx)
+
+        # Normalize temp names after dedup
+        for idx in table.indexes:
+            if idx.name and idx.name.startswith(_TEMP_INDEX_PREFIX) and idx.columns:
+                idx.name = f"idx_{table_name}_{'_'.join(col.name for col in idx.columns)}"
 
     @classmethod
     def _post_process_table_constraints(mcs, table, table_name: str) -> None:
@@ -1023,97 +944,37 @@ class ModelProcessor(type):
 
 
 def _parse_model_config(model_class: Any) -> ModelConfig:
-    """Parse complete configuration for a model class.
-
-    Args:
-        model_class: Model class to process configuration for
-
-    Returns:
-        Complete ModelConfig with all defaults filled
-    """
     config_class = getattr(model_class, "Config", None)
-    if config_class:
-        raw_config = _parse_config_class(config_class)
-    else:
-        raw_config = _RawModelConfig()
+    raw = _parse_config_class(config_class) if config_class else _RawModelConfig()
 
-    return _fill_config_defaults(raw_config, model_class)
+    table_name = raw.table_name or pluralize(to_snake_case(model_class.__name__))
+    verbose_name = raw.verbose_name or model_class.__name__
+    verbose_name_plural = raw.verbose_name_plural or pluralize(verbose_name)
 
-
-def _parse_config_class(config_class: type) -> _RawModelConfig:
-    """Parse configuration from a Config inner class.
-
-    Args:
-        config_class: The Config inner class to parse
-
-    Returns:
-        _RawModelConfig instance with parsed configuration
-    """
-    config = _RawModelConfig()
-
-    # Basic configuration
-    config.table_name = getattr(config_class, "table_name", None)
-    config.ordering = getattr(config_class, "ordering", [])
-
-    # Index configuration
-    config.indexes = getattr(config_class, "indexes", [])
-
-    # Constraint configuration
-    config.constraints = getattr(config_class, "constraints", [])
-
-    # Metadata
-    config.verbose_name = getattr(config_class, "verbose_name", None)
-    config.verbose_name_plural = getattr(config_class, "verbose_name_plural", None)
-    config.description = getattr(config_class, "description", None)
-
-    # Database-specific configuration
-    config.db_options = getattr(config_class, "db_options", {})
-
-    # Custom configuration
-    config.custom = getattr(config_class, "custom", {})
-
-    return config
-
-
-def _fill_config_defaults(config: _RawModelConfig, model_class: Any) -> ModelConfig:
-    """Fill default values for configuration fields that are None.
-
-    Args:
-        config: _RawModelConfig instance to fill defaults for
-        model_class: Model class to generate defaults from
-
-    Returns:
-        ModelConfig instance with defaults filled
-    """
-    # Fill table_name if not set
-    table_name = config.table_name
-    if table_name is None:
-        snake_case_name = to_snake_case(model_class.__name__)
-        table_name = pluralize(snake_case_name)
-
-    # Fill verbose_name if not set
-    verbose_name = config.verbose_name
-    if verbose_name is None:
-        verbose_name = model_class.__name__
-
-    # Fill verbose_name_plural if not set
-    verbose_name_plural = config.verbose_name_plural
-    if verbose_name_plural is None:
-        verbose_name_plural = pluralize(verbose_name)
-
-    # Create complete config with required fields
     return ModelConfig(
         table_name=table_name,
         verbose_name=verbose_name,
         verbose_name_plural=verbose_name_plural,
-        ordering=config.ordering,
-        indexes=config.indexes,
-        constraints=config.constraints,
-        description=config.description,
-        db_options=config.db_options,
-        custom=config.custom,
-        field_validators={},
-        field_metadata={},
+        ordering=raw.ordering,
+        indexes=raw.indexes,
+        constraints=raw.constraints,
+        description=raw.description,
+        db_options=raw.db_options,
+        custom=raw.custom,
+    )
+
+
+def _parse_config_class(config_class: type) -> _RawModelConfig:
+    return _RawModelConfig(
+        table_name=getattr(config_class, "table_name", None),
+        verbose_name=getattr(config_class, "verbose_name", None),
+        verbose_name_plural=getattr(config_class, "verbose_name_plural", None),
+        ordering=getattr(config_class, "ordering", []),
+        indexes=getattr(config_class, "indexes", []),
+        constraints=getattr(config_class, "constraints", []),
+        description=getattr(config_class, "description", None),
+        db_options=getattr(config_class, "db_options", {}),
+        custom=getattr(config_class, "custom", {}),
     )
 
 
