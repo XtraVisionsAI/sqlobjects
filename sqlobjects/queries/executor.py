@@ -1,5 +1,7 @@
 import asyncio
 import gc
+from collections.abc import AsyncGenerator
+from typing import Any, TypeVar, overload
 
 from sqlalchemy import (
     delete,
@@ -9,6 +11,9 @@ from sqlalchemy import (
     text,
     update,
 )
+
+
+_T = TypeVar("_T")
 
 
 class QueryExecutor:
@@ -35,6 +40,14 @@ class QueryExecutor:
         readonly = query_type not in self._WRITE_TYPES
         return get_session(self._db_or_session, readonly=readonly)
 
+    @overload
+    async def execute(
+        self, query: Any, query_type: str = ..., *, builder: Any = ..., model_class: type[_T], **kwargs: Any
+    ) -> list[_T]: ...
+    @overload
+    async def execute(
+        self, query: Any, query_type: str = ..., *, builder: Any = ..., model_class: None = ..., **kwargs: Any
+    ) -> list[Any] | int | bool: ...
     async def execute(
         self,
         query,
@@ -91,7 +104,7 @@ class QueryExecutor:
 
         return result
 
-    async def iterator(self, query, chunk_size: int = 1000):
+    async def iterator(self, query, chunk_size: int = 1000) -> AsyncGenerator[Any, None]:
         """Async iterator for processing large datasets in chunks."""
         offset = 0
         processed_chunks = 0
@@ -100,7 +113,7 @@ class QueryExecutor:
             chunk_query = query.offset(offset).limit(chunk_size)
             chunk = await self._execute_query(chunk_query, "all")
 
-            if not chunk:
+            if not isinstance(chunk, list) or not chunk:
                 break
 
             for item in chunk:

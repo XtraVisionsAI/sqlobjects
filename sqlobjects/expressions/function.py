@@ -432,13 +432,13 @@ class _FuncWrapper:
 func = _FuncWrapper()
 
 # Add window functions at runtime
-func.row_number = lambda: RowNumberFunction()  # type: ignore
-func.rank = lambda: RankFunction()  # type: ignore
-func.dense_rank = lambda: DenseRankFunction()  # type: ignore
-func.percent_rank = lambda: PercentRankFunction()  # type: ignore
-func.ntile = lambda n: NtileFunction(n)  # type: ignore
-func.lag = lambda col, offset=1, default=None: LagFunction(col, offset, default)  # type: ignore
-func.lead = lambda col, offset=1, default=None: LeadFunction(col, offset, default)  # type: ignore
-func.first_value = lambda col: FirstValueFunction(col)  # type: ignore
-func.last_value = lambda col: LastValueFunction(col)  # type: ignore
-func.nth_value = lambda col, n: NthValueFunction(col, n)  # type: ignore
+func.row_number = lambda: RowNumberFunction()
+func.rank = lambda: RankFunction()
+func.dense_rank = lambda: DenseRankFunction()
+func.percent_rank = lambda: PercentRankFunction()
+func.ntile = lambda n: NtileFunction(n)
+func.lag = lambda col, offset=1, default=None: LagFunction(col, offset, default)
+func.lead = lambda col, offset=1, default=None: LeadFunction(col, offset, default)
+func.first_value = lambda col: FirstValueFunction(col)
+func.last_value = lambda col: LastValueFunction(col)
+func.nth_value = lambda col, n: NthValueFunction(col, n)

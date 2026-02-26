@@ -867,7 +867,7 @@ class ModelProcessor(type):
                     if column_attr is None or not hasattr(column_attr, "__column__"):
                         break
                     if klass is cls:
-                        column_attr.__column__ = table.columns[name]  # type: ignore[reportAttributeAccessIssue]
+                        column_attr.__column__ = table.columns[name]
                     else:
                         new_col_attr = object.__new__(type(column_attr))
                         new_col_attr.__dict__.update(column_attr.__dict__)
