@@ -272,44 +272,12 @@ async def clean_db(test_db):
     yield
 
     async with ctx_session() as db_session:
-        # Delete data from tables in dependency order (child tables first)
-        tables_to_clean = [PostTag.__table__, Profile.__table__, Post.__table__, Tag.__table__, User.__table__]
-
-        for table in tables_to_clean:
+        # Use SQLAlchemy's topological sort (reversed = child tables first)
+        metadata = User.__table__.metadata
+        for table in reversed(metadata.sorted_tables):
             try:
                 await db_session.execute(table.delete())
             except Exception:  # noqa
-                # Ignore errors for tables that don't exist yet
-                pass
-
-        try:
-            await db_session.commit()
-        except Exception:  # noqa
-            await db_session.rollback()
-
-        # Get all tables from metadata
-        metadata = User.__table__.metadata
-        all_tables = list(metadata.tables.values())
-
-        # Sort tables by foreign key dependencies (child tables first)
-        tables_with_fks = []
-        tables_without_fks = []
-
-        for table in all_tables:
-            has_fk = any(col.foreign_keys for col in table.columns)
-            if has_fk:
-                tables_with_fks.append(table)
-            else:
-                tables_without_fks.append(table)
-
-        # Clean child tables first, then parent tables
-        tables_to_clean = tables_with_fks + tables_without_fks
-
-        for table in tables_to_clean:
-            try:
-                await db_session.execute(table.delete())  # Deletes data, not table structure
-            except Exception:
-                # Skip tables that don't exist
                 pass
         await db_session.commit()
 

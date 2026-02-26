@@ -44,7 +44,7 @@ class TestDatabaseConfig:
         return config
 
 
-async def test_database_connection(db_type: str, url: str) -> bool:
+async def _check_database_connection(db_type: str, url: str) -> bool:
     """测试数据库连接"""
     if db_type == "postgresql":
         import asyncpg  # type: ignore[reportMissingImports]
@@ -84,7 +84,7 @@ async def check_database_connection(db_type: str) -> bool:
             __import__(driver)
 
         # 测试连接
-        return await test_database_connection(db_type, config["url"])
+        return await _check_database_connection(db_type, config["url"])
 
     except ImportError:
         print(f"❌ {config.get('driver')} not installed for {db_type} testing")  # type: ignore[reportPossiblyUnboundVariable]

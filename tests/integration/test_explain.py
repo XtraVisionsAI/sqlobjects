@@ -16,8 +16,8 @@ class TestExplain:
 
         assert isinstance(plan, str)
         assert len(plan) > 0
-        # SQLite uses "EXPLAIN QUERY PLAN"
-        assert "SCAN" in plan or "SEARCH" in plan or "EXPLAIN" in plan
+        plan_upper = plan.upper()
+        assert "SCAN" in plan_upper or "SEARCH" in plan_upper or "EXPLAIN" in plan_upper
 
     async def test_explain_filter(self, session, sample_users):
         """Test EXPLAIN on filtered query."""
