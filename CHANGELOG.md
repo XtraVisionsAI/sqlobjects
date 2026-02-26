@@ -1,3 +1,16 @@
+## 1.2.3 (2026-02-26)
+
+### Fix
+
+- resolve PostgreSQL test failures and cross-test data pollution
+- **executor**: add overloads to execute() and fix iterator type narrowing
+- **queryset**: replace non-existent executor.session with _get_session()
+- enhance exception handling to surface detailed SQLAlchemy errors
+
+### Refactor
+
+- **metadata**: simplify index handling and config parsing
+
 ## 1.2.2 (2026-02-26)
 
 ### Fix
