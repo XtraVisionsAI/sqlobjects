@@ -938,13 +938,25 @@ class ModelProcessor(type):
             cls: Model class
             table: SQLAlchemy Table instance
         """
-        for name, field_def in mcs._get_fields(cls).items():
-            if is_field_definition(field_def) and not getattr(field_def, "_is_relationship", False):
-                column_attr = get_column_from_field(field_def)
-                if column_attr is not None and hasattr(column_attr, "__column__"):
-                    # Update the ColumnAttribute's internal column to reference the table column
-                    if name in table.columns:
+        for name in table.columns.keys():
+            for klass in cls.__mro__:
+                descriptor = klass.__dict__.get(name)
+                if descriptor is not None and hasattr(descriptor, "_column_attribute"):
+                    column_attr = descriptor._column_attribute
+                    if column_attr is None or not hasattr(column_attr, "__column__"):
+                        break
+                    if klass is cls:
                         column_attr.__column__ = table.columns[name]  # type: ignore[reportAttributeAccessIssue]
+                    else:
+                        new_col_attr = object.__new__(type(column_attr))
+                        new_col_attr.__dict__.update(column_attr.__dict__)
+                        new_col_attr.__column__ = table.columns[name]
+                        new_col_attr.model_class = cls
+                        new_descriptor = object.__new__(type(descriptor))
+                        new_descriptor.__dict__.update(descriptor.__dict__)
+                        new_descriptor._column_attribute = new_col_attr
+                        type.__setattr__(cls, name, new_descriptor)
+                    break
 
     @classmethod
     def _initialize_field_cache(mcs, cls: Any) -> None:

@@ -57,11 +57,6 @@ class User(TestModel):
     profile: Related["Profile"] = relationship("Profile", back_populates="user", uselist=False)
 
 
-user = User()
-print(type(user.posts))
-print(type(user.profile))
-
-
 class Post(TestModel):
     """Post model for testing foreign key relationships"""
 
