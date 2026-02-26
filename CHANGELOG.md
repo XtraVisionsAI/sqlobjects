@@ -1,3 +1,9 @@
+## 1.2.2 (2026-02-26)
+
+### Fix
+
+- clone Column descriptor per subclass to prevent shared ColumnAttribute binding
+
 ## 1.2.1 (2026-02-25)
 
 ### Refactor
