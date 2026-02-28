@@ -1,3 +1,13 @@
+## 1.2.4 (2026-02-28)
+
+### Fix
+
+- handle nested Q objects in Q._to_sqlalchemy
+
+### Refactor
+
+- **relationships**: overhaul relationship resolution and prefetch system
+
 ## 1.2.3 (2026-02-26)
 
 ### Fix
