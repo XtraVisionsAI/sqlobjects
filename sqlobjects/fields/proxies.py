@@ -96,6 +96,14 @@ class BaseRelated(Generic[T]):
         self.property = descriptor.property
         self._cached_value = None
         self._loaded = False
+        self._rel_info = None
+
+    def _get_relationship_info(self):
+        if self._rel_info is None:
+            from .relations.utils import RelationshipAnalyzer
+
+            self._rel_info = RelationshipAnalyzer.analyze_relationship(self.instance.__class__, self.property.name)
+        return self._rel_info
 
     async def fetch(self) -> T:
         """Fetch related object(s)."""
@@ -122,23 +130,28 @@ class RelatedObject(BaseRelated[T]):
 
     async def _load(self):
         """Load related object from database."""
-        if self.property.foreign_keys and self.property.resolved_model:
-            fk_field = self.property.foreign_keys
-            if isinstance(fk_field, list):
-                fk_field = fk_field[0]
+        if not self.property.resolved_model:
+            self._loaded = True
+            return
 
-            fk_value = getattr(self.instance, fk_field)
-            if fk_value is not None:
-                related_table = self.property.resolved_model.get_table()
-                pk_col = list(related_table.primary_key.columns)[0]
+        info = self._get_relationship_info()
+        if not info:
+            self._loaded = True
+            return
 
-                query = select(related_table).where(pk_col == fk_value)
-                session = self.instance.get_session()
-                result = await session.execute(query)
-                row = result.first()
+        fk_field = info["foreign_key_fields"][0]
+        ref_field = info["ref_fields"][0]
+        fk_value = getattr(self.instance, fk_field)
 
-                if row:
-                    self._cached_value = self.property.resolved_model.from_dict(dict(row._mapping), validate=False)
+        if fk_value is not None:
+            related_table = self.property.resolved_model.get_table()
+            ref_col = related_table.c[ref_field]
+            query = select(related_table).where(ref_col == fk_value)
+            session = self.instance.get_session()
+            result = await session.execute(query)
+            row = result.first()
+            if row:
+                self._cached_value = self.property.resolved_model.from_dict(dict(row._mapping), validate=False)
 
         self._loaded = True
 
@@ -191,12 +204,18 @@ class OneToManyRelation(RelatedCollection[T]):
             self._set_empty_result()
             return
 
-        instance_pk = self.instance.id
-        related_table = self.property.resolved_model.get_table()
+        info = self._get_relationship_info()
+        if not info:
+            self._set_empty_result()
+            return
 
-        fk_name = self._get_fk_field()
-        fk_col = related_table.c[fk_name]
-        query = select(related_table).where(fk_col == instance_pk)
+        fk_field = info["foreign_key_fields"][0]
+        ref_field = info["ref_fields"][0]
+        ref_value = getattr(self.instance, ref_field)
+
+        related_table = self.property.resolved_model.get_table()
+        fk_col = related_table.c[fk_field]
+        query = select(related_table).where(fk_col == ref_value)
         session = self.instance.get_session()
         result = await session.execute(query)
 
@@ -207,38 +226,38 @@ class OneToManyRelation(RelatedCollection[T]):
 
     async def add(self, *objs: T, session=None) -> None:
         """Add objects to the relationship."""
+        info = self._get_relationship_info()
+        if not info:
+            raise ValueError(
+                f"Cannot resolve relationship '{self.property.name}' on "
+                f"'{self.instance.__class__.__name__}'. Define it explicitly with relationship()."
+            )
         session = session or self.instance.get_session()
-        fk_field = self._get_fk_field()
+        fk_field = info["foreign_key_fields"][0]
+        ref_value = getattr(self.instance, info["ref_fields"][0])
 
         for obj in objs:
-            setattr(obj, fk_field, self.instance.id)
+            setattr(obj, fk_field, ref_value)
             await obj.using(session).save()  # type: ignore
 
         self._invalidate_cache()
 
     async def remove(self, *objs: T, session=None) -> None:
         """Remove objects from the relationship."""
+        info = self._get_relationship_info()
+        if not info:
+            raise ValueError(
+                f"Cannot resolve relationship '{self.property.name}' on "
+                f"'{self.instance.__class__.__name__}'. Define it explicitly with relationship()."
+            )
         session = session or self.instance.get_session()
-        fk_field = self._get_fk_field()
+        fk_field = info["foreign_key_fields"][0]
 
         for obj in objs:
             setattr(obj, fk_field, None)
             await obj.using(session).save()  # type: ignore
 
         self._invalidate_cache()
-
-    def _get_fk_field(self):
-        """Get foreign key field name."""
-        fk_name = self.property.foreign_keys
-        if isinstance(fk_name, list):
-            fk_name = fk_name[0]
-        elif fk_name is None:
-            fk_name = (
-                f"{self.property.back_populates}_id"
-                if self.property.back_populates
-                else f"{self.instance.__class__.__name__.lower()}_id"
-            )
-        return fk_name
 
     def __str__(self):
         return f"<OneToManyRelation: {self.property.name}>"

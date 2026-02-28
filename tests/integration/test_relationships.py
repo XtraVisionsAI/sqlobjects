@@ -207,8 +207,8 @@ class TestRelationshipLoading:
         # Check prefetched profile
         if hasattr(user, "profile") and user.profile is not None:
             prefetched_profile = user.profile
-            assert prefetched_profile.user_id == user.id
-            assert prefetched_profile.full_name == "Multi User"
+            assert prefetched_profile.user_id == user.id  # type: ignore[union-attr]
+            assert prefetched_profile.full_name == "Multi User"  # type: ignore[union-attr]
 
     async def test_prefetch_related_many_to_many_specific(self, session):
         """Test prefetch_related specifically for many-to-many relationships"""

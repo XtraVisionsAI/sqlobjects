@@ -4,7 +4,7 @@ Tests the RelationshipAnalyzer and PrefetchHandler classes to ensure
 proper relationship analysis and prefetch operations.
 """
 
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -49,8 +49,9 @@ class TestRelationshipAnalyzer:
             assert result is not None
             assert result["type"] == "many_to_one"
             assert result["related_model"] == PrefetchTestUser
-            assert result["foreign_key_field"] == "author_id"
-            assert result["ref_field"] == "id"
+            assert result["foreign_key_fields"][0] == "author_id"
+            # _scan_ref_fields resolves the actual referenced column on the related model
+            assert result["ref_fields"][0] == "id"
         finally:
             RelationshipAnalyzer._resolve_model_class = original_resolve
 
@@ -60,7 +61,9 @@ class TestRelationshipAnalyzer:
         prop.argument = "PrefetchTestPost"
         prop.secondary = None
         prop.foreign_keys = None
-        prop.back_populates = "author"  # String, not Mock
+        prop.remote_fields = None
+        prop.back_populates = None
+        prop.uselist = True
 
         original_resolve = RelationshipAnalyzer._resolve_model_class
         RelationshipAnalyzer._resolve_model_class = Mock(return_value=PrefetchTestPost)
@@ -71,8 +74,9 @@ class TestRelationshipAnalyzer:
             assert result is not None
             assert result["type"] == "reverse_fk"
             assert result["related_model"] == PrefetchTestPost
-            assert result["foreign_key_field"] == "prefetchtestuser_id"
-            assert result["ref_field"] == "id"
+            # Scan finds the actual FK column on PrefetchTestPost pointing to prefetch_test_users
+            assert result["foreign_key_fields"][0] == "author_id"
+            assert result["ref_fields"][0] == "id"
         finally:
             RelationshipAnalyzer._resolve_model_class = original_resolve
 
@@ -104,31 +108,17 @@ class TestRelationshipAnalyzer:
             RelationshipAnalyzer._resolve_model_class = original_resolve
 
     def test_infer_reverse_relationship(self):
-        """Test inferring reverse relationships"""
-        mock_related_model = Mock()
-        mock_related_model.__name__ = "Post"
-
-        original_resolve = RelationshipAnalyzer._resolve_model_class
-        RelationshipAnalyzer._resolve_model_class = Mock(return_value=mock_related_model)
-
-        try:
-            with patch("builtins.hasattr", return_value=True):
-                result = RelationshipAnalyzer._infer_reverse_relationship(PrefetchTestUser, "posts")
-
-                assert result is not None
-                assert result["type"] == "reverse_fk"
-                assert result["related_model"] == mock_related_model
-                assert result["foreign_key_field"] == "prefetchtestuser_id"
-                assert result["ref_field"] == "id"
-        finally:
-            RelationshipAnalyzer._resolve_model_class = original_resolve
+        """Test that _infer_reverse_relationship returns None (guessing removed)"""
+        result = RelationshipAnalyzer._infer_reverse_relationship(PrefetchTestUser, "posts")
+        assert result is None
 
     def test_extract_ref_field(self):
         """Test extracting reference field from foreign key specification"""
         assert RelationshipAnalyzer._extract_ref_field("users.username") == "username"
         assert RelationshipAnalyzer._extract_ref_field("posts.id") == "id"
-        assert RelationshipAnalyzer._extract_ref_field("author_id") == "id"
-        assert RelationshipAnalyzer._extract_ref_field("user_id") == "id"
+        # plain column name returned as-is (not guessed as "id")
+        assert RelationshipAnalyzer._extract_ref_field("author_id") == "author_id"
+        assert RelationshipAnalyzer._extract_ref_field("user_id") == "user_id"
 
 
 class TestPrefetchHandler:
@@ -155,13 +145,6 @@ class TestPrefetchHandler:
 
         instances = [user1, user2]
 
-        relationship_info = {
-            "type": "reverse_fk",
-            "related_model": PrefetchTestPost,
-            "foreign_key_field": "author_id",
-            "ref_field": "id",
-        }
-
         mock_post1 = Mock()
         mock_post1.author_id = 1
         mock_post2 = Mock()
@@ -176,7 +159,7 @@ class TestPrefetchHandler:
         PrefetchTestPost.objects = mock_objects
 
         handler = PrefetchHandler(mock_session)
-        await handler._prefetch_reverse_foreign_key(instances, "posts", relationship_info)
+        await handler._prefetch_by_fields(instances, "posts", PrefetchTestPost, ["id"], ["author_id"], [])
 
         # Verify _update_cache was called with correct data
         user1._update_cache.assert_called_once_with("posts", [mock_post1, mock_post2])
@@ -195,13 +178,6 @@ class TestPrefetchHandler:
 
         instances = [post1, post2]
 
-        relationship_info = {
-            "type": "many_to_one",
-            "related_model": PrefetchTestUser,
-            "foreign_key_field": "author_id",
-            "ref_field": "id",
-        }
-
         mock_user1 = Mock()
         mock_user1.id = 1
         mock_user2 = Mock()
@@ -212,7 +188,7 @@ class TestPrefetchHandler:
         PrefetchTestUser.objects = mock_objects
 
         handler = PrefetchHandler(mock_session)
-        await handler._prefetch_forward_foreign_key(instances, "author", relationship_info)
+        await handler._prefetch_by_fields(instances, "author", PrefetchTestUser, ["author_id"], ["id"], None)
 
         # Verify _update_cache was called with correct data
         post1._update_cache.assert_called_once_with("author", mock_user1)
@@ -233,8 +209,8 @@ class TestPrefetchHandler:
         mock_relationship_info = {
             "type": "reverse_fk",
             "related_model": PrefetchTestPost,
-            "foreign_key_field": "author_id",
-            "ref_field": "id",
+            "foreign_key_fields": ["author_id"],
+            "ref_fields": ["id"],
         }
 
         original_analyze = RelationshipAnalyzer.analyze_relationship

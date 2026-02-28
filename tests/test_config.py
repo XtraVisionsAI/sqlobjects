@@ -47,7 +47,7 @@ class TestDatabaseConfig:
 async def _check_database_connection(db_type: str, url: str) -> bool:
     """测试数据库连接"""
     if db_type == "postgresql":
-        import asyncpg  # type: ignore[reportMissingImports]
+        import asyncpg
 
         # 转换 SQLAlchemy URL 为 asyncpg URL
         native_url = url.replace("postgresql+asyncpg://", "postgresql://")

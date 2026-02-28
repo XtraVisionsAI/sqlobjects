@@ -62,7 +62,7 @@ class AsyncSession:
         # Return engine if no connection yet
         return get_database(self._db_name).engine
 
-    async def execute(self, statement: Any, parameters: Any = None) -> CursorResult[Any]:
+    async def execute(self, statement: Any, parameters: Any = None) -> "CursorResult[Any]":
         """Execute statement with automatic transaction management.
 
         Supports both SQLAlchemy statement objects and raw SQL strings.
@@ -85,12 +85,21 @@ class AsyncSession:
             if self.auto_commit:
                 await self.commit()
 
-            return result
+            # Buffer rows before closing so the connection can be returned to the pool.
+            # Readonly sessions only run SELECT queries, so freeze()() is safe.
+            # Write sessions with auto_commit need rowcount/inserted_primary_key which
+            # are already captured in the CursorResult before close() is called.
+            if self.readonly:
+                result = result.freeze()()
+
+            return result  # type: ignore[return-value]
         except Exception as e:
             await self._handle_exception(e)
+            raise  # unreachable, _handle_exception always raises
         finally:
             # Auto-close connection for implicit sessions to prevent resource leaks
-            if self.auto_commit:
+            # This covers both auto_commit write sessions and readonly sessions
+            if self.auto_commit or self.readonly:
                 await self.close()
 
     async def stream(self, statement: Any, parameters: Any = None) -> AsyncResult[Any]:

@@ -466,9 +466,9 @@ class TestQueryPerformanceBenchmarks:
         """Comprehensive query benchmark across different patterns"""
         benchmarks = {
             "Filter by single field": lambda: User.objects.using(session).filter(User.age == 25).all(),
-            "Filter by multiple fields": lambda: User.objects.using(session)
-            .filter(User.age > 25, User.is_active == True)
-            .all(),
+            "Filter by multiple fields": lambda: (
+                User.objects.using(session).filter(User.age > 25, User.is_active == True).all()
+            ),
             "String pattern matching": lambda: User.objects.using(session).filter(User.username.like("%user_1%")).all(),
             "Ordering": lambda: User.objects.using(session).order_by("-age").limit(1000).all(),
             "Count query": lambda: User.objects.using(session).count(),

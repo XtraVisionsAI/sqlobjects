@@ -3,6 +3,12 @@ from typing import TYPE_CHECKING, Generic, TypeVar, overload
 from ...cascade import OnDelete
 
 
+def _normalize_fields(fields: str | list[str] | None) -> list[str] | None:
+    if fields is None:
+        return None
+    return [fields] if isinstance(fields, str) else list(fields)
+
+
 if TYPE_CHECKING:
     from ...model import ObjectModel
     from ..proxies import BaseRelated
@@ -27,6 +33,7 @@ class RelationshipProperty:
         self,
         argument: str | type["ObjectModel"],
         foreign_keys: str | list[str] | None = None,
+        remote_fields: str | list[str] | None = None,
         back_populates: str | None = None,
         backref: str | None = None,
         lazy: str = "select",
@@ -40,32 +47,21 @@ class RelationshipProperty:
         passive_deletes: bool = False,
         **kwargs,
     ):
-        """Initialize relationship property with cascade and deletion behavior.
-
-        Args:
-            argument: Target model class or string name
-            foreign_keys: Foreign key field name(s)
-            back_populates: Name of reverse relationship attribute
-            backref: Name for automatic reverse relationship
-            lazy: Loading strategy ('select', 'dynamic', 'noload', 'raise')
-            uselist: Whether relationship returns a list
-            secondary: M2M table name
-            primaryjoin: Custom primary join condition
-            secondaryjoin: Custom secondary join condition for M2M
-            order_by: Default ordering for collections
-            cascade: Cascade behavior (bool for simple on/off, str for SQLAlchemy cascade options)
-            on_delete: Behavior when related object is deleted
-            passive_deletes: Whether to use passive deletes
-            **kwargs: Additional relationship options
-        """
+        if foreign_keys and remote_fields:
+            raise ValueError(
+                "Cannot specify both 'foreign_keys' and 'remote_fields'. "
+                "Use 'foreign_keys' when the FK is on this model, "
+                "'remote_fields' when the FK is on the related model."
+            )
         self.argument = argument
-        self.foreign_keys = foreign_keys
+        self.foreign_keys: list[str] | None = _normalize_fields(foreign_keys)
+        self.remote_fields: list[str] | None = _normalize_fields(remote_fields)
         self.back_populates = back_populates
         self.backref = backref
         self.lazy = lazy
         self.uselist = uselist
         self.secondary = secondary
-        self.m2m_definition = None  # M2M table definition
+        self.m2m_definition = None
         self.primaryjoin = primaryjoin
         self.secondaryjoin = secondaryjoin
         self.order_by = order_by
@@ -75,9 +71,7 @@ class RelationshipProperty:
         self.name: str | None = None
         self.resolved_model: type[ObjectModel] | None = None
         self.relationship_type: str | None = None
-        self.is_many_to_many: bool = False  # M2M relationship flag
-
-        # Store additional relationship configuration parameters
+        self.is_many_to_many: bool = False
         self.extra_kwargs = kwargs
 
 

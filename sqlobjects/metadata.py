@@ -215,7 +215,7 @@ class ModelRegistry(SqlAlchemyMetaData):
                         if fk.column.table.name == target_table_name:
                             property_.uselist = False
                             if not property_.foreign_keys:
-                                property_.foreign_keys = col.name
+                                property_.foreign_keys = [col.name]
                             return
 
                 # No FK found, assume one-to-many
