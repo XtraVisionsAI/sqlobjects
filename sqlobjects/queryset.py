@@ -181,6 +181,9 @@ class Q:
                     _, field_name, value = expr
                     field_column = table.c[field_name]
                     conditions.append(field_column == value)
+                elif isinstance(expr, Q):
+                    # Nested Q object passed as positional argument
+                    conditions.append(expr._to_sqlalchemy(table))
                 elif hasattr(expr, "resolve"):
                     # Resolve SQLObjects expressions
                     conditions.append(expr.resolve(table))  # type: ignore[reportAttributeAccessIssue]
