@@ -1,3 +1,10 @@
+## 1.2.5 (2026-03-06)
+
+### Fix
+
+- **examples,docs**: fix PGVECTOR type definition and documentation errors
+- **types**: fix JSON/JSONB field containment query generating wrong SQL
+
 ## 1.2.4 (2026-02-28)
 
 ### Fix
