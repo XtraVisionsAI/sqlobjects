@@ -46,6 +46,22 @@ class PGVECTOR(UserDefinedType):
     def get_col_spec(self, **kw):
         return f"VECTOR({self.dimensions})"
 
+    def bind_processor(self, dialect):
+        def process(value):
+            if value is None:
+                return None
+            return str(value)
+
+        return process
+
+    def result_processor(self, dialect, coltype):
+        def process(value):
+            if value is None:
+                return None
+            return [float(x) for x in value[1:-1].split(",")]
+
+        return process
+
 
 # ============================================================================
 # Comparators
@@ -73,37 +89,22 @@ class PGVectorComparator(DefaultComparator):
     """Comparator for pgvector similarity operations."""
 
     def l2_distance(self, other):
-        """L2 (Euclidean) distance using <-> operator.
+        """L2 (Euclidean) distance using <-> operator."""
+        from sqlobjects.expressions.function import FunctionExpression
 
-        Args:
-            other: Vector to compare against
-
-        Returns:
-            Distance expression for ordering/filtering
-        """
-        return self.op("<->")(other)
+        return FunctionExpression(self.op("<->")(other))
 
     def cosine_distance(self, other):
-        """Cosine distance using <=> operator.
+        """Cosine distance using <=> operator."""
+        from sqlobjects.expressions.function import FunctionExpression
 
-        Args:
-            other: Vector to compare against
-
-        Returns:
-            Distance expression for ordering/filtering
-        """
-        return self.op("<=>")(other)
+        return FunctionExpression(self.op("<=>")(other))
 
     def inner_product(self, other):
-        """Inner product using <#> operator.
+        """Inner product using <#> operator."""
+        from sqlobjects.expressions.function import FunctionExpression
 
-        Args:
-            other: Vector to compare against
-
-        Returns:
-            Product expression for ordering/filtering
-        """
-        return self.op("<#>")(other)
+        return FunctionExpression(self.op("<#>")(other))
 
 
 # ============================================================================
@@ -241,19 +242,16 @@ async def create_sample_data():
         {
             "title": "Introduction to Python",
             "content": "Python is a high-level programming language...",
-            "content_vector": "to_tsvector('english', 'Python is a high-level programming language')",
             "embedding": [random.random() for _ in range(1536)],
         },
         {
             "title": "Machine Learning Basics",
             "content": "Machine learning is a subset of artificial intelligence...",
-            "content_vector": "to_tsvector('english', 'Machine learning is a subset of artificial intelligence')",
             "embedding": [random.random() for _ in range(1536)],
         },
         {
             "title": "Database Design Patterns",
             "content": "Database design patterns help structure data efficiently...",
-            "content_vector": "to_tsvector('english', 'Database design patterns help structure data efficiently')",
             "embedding": [random.random() for _ in range(1536)],
         },
     ]

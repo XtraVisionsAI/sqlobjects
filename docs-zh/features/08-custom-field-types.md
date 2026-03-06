@@ -57,10 +57,24 @@ class PGVECTOR(UserDefinedType):
     def get_col_spec(self, **kw):
         return f"VECTOR({self.dimensions})"
 
+    def bind_processor(self, dialect):
+        def process(value):
+            if value is None:
+                return None
+            return str(value)
+        return process
+
+    def result_processor(self, dialect, coltype):
+        def process(value):
+            if value is None:
+                return None
+            return [float(x) for x in value[1:-1].split(",")]
+        return process
+
 register_field_type(
-    PGVECTOR, 
-    "pgvector", 
-    PGVectorComparator,
+    PGVECTOR,
+    "pgvector",
+    comparator=PGVectorComparator,
     default_params={"dimensions": 1536}
 )
 ```
@@ -116,10 +130,10 @@ class Document(ObjectModel):
 class Config:
     indexes = [
         # GIN 索引（查询更快，更新更慢，占用更多空间）
-        Index("idx_content_gin", "content_vector", postgresql_using="gin"),
+        index("idx_content_gin", "content_vector", postgresql_using="gin"),
         
         # GiST 索引（更新更快，查询更慢，占用更少空间）
-        Index("idx_content_gist", "content_vector", postgresql_using="gist"),
+        index("idx_content_gist", "content_vector", postgresql_using="gist"),
     ]
 ```
 
@@ -156,18 +170,35 @@ class PGVECTOR(UserDefinedType):
     def get_col_spec(self, **kw):
         return f"VECTOR({self.dimensions})"
 
+    def bind_processor(self, dialect):
+        def process(value):
+            if value is None:
+                return None
+            return str(value)
+        return process
+
+    def result_processor(self, dialect, coltype):
+        def process(value):
+            if value is None:
+                return None
+            return [float(x) for x in value[1:-1].split(",")]
+        return process
+
 class PGVectorComparator(DefaultComparator):
     def l2_distance(self, other):
         """L2（欧几里得）距离：<-> 操作符。"""
-        return self.op('<->')(other)
+        from sqlobjects.expressions.function import FunctionExpression
+        return FunctionExpression(self.op('<->')(other))
     
     def cosine_distance(self, other):
         """余弦距离：<=> 操作符。"""
-        return self.op('<=>')(other)
+        from sqlobjects.expressions.function import FunctionExpression
+        return FunctionExpression(self.op('<=>')(other))
     
     def inner_product(self, other):
         """内积：<#> 操作符。"""
-        return self.op('<#>')(other)
+        from sqlobjects.expressions.function import FunctionExpression
+        return FunctionExpression(self.op('<#>')(other))
 
 # 注册
 register_field_type(PGVECTOR, "pgvector", comparator=PGVectorComparator)
@@ -209,7 +240,7 @@ class Config:
               postgresql_ops={"embedding": "vector_cosine_ops"}),
         
         # 使用内积的 IVFFlat
-        Index("idx_embedding_ip", "embedding",
+        index("idx_embedding_ip", "embedding",
               postgresql_using="ivfflat",
               postgresql_ops={"embedding": "vector_ip_ops"}),
         
@@ -262,6 +293,7 @@ nearby_docs = await Document.objects.filter(
 ```python
 # custom_types.py
 from sqlobjects.fields.types import register_field_type, UserDefinedType, DefaultComparator
+from sqlobjects.expressions.function import FunctionExpression
 
 # 类型定义
 class TSVECTOR(UserDefinedType):
@@ -275,6 +307,18 @@ class PGVECTOR(UserDefinedType):
         self.dimensions = dimensions
     def get_col_spec(self, **kw):
         return f"VECTOR({self.dimensions})"
+    def bind_processor(self, dialect):
+        def process(value):
+            if value is None:
+                return None
+            return str(value)
+        return process
+    def result_processor(self, dialect, coltype):
+        def process(value):
+            if value is None:
+                return None
+            return [float(x) for x in value[1:-1].split(",")]
+        return process
 
 # 比较器
 class TSVectorComparator(DefaultComparator):
@@ -284,9 +328,9 @@ class TSVectorComparator(DefaultComparator):
 
 class PGVectorComparator(DefaultComparator):
     def l2_distance(self, other):
-        return self.op('<->')(other)
+        return FunctionExpression(self.op('<->')(other))
     def cosine_distance(self, other):
-        return self.op('<=>')(other)
+        return FunctionExpression(self.op('<=>')(other))
 
 # 注册类型
 register_field_type(TSVECTOR, "tsvector", comparator=TSVectorComparator)
@@ -362,10 +406,12 @@ from .custom_types import TSVECTOR  # 触发注册
 ```python
 class PGVectorComparator(DefaultComparator):
     def l2_distance(self, other):  # 清晰、描述性的名称
-        return self.op('<->')(other)
+        from sqlobjects.expressions.function import FunctionExpression
+        return FunctionExpression(self.op('<->')(other))
     
     def cosine_similarity(self, other):  # 用户友好
-        return 1 - self.op('<=>')(other)
+        from sqlobjects.expressions.function import FunctionExpression
+        return FunctionExpression(1 - self.op('<=>')(other))
 ```
 
 ### 3. 类型参数
@@ -376,7 +422,7 @@ class PGVectorComparator(DefaultComparator):
 register_field_type(
     PGVECTOR,
     "pgvector",
-    PGVectorComparator,
+    comparator=PGVectorComparator,
     default_params={"dimensions": 1536}  # 常见的 OpenAI 嵌入大小
 )
 ```
