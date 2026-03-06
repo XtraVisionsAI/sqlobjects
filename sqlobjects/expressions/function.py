@@ -147,6 +147,8 @@ class FunctionExpression:
     for building complex database expressions.
     """
 
+    is_clause_element = False  # prevent __getattr__ from proxying this to expression.is_clause_element
+
     if TYPE_CHECKING:
         # Inherit all method hints for IDE support
         def __new__(cls, *args, **kwargs) -> "FunctionExpression & _FunctionMethods": ...  # type: ignore

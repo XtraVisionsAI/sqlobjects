@@ -323,13 +323,62 @@ class DateTimeComparator(ComparatorMixin, DateTime.Comparator):  # type: ignore[
 
 
 class JSONComparator(ComparatorMixin, JSON.Comparator):  # type: ignore[reportIncompatibleMethodOverride]
-    """JSON type comparator with JSON extraction and manipulation methods."""
+    """MySQL JSON type comparator. For PostgreSQL, use jsonb type instead."""
 
-    def extract_path(self, path) -> FunctionExpression:
-        return FunctionExpression(func.json_extract_path(self, path))
+    def json_extract(self, path: str) -> FunctionExpression:
+        """JSON_EXTRACT(col, path) - e.g. json_extract('$.name')"""
+        return FunctionExpression(func.json_extract(self, path))
 
-    def extract_text(self, path) -> FunctionExpression:
-        return FunctionExpression(func.json_extract_path_text(self, path))
+    def json_unquote(self, path: str) -> FunctionExpression:
+        """JSON_UNQUOTE(JSON_EXTRACT(col, path)) - returns unquoted string value"""
+        return FunctionExpression(func.json_unquote(func.json_extract(self, path)))
+
+    def json_contains(self, other, path: str | None = None) -> FunctionExpression:
+        """JSON_CONTAINS(col, val[, path]) - check if JSON contains value"""
+        import json
+
+        from sqlalchemy import literal
+
+        value = [other] if not isinstance(other, (list, dict)) else other
+        json_val = literal(json.dumps(value))
+        if path is not None:
+            return FunctionExpression(func.json_contains(self, json_val, path))
+        return FunctionExpression(func.json_contains(self, json_val))
+
+    def json_contains_path(self, *paths: str, match: str = "one") -> FunctionExpression:
+        """JSON_CONTAINS_PATH(col, 'one'|'all', path, ...) - check if path(s) exist"""
+        return FunctionExpression(func.json_contains_path(self, match, *paths))
+
+    def json_length(self, path: str | None = None) -> FunctionExpression:
+        """JSON_LENGTH(col[, path]) - array/object length"""
+        if path is not None:
+            return FunctionExpression(func.json_length(self, path))
+        return FunctionExpression(func.json_length(self))
+
+    def json_keys(self, path: str | None = None) -> FunctionExpression:
+        """JSON_KEYS(col[, path]) - return all keys as JSON array"""
+        if path is not None:
+            return FunctionExpression(func.json_keys(self, path))
+        return FunctionExpression(func.json_keys(self))
+
+    def json_overlaps(self, other) -> FunctionExpression:
+        """JSON_OVERLAPS(col, val) - check if two JSON documents share any key-value pairs (MySQL 8.0+)"""
+        import json
+
+        from sqlalchemy import literal
+
+        value = other if isinstance(other, str) else json.dumps(other)
+        return FunctionExpression(func.json_overlaps(self, literal(value)))
+
+    def json_search(self, value: str, match: str = "one", path: str | None = None) -> FunctionExpression:
+        """JSON_SEARCH(col, 'one'|'all', val[, path]) - find path of value"""
+        if path is not None:
+            return FunctionExpression(func.json_search(self, match, value, None, path))
+        return FunctionExpression(func.json_search(self, match, value))
+
+    def json_type(self) -> FunctionExpression:
+        """JSON_TYPE(col) - return JSON value type as string"""
+        return FunctionExpression(func.json_type(self))
 
 
 class BooleanComparator(ComparatorMixin, Boolean.Comparator):  # type: ignore[reportIncompatibleMethodOverride]

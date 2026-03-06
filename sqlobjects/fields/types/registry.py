@@ -1,9 +1,10 @@
 import inspect
 from typing import Any, Callable, NotRequired, TypedDict
 
+from sqlalchemy.dialects.mysql import JSON
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.sqltypes import (
     ARRAY,
-    JSON,
     BigInteger,
     Boolean,
     Date,
@@ -344,14 +345,15 @@ class TypeRegistry:
             (Interval, "interval", DateTimeComparator, [], {}),
             (LargeBinary, "binary", DefaultComparator, ["bytes"], {}),
             (Uuid, "uuid", StringComparator, [], {}),
-            (JSON, "json", JSONComparator, ["dict"], {}),
         ]
 
-        # Special types
+        # Special types: dialect-specific or non-standard types
         special_types = [
-            (ARRAY, "array", DefaultComparator, [], {}),
+            (ARRAY, "array", DefaultComparator, [], {}),  # PostgreSQL only
             (Enum, "enum", DefaultComparator, [], {}),
             (Auto, "auto", DefaultComparator, [], {}),
+            (JSON, "json", JSONComparator, ["dict"], {}),  # MySQL: contains -> JSON_CONTAINS
+            (JSONB, "jsonb", JSONB.Comparator, [], {}),  # PostgreSQL: contains -> @>
         ]
 
         for field_type, name, comparator, aliases, defaults in builtin_types + special_types:
