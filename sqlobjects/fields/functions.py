@@ -8,6 +8,22 @@ from .core import Column, column
 from .shortcuts import ComputedColumn, IdentityColumn
 
 
+def _extract_table_or_class_name(reference: str) -> str | None:
+    """从 'X.col' 或 'schema.X.col' 中提取 X（可能是表名或类名）。
+
+    Returns:
+        X 部分，用于后续延迟匹配；格式不合法时返回 None
+    """
+    parts = reference.split(".")
+    if len(parts) == 2:
+        # "X.col"
+        return parts[0]
+    if len(parts) == 3:
+        # "schema.X.col"
+        return parts[1]
+    return None
+
+
 def identity(
     *,
     start: int = 1,
@@ -76,7 +92,10 @@ def foreign_key(
     """Create foreign key column with database constraint behavior.
 
     Args:
-        reference: Foreign key reference in format "table.column"
+        reference: Foreign key reference in format "X.column" where X can be either
+            a model class name (e.g. "User.id", "UserProfile.id") or a database table
+            name (e.g. "users.id"). Class names are automatically resolved to table
+            names via delayed matching. Schema is also supported: "schema.X.column".
         type: Column type, "auto" for automatic type inference
         nullable: Whether column can be null
         ondelete: Database constraint behavior when referenced object is deleted
@@ -89,12 +108,15 @@ def foreign_key(
         Column descriptor with foreign key constraint
 
     Examples:
-        # Basic usage with auto type inference
+        # Using class name (resolved automatically)
+        author_id: Column[int] = foreign_key("User.id")
+
+        # Using table name directly (also works)
         author_id: Column[int] = foreign_key("users.id")
 
         # Complete constraint configuration
         author_id: Column[int] = foreign_key(
-            "users.id",
+            "User.id",
             ondelete="CASCADE",
             onupdate="CASCADE",
             nullable=False
@@ -102,7 +124,7 @@ def foreign_key(
 
         # Deferred constraint for circular references
         parent_id: Column[int] = foreign_key(
-            "categories.id",
+            "Category.id",
             deferrable=True,
             initially="DEFERRED"
         )
@@ -122,8 +144,15 @@ def foreign_key(
         fk_kwargs["deferrable"] = True
         fk_kwargs["initially"] = initially
 
-    # Create ForeignKey constraint
+    # Reference is passed directly to SQLAlchemy; delayed matching in
+    # ModelProcessor._resolve_class_foreign_keys will correct the table
+    # name if the first segment turns out to be a class name.
     fk_constraint = ForeignKey(reference, **fk_kwargs)
+
+    # Store the table-or-class segment for delayed resolution
+    table_or_class = _extract_table_or_class_name(reference)
+    if table_or_class:
+        fk_constraint.info["_fk_ref"] = table_or_class
 
     # Use existing column() function with foreign key
     return column(

@@ -2,8 +2,8 @@
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.sql import text
 
-from sqlobjects.expressions import func
 from sqlobjects.fields import (
     BooleanColumn,
     Column,
@@ -73,20 +73,20 @@ class TestFieldDefinition:
 
         class TestModel4(TestModel):
             id_field = column(type="integer", primary_key=True)
-            created_field = column(type="datetime", server_default=func.now())
+            created_field = column(type="datetime", server_default=text("CURRENT_TIMESTAMP"))
             name_field = column(type="string")
 
         # Primary key fields should have init=False automatically
         id_col = get_column_from_field(TestModel4.id_field)
-        assert id_col is not None and id_col.info["_codegen"]["init"] is False  # type: ignore[union-attr]
+        assert id_col is not None and id_col.info["_codegen"]["init"] is False  # type: ignore[index,attr-defined]
 
         # Server default fields should have init=False automatically
         created_col = get_column_from_field(TestModel4.created_field)
-        assert created_col is not None and created_col.info["_codegen"]["init"] is False  # type: ignore[union-attr]
+        assert created_col is not None and created_col.info["_codegen"]["init"] is False  # type: ignore[index,attr-defined]
 
         # Regular fields should have init=True by default
         name_col = get_column_from_field(TestModel4.name_field)
-        assert name_col is not None and name_col.info["_codegen"]["init"] is True  # type: ignore[union-attr]
+        assert name_col is not None and name_col.info["_codegen"]["init"] is True  # type: ignore[index,attr-defined]
 
 
 class TestAdvancedFields:
@@ -102,7 +102,7 @@ class TestAdvancedFields:
         assert id_col is not None
         assert id_col.autoincrement is True  # type: ignore[attr-defined]
         assert id_col.primary_key is True  # type: ignore[attr-defined]
-        assert id_col.info["_codegen"]["init"] is False  # type: ignore[union-attr,attr-defined]
+        assert id_col.info["_codegen"]["init"] is False  # type: ignore[index,attr-defined]
 
     def test_computed_fields(self):
         """Test computed() shortcut"""
@@ -115,7 +115,7 @@ class TestAdvancedFields:
         computed_col = get_column_from_field(TestModel6.computed_field)
         assert computed_col is not None
         assert computed_col.computed is not None  # type: ignore[attr-defined]
-        assert computed_col.info["_codegen"]["init"] is False  # type: ignore[union-attr,attr-defined]
+        assert computed_col.info["_codegen"]["init"] is False  # type: ignore[index,attr-defined]
 
     def test_foreign_key_fields(self):
         """Test foreign_key() shortcut"""
@@ -457,3 +457,155 @@ class TestFieldErrorHandling:
         standard_length_col = get_column_from_field(TestModel25.field)
         assert standard_length_col is not None
         assert standard_length_col.type.length == 255  # type: ignore[union-attr,attr-defined]
+
+
+class TestForeignKeyClassReference:
+    """Test foreign_key() with class name reference via dot notation and delayed matching"""
+
+    def _make_base(self):
+        """Create an isolated base model with its own registry for FK tests."""
+        from sqlobjects.metadata import ModelRegistry
+        from sqlobjects.model import ObjectModel
+
+        class IsolatedBase(ObjectModel):
+            __abstract__ = True
+
+        IsolatedBase.__registry__ = ModelRegistry()
+        return IsolatedBase
+
+    def test_class_reference_basic(self):
+        """Test foreign_key('User.id') resolves to 'users.id' via delayed matching"""
+        Base = self._make_base()
+
+        class User(Base):
+            id: Column[int] = column(type="integer", primary_key=True)
+
+        class TestModelFKRef1(Base):
+            ref_id: Column[int] = foreign_key("User.id")
+
+        fk_col = get_column_from_field(TestModelFKRef1.ref_id)
+        assert fk_col is not None
+        fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
+        assert fk._colspec == "users.id"  # type: ignore[reportGeneralTypeIssues]
+        assert fk.info.get("_fk_resolved") is True
+
+    def test_class_reference_camel_case(self):
+        """Test foreign_key('UserProfile.id') resolves to 'user_profiles.id'"""
+        Base = self._make_base()
+
+        class UserProfile(Base):
+            id: Column[int] = column(type="integer", primary_key=True)
+
+        class TestModelFKRef2(Base):
+            ref_id: Column[int] = foreign_key("UserProfile.id")
+
+        fk_col = get_column_from_field(TestModelFKRef2.ref_id)
+        assert fk_col is not None
+        fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
+        assert fk._colspec == "user_profiles.id"  # type: ignore[reportGeneralTypeIssues]
+
+    def test_table_reference_backward_compatible(self):
+        """Test foreign_key('users.id') works when no class named 'users' exists"""
+        Base = self._make_base()
+
+        class TestModelFKRef3(Base):
+            ref_id: Column[int] = foreign_key("users.id")
+
+        fk_col = get_column_from_field(TestModelFKRef3.ref_id)
+        assert fk_col is not None
+        fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
+        # No model named "users" in registry, so _colspec stays as-is
+        assert fk._colspec == "users.id"  # type: ignore[reportGeneralTypeIssues]
+
+    def test_class_reference_with_custom_table_name(self):
+        """Test that class ref is corrected when target model has custom table_name"""
+        Base = self._make_base()
+
+        class CustomTableTarget(Base):
+            id: Column[int] = column(type="integer", primary_key=True)
+
+            class Config:
+                table_name = "custom_targets"
+
+        class TestModelFKRef4(Base):
+            ref_id: Column[int] = foreign_key("CustomTableTarget.id")
+
+        fk_col = get_column_from_field(TestModelFKRef4.ref_id)
+        assert fk_col is not None
+        fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
+        # Delayed matching found CustomTableTarget → custom_targets
+        assert fk._colspec == "custom_targets.id"  # type: ignore[reportGeneralTypeIssues]
+
+    def test_class_reference_definition_order_independent(self):
+        """Test that referencing model defined AFTER the FK works via delayed matching"""
+        Base = self._make_base()
+
+        class TestModelFKRef5(Base):
+            ref_id: Column[int] = foreign_key("LateDefinedModel.id")
+
+        # At this point, _colspec is still "LateDefinedModel.id" (no model yet)
+        fk_col = get_column_from_field(TestModelFKRef5.ref_id)
+        assert fk_col is not None
+        fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
+
+        # Now define the target model with a custom table name
+        class LateDefinedModel(Base):
+            id: Column[int] = column(type="integer", primary_key=True)
+
+            class Config:
+                table_name = "late_custom"
+
+        # Delayed matching should have corrected the FK when LateDefinedModel registered
+        assert fk._colspec == "late_custom.id"  # type: ignore[reportGeneralTypeIssues]
+
+    def test_class_reference_with_constraints(self):
+        """Test class ref works together with FK constraint options"""
+        Base = self._make_base()
+
+        class ConstraintTarget(Base):
+            id: Column[int] = column(type="integer", primary_key=True)
+
+        class TestModelFKRef6(Base):
+            ref_id: Column[int] = foreign_key(
+                "ConstraintTarget.id",
+                ondelete="CASCADE",
+                nullable=False,
+            )
+
+        fk_col = get_column_from_field(TestModelFKRef6.ref_id)
+        assert fk_col is not None
+        assert fk_col.nullable is False  # type: ignore[attr-defined]
+        fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
+        assert fk._colspec == "constraint_targets.id"  # type: ignore[reportGeneralTypeIssues]
+        assert fk.ondelete == "CASCADE"
+
+    def test_class_reference_with_schema(self):
+        """Test foreign_key('myschema.User.id') with schema prefix"""
+        Base = self._make_base()
+
+        class SchemaUser(Base):
+            id: Column[int] = column(type="integer", primary_key=True)
+
+        class TestModelFKRef7(Base):
+            ref_id: Column[int] = foreign_key("myschema.SchemaUser.id")
+
+        fk_col = get_column_from_field(TestModelFKRef7.ref_id)
+        assert fk_col is not None
+        fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
+        assert fk._colspec == "myschema.schema_users.id"  # type: ignore[reportGeneralTypeIssues]
+
+    def test_class_reference_no_correction_needed(self):
+        """Test that when class name equals table name, _colspec is still correct"""
+        Base = self._make_base()
+
+        class SimpleTarget(Base):
+            id: Column[int] = column(type="integer", primary_key=True)
+
+        class TestModelFKRef8(Base):
+            ref_id: Column[int] = foreign_key("SimpleTarget.id")
+
+        fk_col = get_column_from_field(TestModelFKRef8.ref_id)
+        assert fk_col is not None
+        fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
+        # Class "SimpleTarget" found → resolved to actual table "simple_targets"
+        assert fk._colspec == "simple_targets.id"  # type: ignore[reportGeneralTypeIssues]

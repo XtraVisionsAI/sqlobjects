@@ -368,6 +368,9 @@ class ModelProcessor(type):
             # Auto-register model to ModelRegistry
             registry.register_model(cast(type["ObjectModel"], cls))
 
+            # Resolve class name foreign key references to actual table names
+            mcs._resolve_class_foreign_keys(registry)
+
             # Process pending M2M tables
             registry.process_pending_m2m()
 
@@ -850,6 +853,40 @@ class ModelProcessor(type):
             return True
 
         cls.__eq__ = __eq__
+
+    @classmethod
+    def _resolve_class_foreign_keys(mcs, registry):
+        """延迟解析外键引用：优先按类名匹配，匹配不到则视为表名。
+
+        foreign_key("User.id") 传入时原样交给 SQLAlchemy（_colspec="User.id"）。
+        每次新模型注册后，此方法遍历所有 FK：
+        1. 取出 info["_fk_ref"]（即 "." 前的那段，如 "User"）
+        2. 尝试在 registry 中按类名查找模型
+        3. 找到 → 替换 _colspec 为实际表名，标记 _resolved
+        4. 找不到 → 保留原样（视为已经是表名）
+        """
+        for table in registry.tables.values():
+            for col in table.columns:
+                for fk in col.foreign_keys:
+                    fk_info = fk.info
+                    if fk_info.get("_fk_resolved"):
+                        continue
+                    ref_name = fk_info.get("_fk_ref")
+                    if not ref_name:
+                        continue
+                    model = registry.get_model(ref_name)
+                    if not model or not hasattr(model, "__table__"):
+                        continue
+                    # Found matching model — rewrite _colspec to actual table name
+                    actual_table = model.__table__.name
+                    schema, tname, colname = fk._column_tokens
+                    if tname != actual_table:
+                        if schema:
+                            fk._colspec = f"{schema}.{actual_table}.{colname}"
+                        else:
+                            fk._colspec = f"{actual_table}.{colname}"
+                        fk.__dict__.pop("_column_tokens", None)
+                    fk_info["_fk_resolved"] = True
 
     @classmethod
     def _bind_column_attributes_to_table(mcs, cls: Any, table) -> None:
