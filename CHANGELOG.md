@@ -1,3 +1,9 @@
+## 1.3.0 (2026-03-10)
+
+### Feat
+
+- **fields**: support class name reference in foreign_key() with delayed matching
+
 ## 1.2.5 (2026-03-06)
 
 ### Fix
