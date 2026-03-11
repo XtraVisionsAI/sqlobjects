@@ -104,6 +104,22 @@ async with ctx_session("analytics") as session:
     users = await User.objects.using(session).all()
 ```
 
+### 检查会话可用性
+
+```python
+from sqlobjects.session import has_session
+
+# 检查当前上下文中是否存在显式会话
+if has_session():
+    # 在 ctx_session() 块内
+    pass
+
+# 检查特定数据库的会话
+if has_session("analytics"):
+    # 在 ctx_session("analytics") 块内
+    pass
+```
+
 ### 默认会话使用
 
 ```python
@@ -244,11 +260,44 @@ import pytest
 async def test_db():
     # 隔离的测试数据库
     db = await init_db(
-        "sqlite+aiosqlite:///:memory:", 
-        name="test", 
+        "sqlite+aiosqlite:///:memory:",
+        name="test",
         is_default=False
     )
     await create_tables(ObjectModel, "test")
     yield db
     await close_db("test")
+```
+
+## Web 框架集成
+
+### ASGI 中间件（Starlette / FastAPI）
+
+`SessionMiddleware` 为任何 ASGI 框架提供自动的请求级会话管理：
+
+```python
+from fastapi import FastAPI
+from sqlobjects.contrib.asgi import SessionMiddleware
+
+app = FastAPI()
+app.add_middleware(SessionMiddleware)
+# 每个请求自动获得托管会话（成功时提交，错误时回滚）
+
+# 可选：指定数据库名称和只读模式
+app.add_middleware(SessionMiddleware, db_name="analytics", readonly=True)
+```
+
+### FastAPI 依赖注入
+
+`get_db_session` 是一个 FastAPI 依赖项，提供事务性会话：
+
+```python
+from fastapi import Depends
+from sqlobjects.contrib.fastapi import get_db_session
+from sqlobjects.session import AsyncSession
+
+@app.post("/users")
+async def create_user(session: AsyncSession = Depends(get_db_session)):
+    user = await User.objects.using(session).create(name="Alice")
+    return {"id": user.id}
 ```

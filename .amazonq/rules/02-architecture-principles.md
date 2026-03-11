@@ -73,6 +73,11 @@
 - **Transaction control**: Commit/rollback and isolation levels
 - **Multi-database support**: Named database routing
 
+#### `contrib/` - Web Framework Integration
+
+- **asgi.py**: `SessionMiddleware` — ASGI middleware for request-scoped session management
+- **fastapi.py**: `get_db_session` — FastAPI dependency yielding a transactional session
+
 ### Cross-Module Integration Patterns
 
 #### Unified Type System
@@ -189,13 +194,14 @@ else:
 - **Relationship Loading**: select_related and prefetch_related with expression syntax
 - **Field System**: Complete type registry with Auto type inference
 - **Validation System**: Field-level and model-level validation with custom validators
+- **Window Functions**: ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTILE, PERCENT_RANK, NTH_VALUE via `func.xxx().over()`
+- **CTE Support**: Common Table Expressions via `.cte()` and `.with_cte()`, including recursive CTEs
+- **EXPLAIN Support**: Query plan analysis via `.explain(analyze=True, output="json")`
 
 ### Planned Features (TODO.md) 🚧
 
-- **Window Functions**: Planned for v2.0 (func.row_number().over())
 - **Advanced Cache Management**: Detailed statistics and management (v2.1)
 - **Database Health Checks**: check_db_health(), switch_default_db() (v2.0)
-- **CTE Support**: Common Table Expressions (v2.2+)
 - **Advanced SQL Functions**: Complex query patterns (v2.1+)
 
 ### Not Planned ❌

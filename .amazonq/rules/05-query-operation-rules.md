@@ -51,6 +51,15 @@ User.objects.extra(columns={"custom": "1"})      # Extra SQL
 User.objects.none()                              # Empty queryset
 User.objects.reverse()                           # Reverse ordering
 User.objects.skip_default_ordering()             # Skip default ordering
+
+# Window functions (used via annotate)
+User.objects.annotate(row_num=func.row_number().over(order_by=[User.created_at]))
+User.objects.annotate(rank=func.rank().over(partition_by=[User.dept], order_by=[(User.salary, 'desc')]))
+
+# CTE (Common Table Expressions)
+User.objects.filter(User.age >= 18).cte("adults")       # Create CTE
+User.objects.with_cte(adults_cte)                        # Use CTE in query
+User.objects.with_cte(cte).select_from(cte)              # Select from CTE
 ```
 
 ### Expression Methods (Return Composable Expressions)
@@ -289,6 +298,9 @@ User.objects.extra(columns={"custom": "1"})
 User.objects.skip_default_ordering()
 User.objects.none()
 User.objects.reverse()
+
+# CTE methods
+User.objects.with_cte(cte_expr)                 # Use CTE in query
 ```
 
 #### Expression Method Shortcuts
@@ -563,6 +575,44 @@ stats = await User.objects.aggregate(
 # Subquery patterns
 avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).subquery(query_type="scalar")
 older_users = await User.objects.filter(User.age > avg_age).all()
+```
+
+### Window Function Patterns
+```python
+from sqlobjects.expressions import func
+
+# Window functions must be used via annotate(), not executed directly
+users = await User.objects.annotate(
+    row_num=func.row_number().over(order_by=[User.created_at]),
+    dept_rank=func.rank().over(
+        partition_by=[User.department],
+        order_by=[(User.salary, 'desc')]
+    ),
+    prev_salary=func.lag(User.salary, 1).over(order_by=[User.created_at])
+).all()
+
+# Available window functions:
+# Ranking: row_number(), rank(), dense_rank(), percent_rank(), ntile(n)
+# Offset: lag(col, offset, default), lead(col, offset, default)
+# Value: first_value(col), last_value(col), nth_value(col, n)
+```
+
+### CTE Patterns
+```python
+# Basic CTE - reusable named subquery
+adults = User.objects.filter(User.age >= 18).cte("adults")
+result = await User.objects.with_cte(adults).filter(adults.c.age < 30).all()
+
+# Multiple CTEs
+active = User.objects.filter(User.is_active == True).cte("active")
+recent = User.objects.filter(User.created_at >= cutoff).cte("recent")
+result = await User.objects.with_cte(active, recent).all()
+
+# Recursive CTE - hierarchical data
+base = Employee.objects.filter(Employee.manager_id.is_(None)).cte("tree", recursive=True)
+recursive = Employee.objects.join(base, Employee.manager_id == base.c.id)
+tree = base.union_all(recursive)
+all_emps = await Employee.objects.with_cte(tree).select_from(tree).all()
 ```
 
 ## Performance Optimization Rules

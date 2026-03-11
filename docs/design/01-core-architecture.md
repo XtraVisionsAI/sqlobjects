@@ -3,7 +3,7 @@
 ## Overview
 
 SQLObjects core architecture is built on SQLAlchemy Core using a composition pattern design, providing global database
-management, task-level session context, and complete model base classes.
+management, ContextVar-based session context, and complete model base classes.
 It implements decoupling between database manager and session manager through an event system, supporting multi-database
 environments and asynchronous operations.
 
@@ -31,10 +31,10 @@ def on_connect(conn, record):
 # Supports default database and named database access
 ```
 
-### 2. Task-Level Session Context
+### 2. ContextVar-Based Session Context
 
-AsyncSession class provides intelligent connection management, SessionContextManager provides task-level sessions based
-on asyncio.current_task:
+AsyncSession class provides intelligent connection management, SessionContextManager provides context-level session
+management based on `contextvars.ContextVar`:
 
 ```python
 # Automatic session management - using default database
@@ -127,7 +127,7 @@ class Product(ObjectModel):
 - **DatabaseManager**: Global database manager, manages multiple database instances
 - **Database**: Database instance, provides event handling and connection management
 - **AsyncSession**: Intelligent session class, provides connection management and transaction control
-- **SessionContextManager**: Global session context manager, task-level sessions based on asyncio.current_task
+- **SessionContextManager**: Global session context manager, ContextVar-based context-level session management
 
 **Model Layer**
 
@@ -156,6 +156,11 @@ class Product(ObjectModel):
 - **StateManager**: Unified instance state management, supports dirty fields, deferred fields, proxy cache
 - **DeferredFieldProxy**: Deferred field proxy, supports lazy loading and caching
 - **RelationFieldProxy**: Relationship field proxy, supports relationship lazy loading
+
+**Web Framework Integration Layer (`contrib/`)**
+
+- **SessionMiddleware** (`contrib/asgi.py`): ASGI middleware providing request-scoped session management with auto commit/rollback
+- **get_db_session** (`contrib/fastapi.py`): FastAPI dependency that yields a transactional session via `ctx_session()`
 
 ### Design Philosophy
 

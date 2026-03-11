@@ -594,6 +594,78 @@ async for user in User.objects.iterator(
 count = await User.objects.skip_default_ordering().count()
 ```
 
+### Window Functions
+
+```python
+from sqlobjects.expressions import func
+
+# Row numbering
+users = await User.objects.annotate(
+    row_num=func.row_number().over(order_by=[User.created_at])
+).all()
+
+# Ranking within partitions
+users = await User.objects.annotate(
+    dept_rank=func.rank().over(
+        partition_by=[User.department],
+        order_by=[(User.salary, 'desc')]
+    )
+).all()
+
+# Dense rank (no gaps in ranking)
+users = await User.objects.annotate(
+    dense_rank=func.dense_rank().over(order_by=[(User.score, 'desc')])
+).all()
+
+# LAG/LEAD for accessing adjacent rows
+users = await User.objects.annotate(
+    prev_salary=func.lag(User.salary, 1).over(order_by=[User.created_at]),
+    next_salary=func.lead(User.salary, 1).over(order_by=[User.created_at])
+).all()
+
+# FIRST_VALUE / LAST_VALUE
+users = await User.objects.annotate(
+    highest_salary=func.first_value(User.salary).over(
+        partition_by=[User.department],
+        order_by=[(User.salary, 'desc')]
+    )
+).all()
+
+# NTILE - divide rows into N buckets
+users = await User.objects.annotate(
+    quartile=func.ntile(4).over(order_by=[User.salary])
+).all()
+```
+
+Available window functions: `row_number()`, `rank()`, `dense_rank()`, `percent_rank()`, `ntile(n)`, `lag(col, offset, default)`, `lead(col, offset, default)`, `first_value(col)`, `last_value(col)`, `nth_value(col, n)`.
+
+### CTE (Common Table Expressions)
+
+```python
+# Basic CTE
+adults = User.objects.filter(User.age >= 18).cte("adults")
+result = await User.objects.with_cte(adults).filter(
+    adults.c.age < 30
+).all()
+
+# Multiple CTEs
+active = User.objects.filter(User.is_active == True).cte("active")
+recent = User.objects.filter(
+    User.created_at >= datetime.now() - timedelta(days=30)
+).cte("recent")
+result = await User.objects.with_cte(active, recent).all()
+
+# Recursive CTE (e.g., organizational hierarchy)
+base = Employee.objects.filter(
+    Employee.manager_id.is_(None)
+).cte("hierarchy", recursive=True)
+recursive_part = Employee.objects.join(
+    base, Employee.manager_id == base.c.id
+)
+hierarchy = base.union_all(recursive_part)
+all_employees = await Employee.objects.with_cte(hierarchy).select_from(hierarchy).all()
+```
+
 ### Query Analysis
 
 ```python

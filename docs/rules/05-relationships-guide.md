@@ -19,7 +19,9 @@ from sqlobjects.fields import Column, StringColumn, foreign_key, relationship, R
 # One-to-Many (Foreign Key)
 class Post(ObjectModel):
     title: Column[str] = StringColumn(length=200)
-    author_id: Column[int] = foreign_key("users.id")
+    # Both class name and table name are supported:
+    author_id: Column[int] = foreign_key("User.id")    # class name (auto-resolved)
+    # author_id: Column[int] = foreign_key("users.id") # table name (also works)
     author: Related["User"] = relationship("User", back_populates="posts")
 
 class User(ObjectModel):

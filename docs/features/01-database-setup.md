@@ -105,6 +105,22 @@ async with ctx_session("analytics") as session:
     users = await User.objects.using(session).all()
 ```
 
+### Checking Session Availability
+
+```python
+from sqlobjects.session import has_session
+
+# Check if an explicit session exists in current context
+if has_session():
+    # Inside a ctx_session() block
+    pass
+
+# Check for a specific database
+if has_session("analytics"):
+    # Inside a ctx_session("analytics") block
+    pass
+```
+
 ### Default Session Usage
 
 ```python
@@ -245,11 +261,44 @@ import pytest
 async def test_db():
     # Isolated test database
     db = await init_db(
-        "sqlite+aiosqlite:///:memory:", 
-        name="test", 
+        "sqlite+aiosqlite:///:memory:",
+        name="test",
         is_default=False
     )
     await create_tables(ObjectModel, "test")
     yield db
     await close_db("test")
+```
+
+## Web Framework Integration
+
+### ASGI Middleware (Starlette / FastAPI)
+
+`SessionMiddleware` provides automatic request-scoped session management for any ASGI framework:
+
+```python
+from fastapi import FastAPI
+from sqlobjects.contrib.asgi import SessionMiddleware
+
+app = FastAPI()
+app.add_middleware(SessionMiddleware)
+# Each request now gets an auto-managed session (commit on success, rollback on error)
+
+# Optional: specify database name and readonly mode
+app.add_middleware(SessionMiddleware, db_name="analytics", readonly=True)
+```
+
+### FastAPI Dependency Injection
+
+`get_db_session` is a FastAPI dependency that yields a transactional session:
+
+```python
+from fastapi import Depends
+from sqlobjects.contrib.fastapi import get_db_session
+from sqlobjects.session import AsyncSession
+
+@app.post("/users")
+async def create_user(session: AsyncSession = Depends(get_db_session)):
+    user = await User.objects.using(session).create(name="Alice")
+    return {"id": user.id}
 ```

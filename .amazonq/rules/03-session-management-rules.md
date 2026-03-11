@@ -130,8 +130,9 @@ async with ctx_session() as session:
 - Named database routing and default database handling
 
 ### SessionContextManager Implementation
-**Factory pattern for session creation**
-- Session factory creation and configuration
+**ContextVar-based session context management**
+- ContextVar (`_explicit_sessions`) for context-level session storage
+- Token-based nesting support for correct nested `ctx_session()` behavior
 - Context manager lifecycle management
 - Transaction boundary control and cleanup
 - Error handling and rollback strategies
@@ -181,19 +182,14 @@ if not await check_db_health("primary"):
 
 ### Session Creation and Configuration
 ```python
-# Session factory configuration
-session_factory = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-    autoflush=False,
-    autocommit=False
-)
+# Sessions are created automatically via ctx_session() context manager
+from sqlobjects.session import ctx_session
 
-# Context manager integration
 async with ctx_session() as session:
-    # Session automatically configured and managed
-    pass
+    # session is an AsyncSession instance (built on SQLAlchemy Core AsyncConnection)
+    # auto_commit=False, readonly=False — manual transaction control
+    user = await User.objects.using(session).create(username="alice")
+    # Auto-commit on success, rollback on exception
 ```
 
 ### Transaction Boundaries
@@ -201,6 +197,28 @@ async with ctx_session() as session:
 - **Automatic Rollback**: Exception path rolls back automatically
 - **Manual Control**: Available when needed for complex scenarios
 - **Nested Transactions**: Support for savepoints and nested contexts
+
+### Token-Based Nested Session Support
+**Internal mechanism for correct nested `ctx_session()` behavior**
+
+`_SessionContextManager.set_session()` returns a `contextvars.Token` which captures the previous
+ContextVar state. `reset_session(token)` restores that state when the inner context exits,
+ensuring the outer session is correctly reinstated.
+
+```python
+# Internal flow (users should use ctx_session() directly):
+# 1. ctx_session() creates a new AsyncSession
+# 2. set_session(session) stores it in _explicit_sessions ContextVar, returns Token
+# 3. On exit, reset_session(token) restores the previous ContextVar state
+
+# This enables safe nesting:
+async with ctx_session() as outer:
+    # _explicit_sessions = {"default": outer}
+    async with ctx_session() as inner:
+        # _explicit_sessions = {"default": inner}
+        pass
+    # Token reset restores: _explicit_sessions = {"default": outer}
+```
 
 ### Connection Pool Integration
 ```python
@@ -246,9 +264,37 @@ engine = create_async_engine(
 ## Integration Guidelines
 
 ### Framework Integration
-- **FastAPI**: Integration with dependency injection
-- **Django**: Compatibility with Django's transaction management
-- **Flask**: Support for Flask's application context
+
+#### ASGI Middleware (`sqlobjects.contrib.asgi`)
+**Automatic request-scoped session for any ASGI framework**
+```python
+from fastapi import FastAPI
+from sqlobjects.contrib.asgi import SessionMiddleware
+
+app = FastAPI()
+app.add_middleware(SessionMiddleware)
+# Optional parameters: db_name="analytics", readonly=True
+
+# How it works:
+# 1. Creates AsyncSession for each HTTP/WebSocket request
+# 2. Calls _SessionContextManager.set_session() with Token
+# 3. Commits on success, rolls back on error
+# 4. Calls reset_session(token) in finally block
+```
+
+#### FastAPI Dependency (`sqlobjects.contrib.fastapi`)
+**Dependency injection for explicit session access**
+```python
+from fastapi import Depends
+from sqlobjects.contrib.fastapi import get_db_session
+from sqlobjects.session import AsyncSession
+
+@app.post("/users")
+async def create_user(session: AsyncSession = Depends(get_db_session)):
+    user = await User.objects.using(session).create(username="alice")
+    return {"id": user.id}
+```
+
 - **Standalone**: Direct usage without framework dependencies
 
 ### Testing Integration

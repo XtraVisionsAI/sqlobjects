@@ -2,7 +2,7 @@
 
 ## 概述
 
-SQLObjects 核心架构基于 SQLAlchemy Core 构建，采用组合模式设计，提供全局数据库管理、任务级会话上下文和完整的模型基类。通过事件系统实现数据库管理器与会话管理器的解耦，支持多数据库环境和异步操作。
+SQLObjects 核心架构基于 SQLAlchemy Core 构建，采用组合模式设计，提供全局数据库管理、基于 ContextVar 的上下文级会话管理和完整的模型基类。通过事件系统实现数据库管理器与会话管理器的解耦，支持多数据库环境和异步操作。
 
 ## 核心功能
 
@@ -27,9 +27,9 @@ def on_connect(conn, record):
 # 支持默认数据库和命名数据库访问
 ```
 
-### 2. 任务级会话上下文
+### 2. 基于 ContextVar 的上下文级会话管理
 
-AsyncSession 类提供智能连接管理，SessionContextManager 基于 asyncio.current_task 提供任务级会话：
+AsyncSession 类提供智能连接管理，SessionContextManager 基于 `contextvars.ContextVar` 提供上下文级会话管理：
 
 ```python
 # 自动会话管理 - 使用默认数据库
@@ -120,7 +120,7 @@ class Product(ObjectModel):
 - **DatabaseManager**: 全局数据库管理器，管理多个数据库实例
 - **Database**: 数据库实例，提供事件处理和连接管理
 - **AsyncSession**: 智能会话类，提供连接管理和事务控制
-- **SessionContextManager**: 全局会话上下文管理器，基于 asyncio.current_task 的任务级会话
+- **SessionContextManager**: 全局会话上下文管理器，基于 ContextVar 的上下文级会话管理
 
 **模型层**
 
@@ -149,6 +149,11 @@ class Product(ObjectModel):
 - **StateManager**: 统一实例状态管理，支持脏字段、延迟字段、代理缓存
 - **DeferredFieldProxy**: 延迟字段代理，支持懒加载和缓存
 - **RelationFieldProxy**: 关系字段代理，支持关系懒加载
+
+**Web 框架集成层 (`contrib/`)**
+
+- **SessionMiddleware** (`contrib/asgi.py`): ASGI 中间件，提供请求级会话管理，自动提交/回滚
+- **get_db_session** (`contrib/fastapi.py`): FastAPI 依赖项，通过 `ctx_session()` 提供事务性会话
 
 ### 设计理念
 

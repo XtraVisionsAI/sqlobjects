@@ -22,6 +22,9 @@ class Post(ObjectModel):
     title: Column[str] = StringColumn(length=200)
     content: Column[str] = TextColumn()
     author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
+    # 也可使用简写 foreign_key() 函数，支持类名引用：
+    # author_id: Column[int] = foreign_key("User.id")    # 类名（自动解析）
+    # author_id: Column[int] = foreign_key("users.id")   # 表名（同样可用）
 
     # 使用统一的 relationship() 函数定义关系
     author: Related[User] = relationship("User", foreign_keys="author_id")

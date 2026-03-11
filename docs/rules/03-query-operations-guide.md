@@ -204,6 +204,47 @@ active_users = User.objects.filter(User.is_active == True).subquery("active_user
 posts = await Post.objects.join(active_users, Post.author_id == active_users.c.id).all()
 ```
 
+### Window Functions
+
+```python
+from sqlobjects.expressions import func
+
+# Window functions are used via annotate() + func.xxx().over()
+users = await User.objects.annotate(
+    row_num=func.row_number().over(order_by=[User.created_at])
+).all()
+
+# Ranking with partitions
+users = await User.objects.annotate(
+    dept_rank=func.rank().over(
+        partition_by=[User.department],
+        order_by=[(User.salary, 'desc')]
+    )
+).all()
+
+# LAG/LEAD for adjacent row access
+users = await User.objects.annotate(
+    prev_salary=func.lag(User.salary, 1).over(order_by=[User.created_at])
+).all()
+
+# Available: row_number(), rank(), dense_rank(), percent_rank(),
+#            ntile(n), lag(), lead(), first_value(), last_value(), nth_value()
+```
+
+### CTE (Common Table Expressions)
+
+```python
+# Basic CTE: define a reusable named subquery
+adults = User.objects.filter(User.age >= 18).cte("adults")
+result = await User.objects.with_cte(adults).filter(adults.c.age < 30).all()
+
+# Recursive CTE: hierarchical queries
+base = Employee.objects.filter(Employee.manager_id.is_(None)).cte("hierarchy", recursive=True)
+recursive_part = Employee.objects.join(base, Employee.manager_id == base.c.id)
+hierarchy = base.union_all(recursive_part)
+all_employees = await Employee.objects.with_cte(hierarchy).select_from(hierarchy).all()
+```
+
 ### Manual Joins
 
 ```python

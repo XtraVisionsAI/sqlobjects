@@ -71,6 +71,21 @@ async with ctx_session() as session:
 user = await User.objects.using("analytics").create(username="test")
 ```
 
+### Session Availability Check
+
+```python
+from sqlobjects.session import has_session
+
+# Check if an explicit session is active
+if has_session():
+    # Inside a ctx_session() block — use the existing session
+    pass
+
+# Check for a specific database
+if has_session("analytics"):
+    pass
+```
+
 ## Best Practices
 
 ### ✅ Do
@@ -105,11 +120,12 @@ await init_db(
 - **Don't create sessions manually** (use context managers)
 
 ```python
-# Bad: Mixing sessions
+# Caution: Nested sessions use separate transactions
 async with ctx_session() as session1:
     user = await User.objects.using(session1).create(username="alice")
     async with ctx_session() as session2:
-        # Different session - may cause issues
+        # Nesting is safe (Token-based restore), but uses a separate transaction
+        # — session1 won't see session2's uncommitted changes and vice versa
         await Post.objects.using(session2).create(author_id=user.id)
 
 # Bad: No transaction control
@@ -251,28 +267,66 @@ async def main():
         "main": {"url": "postgresql://localhost/main", "pool_size": 20},
         "analytics": {"url": "sqlite:///analytics.db"}
     }, default="main")
-    
+
     await create_tables(ObjectModel, "main")
     await create_tables(ObjectModel, "analytics")
-    
+
     # Single database transaction
     async with ctx_session() as session:
         user = await User.objects.using(session).create(
             username="alice",
             email="alice@example.com"
         )
-    
+
     # Multi-database transaction
     async with ctx_sessions("main", "analytics") as sessions:
         user = await User.objects.using(sessions["main"]).get(User.username == "alice")
         await Log.objects.using(sessions["analytics"]).create(
             message=f"User {user.username} logged in"
         )
-    
+
     # Cleanup
     await close_all_dbs()
 
 # Run
 import asyncio
 asyncio.run(main())
+```
+
+## Web Framework Integration
+
+### ASGI Middleware
+
+Use `SessionMiddleware` for automatic request-scoped session management in any ASGI framework (FastAPI, Starlette, etc.):
+
+```python
+from fastapi import FastAPI
+from sqlobjects.contrib.asgi import SessionMiddleware
+
+app = FastAPI()
+app.add_middleware(SessionMiddleware)
+# Each request gets an auto-managed session: commit on success, rollback on error
+
+# Optional: target a specific database or use readonly mode
+app.add_middleware(SessionMiddleware, db_name="analytics", readonly=True)
+```
+
+### FastAPI Dependency Injection
+
+Use `get_db_session` for explicit session access in route handlers:
+
+```python
+from fastapi import Depends
+from sqlobjects.contrib.fastapi import get_db_session
+from sqlobjects.session import AsyncSession
+
+@app.post("/users")
+async def create_user(session: AsyncSession = Depends(get_db_session)):
+    user = await User.objects.using(session).create(username="alice")
+    return {"id": user.id}
+
+@app.get("/users/{user_id}")
+async def get_user(user_id: int, session: AsyncSession = Depends(get_db_session)):
+    user = await User.objects.using(session).get(User.id == user_id)
+    return {"username": user.username}
 ```

@@ -23,6 +23,9 @@ class Post(ObjectModel):
     title: Column[str] = StringColumn(length=200)
     content: Column[str] = TextColumn()
     author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
+    # Or use the shorthand foreign_key() function which supports class name references:
+    # author_id: Column[int] = foreign_key("User.id")    # class name (auto-resolved)
+    # author_id: Column[int] = foreign_key("users.id")   # table name (also works)
 
     # Define relationships using unified relationship() function
     author: Related[User] = relationship("User", foreign_keys="author_id")
