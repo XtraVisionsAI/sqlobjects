@@ -259,8 +259,14 @@ class _SessionContextManager:
         return AsyncSession(name, readonly, auto_commit)
 
     @classmethod
-    def set_session(cls, session: AsyncSession, db_name: str | None = None) -> None:
-        """Set active session in current context."""
+    def set_session(
+        cls, session: AsyncSession, db_name: str | None = None
+    ) -> contextvars.Token[dict[str, "AsyncSession"]]:
+        """Set active session in current context.
+
+        Returns a Token that can be used with reset_session() to restore the
+        previous ContextVar state, enabling correct nested ctx_session() behavior.
+        """
         name = db_name or get_default()
         try:
             current_sessions = _explicit_sessions.get({})
@@ -268,7 +274,12 @@ class _SessionContextManager:
             current_sessions = {}
         new_sessions = current_sessions.copy()
         new_sessions[name] = session
-        _explicit_sessions.set(new_sessions)
+        return _explicit_sessions.set(new_sessions)
+
+    @classmethod
+    def reset_session(cls, token: contextvars.Token[dict[str, "AsyncSession"]]) -> None:
+        """Restore ContextVar to a previous state using a token from set_session()."""
+        _explicit_sessions.reset(token)
 
     @classmethod
     def clear_session(cls, db_name: str | None = None) -> None:
@@ -302,8 +313,8 @@ async def ctx_session(db_name: str | None = None) -> AsyncGenerator[AsyncSession
     name = db_name or get_default()
     session = AsyncSession(name, readonly=False, auto_commit=False)
 
-    # Set as explicit session in context
-    _SessionContextManager.set_session(session, name)
+    # Set as explicit session in context, save token for nested restore
+    token = _SessionContextManager.set_session(session, name)
 
     try:
         yield session
@@ -316,7 +327,7 @@ async def ctx_session(db_name: str | None = None) -> AsyncGenerator[AsyncSession
     finally:
         # Cleanup
         await session.close()
-        _SessionContextManager.clear_session(name)
+        _SessionContextManager.reset_session(token)
 
 
 @asynccontextmanager
@@ -336,13 +347,14 @@ async def ctx_sessions(*db_names: str) -> AsyncGenerator[dict[str, AsyncSession]
         raise ValueError("At least one database name must be provided")
 
     sessions: dict[str, AsyncSession] = {}
+    tokens: list[contextvars.Token[dict[str, AsyncSession]]] = []
 
     try:
         # Create sessions for all
         for db_name in db_names:
             session = AsyncSession(db_name, readonly=False, auto_commit=False)
             sessions[db_name] = session
-            _SessionContextManager.set_session(session, db_name)
+            tokens.append(_SessionContextManager.set_session(session, db_name))
 
         yield sessions
 
@@ -358,9 +370,11 @@ async def ctx_sessions(*db_names: str) -> AsyncGenerator[dict[str, AsyncSession]
 
     finally:
         # Cleanup all sessions
-        for db_name, session in sessions.items():
+        for session in sessions.values():
             await session.close()
-            _SessionContextManager.clear_session(db_name)
+        # Reset tokens in reverse order
+        for token in reversed(tokens):
+            _SessionContextManager.reset_session(token)
 
 
 def get_session(
