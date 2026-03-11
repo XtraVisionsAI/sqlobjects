@@ -1,3 +1,9 @@
+## 1.4.0 (2026-03-11)
+
+### Feat
+
+- **session**: fix nested ctx_session() and add ASGI/FastAPI integration
+
 ## 1.3.0 (2026-03-10)
 
 ### Feat
