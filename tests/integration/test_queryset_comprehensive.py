@@ -288,6 +288,10 @@ class TestQuerySetBulkOperations:
         deleted_count = await User.objects.filter(User.age > 100).using(session).delete(cascade="none")
         assert deleted_count == 0
 
+        # Test cascade="auto" (should auto-detect and choose optimal strategy)
+        deleted_count = await User.objects.filter(User.age > 100).using(session).delete(cascade="auto")
+        assert deleted_count == 0
+
     @pytest.mark.usefixtures("complex_relationships")
     async def test_cascade_delete_with_relationships(self, session):
         """Test cascade delete with actual relationships"""
@@ -326,6 +330,7 @@ class TestQuerySetCascadeOperations:
             await User.objects.filter(User.id == -1).using(session).delete(cascade="full")
             await User.objects.filter(User.id == -1).using(session).delete(cascade="fast")
             await User.objects.filter(User.id == -1).using(session).delete(cascade="none")
+            await User.objects.filter(User.id == -1).using(session).delete(cascade="auto")
         except Exception as e:
             # Should not raise parameter validation errors
             assert "cascade" not in str(e).lower()
@@ -354,6 +359,32 @@ class TestQuerySetCascadeOperations:
         assert none_time >= 0
         assert fast_time >= 0
         assert full_time >= 0
+
+    @pytest.mark.usefixtures("sample_users")
+    async def test_model_delete_auto_cascade(self, session):
+        """Test Model.delete() auto-detects cascade need (cascade=None default)"""
+        user = await User.objects.using(session).first()
+        assert user is not None
+
+        # Default cascade=None should auto-detect and work correctly
+        await user.using(session).delete()
+
+        # Verify deletion
+        found = await User.objects.filter(User.id == user.id).using(session).first()
+        assert found is None
+
+    @pytest.mark.usefixtures("sample_users")
+    async def test_model_delete_explicit_cascade_false(self, session):
+        """Test Model.delete(cascade=False) skips cascade processing"""
+        user = await User.objects.using(session).first()
+        assert user is not None
+
+        # Explicit cascade=False should skip cascade and delete directly
+        await user.using(session).delete(cascade=False)
+
+        # Verify deletion
+        found = await User.objects.filter(User.id == user.id).using(session).first()
+        assert found is None
 
 
 class TestQuerySetIterators:

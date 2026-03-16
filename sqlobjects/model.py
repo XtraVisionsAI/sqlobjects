@@ -278,11 +278,14 @@ class ModelMixin(DataConversionMixin, SignalMixin):
         return await self._save_internal(validate=validate, session=session)
 
     @emit_signals(Operation.DELETE)
-    async def delete(self, cascade: bool = True):
+    async def delete(self, cascade: bool | None = None):
         """Delete this model instance from the database with cascade support.
 
         Args:
-            cascade: Whether to handle cascade deletion (default: True)
+            cascade: Whether to handle cascade deletion.
+                None (default): auto-detect based on model relationships
+                True: force cascade handling
+                False: skip cascade, direct delete
 
         Raises:
             PrimaryKeyError: If instance has no primary key values or delete fails
@@ -291,6 +294,10 @@ class ModelMixin(DataConversionMixin, SignalMixin):
             raise PrimaryKeyError("Cannot delete instance without primary key values")
 
         session = self.get_session()
+
+        # Auto-detect cascade need when not explicitly specified
+        if cascade is None:
+            cascade = self._has_on_delete_relations()
 
         # Use cascade executor for cascade operations
         if cascade:

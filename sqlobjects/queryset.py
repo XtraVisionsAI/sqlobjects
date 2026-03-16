@@ -1221,12 +1221,13 @@ class QuerySet(Generic[T]):
         return await executor.execute_update_operation(self, values)
 
     @emit_signals(Operation.DELETE, is_bulk=True)
-    async def delete(self, cascade: str = "full") -> int:
+    async def delete(self, cascade: str = "auto") -> int:
         """Perform bulk delete on objects matching query conditions.
 
         Args:
             cascade: Cascade deletion strategy
-                - "full" (default): Complete cascade deletion with full ORM functionality
+                - "auto" (default): Automatically choose based on model relationships
+                - "full": Complete cascade deletion with full ORM functionality
                 - "fast": Fast cascade deletion with minimal ORM processing
                 - "none": Direct SQL deletion without ORM cascade processing
 

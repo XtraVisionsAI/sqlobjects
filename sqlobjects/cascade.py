@@ -28,6 +28,7 @@ __all__ = [
     "normalize_onupdate",
     "normalize_cascade",
     "has_cascade_delete_relations",
+    "has_delete_signals",
 ]
 
 
@@ -126,6 +127,30 @@ def has_cascade_delete_relations(model_class) -> bool:
             continue
         cascade_str = rel_descriptor.property.cascade or ""
         if "delete" in cascade_str or "all" in cascade_str:
+            return True
+    return False
+
+
+def has_delete_signals(model_class) -> bool:
+    """Check if model class has delete signal handlers defined.
+
+    Args:
+        model_class: Model class to check
+
+    Returns:
+        True if model has before_delete/after_delete handlers, False otherwise
+    """
+    from .signals import SignalMixin
+
+    if not issubclass(model_class, SignalMixin):
+        return False
+
+    for method_name in ("before_delete", "after_delete"):
+        method = getattr(model_class, method_name, None)
+        if method is None:
+            continue
+        # Must be defined on the model itself, not inherited from SignalMixin
+        if method_name in model_class.__dict__:
             return True
     return False
 
@@ -344,7 +369,7 @@ class CascadeExecutor:
         return instance
 
     async def execute_delete_operation(
-        self, target, cascade_strategy: str = "full", session: "AsyncSession | None" = None
+        self, target, cascade_strategy: str = "auto", session: "AsyncSession | None" = None
     ) -> int:
         """Execute delete operation with cascade handling."""
         if session is None:
@@ -355,7 +380,8 @@ class CascadeExecutor:
             return await self._execute_queryset_delete(target, cascade_strategy, session)
 
         # Handle single instance deletion
-        await self._delete_related_objects(target, session)
+        if has_cascade_delete_relations(target.__class__):
+            await self._delete_related_objects(target, session)
         await target._delete_internal(session=session)  # noqa
         return 1
 
@@ -478,6 +504,15 @@ class CascadeExecutor:
 
     async def _execute_queryset_delete(self, queryset, cascade_strategy: str, session: "AsyncSession") -> int:
         """Execute QuerySet delete with different cascade strategies."""
+        if cascade_strategy == "auto":
+            model_class = queryset._model_class
+            if has_delete_signals(model_class):
+                cascade_strategy = "full"
+            elif has_cascade_delete_relations(model_class):
+                cascade_strategy = "fast"
+            else:
+                cascade_strategy = "none"
+
         if cascade_strategy == "full":
             return await self._delete_with_full_cascade(queryset, session)
         elif cascade_strategy == "fast":
