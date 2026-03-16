@@ -1,3 +1,9 @@
+## 1.5.0 (2026-03-16)
+
+### Feat
+
+- **cascade**: unify cascade strategy with auto-detection for Model.delete()
+
 ## 1.4.0 (2026-03-11)
 
 ### Feat
