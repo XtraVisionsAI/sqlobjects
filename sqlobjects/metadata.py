@@ -22,6 +22,7 @@ __all__ = [
     "index",
     "constraint",
     "unique",
+    "foreignkey",
 ]
 
 _FIELD_NAME_PATTERN = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b")
@@ -37,7 +38,7 @@ class _RawModelConfig:
     verbose_name_plural: str | None = None
     ordering: list[str] = field(default_factory=list)
     indexes: list[Index] = field(default_factory=list)
-    constraints: list[CheckConstraint | UniqueConstraint] = field(default_factory=list)
+    constraints: list[CheckConstraint | UniqueConstraint | ForeignKeyConstraint] = field(default_factory=list)
     description: str | None = None
     db_options: dict[str, dict[str, Any]] = field(default_factory=dict)
     custom: dict[str, Any] = field(default_factory=dict)
@@ -52,7 +53,7 @@ class ModelConfig:
     verbose_name_plural: str
     ordering: list[str] = field(default_factory=list)
     indexes: list[Index] = field(default_factory=list)
-    constraints: list[CheckConstraint | UniqueConstraint] = field(default_factory=list)
+    constraints: list[CheckConstraint | UniqueConstraint | ForeignKeyConstraint] = field(default_factory=list)
     description: str | None = None
     db_options: dict[str, dict[str, Any]] = field(default_factory=dict)
     custom: dict[str, Any] = field(default_factory=dict)
@@ -1109,3 +1110,55 @@ def unique(
         >>> unique("first_name", "last_name", name="uq_full_name")
     """
     return UniqueConstraint(*fields, name=name, **kwargs)
+
+
+def foreignkey(
+    fields: str | list[str],
+    references: str | list[str],
+    *,
+    name: str | None = None,
+    ondelete: str | None = None,
+    onupdate: str | None = None,
+    deferrable: bool = False,
+    initially: str = "IMMEDIATE",
+    **kwargs: Any,
+) -> ForeignKeyConstraint:
+    """Create a ForeignKeyConstraint with convenient field name support.
+
+    Use this in Config.constraints for explicit constraint definition, custom
+    names, or composite foreign keys. For simple single-column foreign keys,
+    prefer the ``foreign_key()`` field descriptor instead.
+
+    Args:
+        fields: Local field name(s) as string or list of strings.
+        references: Referenced column(s) as "Table.column" or list thereof.
+            Supports class names (e.g. "User.id") or table names (e.g. "users.id").
+        name: Constraint name (optional, auto-generated if not provided).
+        ondelete: Referential action on delete (CASCADE, SET NULL, RESTRICT, etc.).
+        onupdate: Referential action on update.
+        deferrable: Whether the constraint can be deferred.
+        initially: Initial deferral state ("IMMEDIATE" or "DEFERRED").
+        **kwargs: Additional SQLAlchemy ForeignKeyConstraint arguments.
+
+    Returns:
+        SQLAlchemy ForeignKeyConstraint instance.
+
+    Examples:
+        >>> foreignkey("author_id", "User.id")
+        >>> foreignkey("author_id", "User.id", name="fk_posts_author", ondelete="CASCADE")
+        >>> foreignkey(["a_id", "b_id"], ["A.id", "B.id"])
+    """
+    if isinstance(fields, str):
+        fields = [fields]
+    if isinstance(references, str):
+        references = [references]
+    return ForeignKeyConstraint(
+        fields,
+        references,
+        name=name,
+        ondelete=ondelete,
+        onupdate=onupdate,
+        deferrable=deferrable or None,
+        initially=initially if deferrable else None,
+        **kwargs,
+    )
