@@ -1,3 +1,9 @@
+## 1.6.0 (2026-03-18)
+
+### Feat
+
+- **metadata**: add foreignkey()    constraint builder
+
 ## 1.5.0 (2026-03-16)
 
 ### Feat
