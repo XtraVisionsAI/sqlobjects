@@ -1,3 +1,20 @@
+## 1.8.0 (2026-03-26)
+
+### Feat
+
+- **logging**: export SQLCallerFilter and get_caller_frame in public API
+- **logging**: emit SQL log records in QueryExecutor
+- **logging**: add SQLCallerFilter
+- **logging**: add get_caller_frame() helper
+
+### Fix
+
+- **logging**: eliminate isEnabledFor race and fix test name
+- **logging**: restore logger level in test_no_log_when_logger_disabled
+- **logging**: guard timing code with isEnabledFor check
+- **logging**: simplify SQLCallerFilter extra_skip_packages handling
+- **logging**: fix frame-skip edge cases and improve code quality
+
 ## 1.7.0 (2026-03-26)
 
 ### Feat
