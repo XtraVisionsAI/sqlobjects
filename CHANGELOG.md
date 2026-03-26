@@ -1,3 +1,21 @@
+## 1.9.0 (2026-03-27)
+
+### Feat
+
+- **logging**: wire ObjectLogger into QueryExecutor, zero-config caller rewriting
+- **logging**: replace SQLCallerFilter with ObjectLogger, remove SQLCallerFilter
+- **logging**: add ObjectLogger and _install_object_logger
+
+### Fix
+
+- **logging**: skip stdlib logging frames in _should_skip_frame, add end-to-end test
+- **logging**: use logging._lock context manager for Python 3.13 compatibility
+- **logging**: add _should_skip_frame tests and fix assertion quality
+
+### Refactor
+
+- **logging**: extract _should_skip_frame and add _find_user_frame
+
 ## 1.8.0 (2026-03-26)
 
 ### Feat
