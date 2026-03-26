@@ -120,17 +120,17 @@ class SQLCallerFilter(logging.Filter):
     ) -> None:
         super().__init__()
         self.max_frames = max_frames
-        self.extra_skip_packages = list(extra_skip_packages) if extra_skip_packages else []
+        self.extra_skip_packages: list[str] | None = list(extra_skip_packages) if extra_skip_packages else None
 
     def filter(self, record: logging.LogRecord) -> bool:
         caller = get_caller_frame(
-            extra_skip_packages=self.extra_skip_packages or None,
+            extra_skip_packages=self.extra_skip_packages,
             max_frames=self.max_frames,
         )
         record.caller = caller
 
         # Overwrite standard location fields from the first user frame
-        first = caller if isinstance(caller, str) else (caller[0] if caller else "<unknown>")
+        first = caller if isinstance(caller, str) else caller[0]
         self._overwrite_record_location(record, first)
 
         return True
