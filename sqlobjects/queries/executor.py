@@ -1,5 +1,7 @@
 import asyncio
 import gc
+import logging
+import time
 from collections.abc import AsyncGenerator
 from typing import Any, TypeVar, overload
 
@@ -11,6 +13,9 @@ from sqlalchemy import (
     text,
     update,
 )
+
+
+_sql_logger = logging.getLogger("sqlobjects.sql")
 
 
 _T = TypeVar("_T")
@@ -230,7 +235,31 @@ class QueryExecutor:
             else:  # exists
                 return False
 
+        # Compile SQL for logging only when the logger is active (avoids overhead)
+        if _sql_logger.isEnabledFor(logging.DEBUG):
+            try:
+                compiled = query.compile(
+                    dialect=session.bind.dialect,
+                    compile_kwargs={"literal_binds": False},
+                )
+                sql_str = str(compiled)
+                params = dict(compiled.params) if compiled.params else {}
+            except Exception:
+                sql_str = str(query)
+                params = {}
+        else:
+            sql_str = ""
+            params = {}
+
+        t0 = time.perf_counter()
         result = await session.execute(query)
+        duration_ms = (time.perf_counter() - t0) * 1000
+
+        if _sql_logger.isEnabledFor(logging.DEBUG):
+            _sql_logger.debug(
+                sql_str,
+                extra={"sql": sql_str, "params": params, "duration_ms": duration_ms},
+            )
 
         if query_type == "all":
             rows = result.fetchall()
