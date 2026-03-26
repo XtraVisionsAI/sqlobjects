@@ -14,8 +14,7 @@ from sqlalchemy import (
     update,
 )
 
-
-_sql_logger = logging.getLogger("sqlobjects.sql")
+from ..sql_logging import _sql_logger
 
 
 _T = TypeVar("_T")

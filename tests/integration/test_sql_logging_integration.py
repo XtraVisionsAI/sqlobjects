@@ -1,18 +1,21 @@
 # tests/integration/test_sql_logging_integration.py
-"""Integration tests: QueryExecutor emits SQL log records."""
+"""Integration tests: QueryExecutor emits SQL log records via ObjectLogger."""
 
 import logging
 
 import pytest
 
 from sqlobjects.session import ctx_session
-from sqlobjects.sql_logging import SQLCallerFilter
 from tests.conftest import User
 
 
 @pytest.fixture
 def sql_records(test_db):
-    """Capture log records from sqlobjects.sql logger."""
+    """Capture log records from sqlobjects.sql logger.
+
+    ObjectLogger.makeRecord() automatically rewrites caller fields,
+    so no SQLCallerFilter is needed — a plain handler is sufficient.
+    """
     records = []
 
     class Capture(logging.Handler):
@@ -20,14 +23,13 @@ def sql_records(test_db):
             records.append(record)
 
     handler = Capture()
-    handler.addFilter(SQLCallerFilter())
     sql_logger = logging.getLogger("sqlobjects.sql")
-    original_level = sql_logger.level  # save original level
+    original_level = sql_logger.level
     sql_logger.setLevel(logging.DEBUG)
     sql_logger.addHandler(handler)
     yield records
     sql_logger.removeHandler(handler)
-    sql_logger.setLevel(original_level)  # restore exactly
+    sql_logger.setLevel(original_level)
 
 
 @pytest.mark.asyncio
@@ -47,7 +49,7 @@ async def test_log_record_has_sql_field(sql_records, test_db):
 
     record = sql_records[0]
     assert hasattr(record, "sql")
-    assert "SELECT" in record.sql.upper()
+    assert "SELECT" in record.sql.upper()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -58,18 +60,17 @@ async def test_log_record_has_duration_ms(sql_records, test_db):
 
     record = sql_records[0]
     assert hasattr(record, "duration_ms")
-    assert isinstance(record.duration_ms, float)
-    assert record.duration_ms >= 0
+    assert isinstance(record.duration_ms, float)  # type: ignore[attr-defined]
+    assert record.duration_ms >= 0  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
 async def test_caller_points_to_user_code(sql_records, test_db):
-    """After SQLCallerFilter, record.filename points to user code, not executor."""
+    """ObjectLogger rewrites caller: record.filename points to user code, not executor."""
     async with ctx_session() as session:
         await User.objects.using(session).all()
 
     record = sql_records[0]
-    # executor.py is an internal sqlobjects file — filter should have replaced it
     assert "executor" not in record.filename
     assert "site-packages" not in record.pathname
 
@@ -86,7 +87,7 @@ async def test_no_log_when_logger_disabled(test_db):
     handler = Capture()
     sql_logger = logging.getLogger("sqlobjects.sql")
     original_level = sql_logger.level
-    sql_logger.setLevel(logging.WARNING)  # above DEBUG
+    sql_logger.setLevel(logging.WARNING)
     sql_logger.addHandler(handler)
 
     try:
