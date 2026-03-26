@@ -162,14 +162,16 @@ def test_find_user_frame_skips_sqlobjects_internals():
 
 
 def test_find_user_frame_extra_skip_packages():
-    """_find_user_frame respects extra_skip_packages module prefix."""
+    """_find_user_frame skips all frames matching extra_skip_packages prefix."""
     from sqlobjects.sql_logging import _find_user_frame
 
     result = _find_user_frame(extra_skip_packages=["tests.unit.test_sql_logging"])
-    # All test_sql_logging frames skipped, falls back to pytest internals or None
+    # The test module frames are skipped; result is None or an outer runner frame
     if result is not None:
         module = result.frame.f_globals.get("__name__", "")
-        assert not module.startswith("tests.unit.test_sql_logging")
+        assert not module.startswith("tests.unit.test_sql_logging"), (
+            f"Expected non-test-module frame, got module={module!r}"
+        )
 
 
 def test_find_user_frame_returns_none_when_no_user_frame():
@@ -187,4 +189,42 @@ def test_find_user_frame_returns_none_when_no_user_frame():
         ]
     )
     # May return None or a frame from a deeply nested runner — just confirm no crash
-    assert result is None or isinstance(result, inspect.FrameInfo)
+    assert result is None
+
+
+def test_should_skip_frame_skips_site_packages():
+    """_should_skip_frame returns True for site-packages paths."""
+    from sqlobjects.sql_logging import _should_skip_frame
+
+    assert (
+        _should_skip_frame(
+            filepath="/usr/lib/python3.12/site-packages/sqlalchemy/orm.py",
+            module="sqlalchemy.orm",
+            extra_skip_prefixes=(),
+        )
+        is True
+    )
+
+
+def test_should_skip_frame_skips_internal_modules():
+    """_should_skip_frame returns True for sqlobjects/sqlalchemy module names."""
+    from sqlobjects.sql_logging import _should_skip_frame
+
+    assert _should_skip_frame("/app/sqlobjects/queries/executor.py", "sqlobjects.queries.executor", ()) is True
+    assert _should_skip_frame("/app/sqlobjects/__init__.py", "sqlobjects", ()) is True
+    assert _should_skip_frame("/app/sqlalchemy/engine.py", "sqlalchemy", ()) is True
+
+
+def test_should_skip_frame_skips_extra_prefixes():
+    """_should_skip_frame returns True for caller-supplied extra prefixes."""
+    from sqlobjects.sql_logging import _should_skip_frame
+
+    assert _should_skip_frame("/app/myapp/middleware.py", "myapp.middleware", ("myapp.middleware",)) is True
+    assert _should_skip_frame("/app/myapp/views.py", "myapp.views", ("myapp.middleware",)) is False
+
+
+def test_should_skip_frame_passes_user_code():
+    """_should_skip_frame returns False for ordinary user-code frames."""
+    from sqlobjects.sql_logging import _should_skip_frame
+
+    assert _should_skip_frame("/app/myapp/services/user_service.py", "myapp.services.user_service", ()) is False

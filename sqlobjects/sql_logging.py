@@ -44,9 +44,11 @@ def _should_skip_frame(
     """
     if "site-packages" in filepath:
         return True
+    if filepath.startswith("<"):
+        return True
     if module in _INTERNAL_MODULES or module.startswith(_INTERNAL_PREFIXES):
         return True
-    if os.path.abspath(filepath) == _THIS_FILE:
+    if filepath == _THIS_FILE or os.path.abspath(filepath) == _THIS_FILE:
         return True
     if extra_skip_prefixes and module.startswith(extra_skip_prefixes):
         return True
