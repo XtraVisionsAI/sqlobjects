@@ -1,3 +1,13 @@
+## 1.7.0 (2026-03-26)
+
+### Feat
+
+- **metadata**: add foreignkey() constraint builder
+
+### Fix
+
+- **raw**: allow SA expressions as arguments in raw() methods
+
 ## 1.6.0 (2026-03-18)
 
 ### Feat
