@@ -228,3 +228,98 @@ def test_should_skip_frame_passes_user_code():
     from sqlobjects.sql_logging import _should_skip_frame
 
     assert _should_skip_frame("/app/myapp/services/user_service.py", "myapp.services.user_service", ()) is False
+
+
+def test_object_logger_makerecord_overwrites_caller_fields():
+    """ObjectLogger.makeRecord() sets filename/funcName/lineno to user-code location."""
+    from sqlobjects.sql_logging import ObjectLogger
+
+    logger = ObjectLogger("test.object_logger")
+    record = logger.makeRecord(
+        name="test.object_logger",
+        level=logging.DEBUG,
+        fn="executor.py",  # should be overwritten
+        lno=99,  # should be overwritten
+        msg="test",
+        args=(),
+        exc_info=None,
+    )
+    assert "executor" not in record.filename
+    assert "test_sql_logging" in record.filename
+    assert record.lineno != 99
+
+
+def test_object_logger_makerecord_no_crash_when_no_user_frame():
+    """ObjectLogger.makeRecord() falls back gracefully when no user frame found."""
+    from sqlobjects.sql_logging import ObjectLogger
+
+    logger = ObjectLogger("test.object_logger_fallback")
+    logger.extra_skip_packages = ["tests", "_pytest", "pluggy"]
+    record = logger.makeRecord(
+        name="test.object_logger_fallback",
+        level=logging.DEBUG,
+        fn="original.py",
+        lno=42,
+        msg="test",
+        args=(),
+        exc_info=None,
+    )
+    # When no frame found, original values are preserved
+    assert isinstance(record.filename, str)
+    assert isinstance(record.lineno, int)
+
+
+def test_object_logger_extra_skip_packages_is_threaded_through():
+    """ObjectLogger respects extra_skip_packages set at construction."""
+    from sqlobjects.sql_logging import ObjectLogger
+
+    logger = ObjectLogger(
+        "test.object_logger_skip",
+        extra_skip_packages=["tests.unit.test_sql_logging"],
+    )
+    record = logger.makeRecord(
+        name="test.object_logger_skip",
+        level=logging.DEBUG,
+        fn="executor.py",
+        lno=99,
+        msg="test",
+        args=(),
+        exc_info=None,
+    )
+    # test_sql_logging frames skipped; caller should be some outer frame
+    assert "test_sql_logging" not in record.filename
+
+
+def test_install_object_logger_returns_object_logger_instance():
+    """_install_object_logger returns an ObjectLogger registered in loggerDict."""
+    import logging as stdlib_logging
+
+    from sqlobjects.sql_logging import ObjectLogger, _install_object_logger
+
+    name = "test.install_object_logger_unique_xyz"
+    result = _install_object_logger(name)
+
+    assert isinstance(result, ObjectLogger)
+    assert stdlib_logging.root.manager.loggerDict.get(name) is result
+
+    # Cleanup
+    del stdlib_logging.root.manager.loggerDict[name]
+
+
+def test_install_object_logger_migrates_existing_handlers():
+    """_install_object_logger migrates handlers from a pre-existing Logger."""
+    import logging as stdlib_logging
+
+    from sqlobjects.sql_logging import _install_object_logger
+
+    name = "test.install_migrate_handlers_xyz"
+    existing = stdlib_logging.getLogger(name)
+    handler = stdlib_logging.StreamHandler()
+    existing.addHandler(handler)
+
+    result = _install_object_logger(name)
+
+    assert handler in result.handlers
+
+    # Cleanup
+    del stdlib_logging.root.manager.loggerDict[name]

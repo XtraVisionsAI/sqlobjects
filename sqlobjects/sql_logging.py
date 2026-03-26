@@ -15,9 +15,11 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+from collections.abc import Mapping
+from typing import Any
 
 
-__all__ = ["get_caller_frame", "SQLCallerFilter"]
+__all__ = ["get_caller_frame", "SQLCallerFilter", "ObjectLogger"]
 
 # Exact module names that are always considered internal
 _INTERNAL_MODULES = {"sqlobjects", "sqlalchemy"}
@@ -179,3 +181,87 @@ class SQLCallerFilter(logging.Filter):
             record.lineno = int(lineno_str)
         except (ValueError, AttributeError):
             pass  # Keep original fields if parsing fails
+
+
+class ObjectLogger(logging.Logger):
+    """logging.Logger subclass that rewrites LogRecord caller fields to user-code location.
+
+    Overrides makeRecord() to replace the standard caller fields
+    (filename, funcName, lineno, pathname) with the first user-code frame
+    found by _find_user_frame(). This means any handler attached to this logger
+    — including loguru InterceptHandlers — will display the real call site
+    without any additional Filter configuration.
+
+    Args:
+        name: Logger name (passed to logging.Logger).
+        level: Initial log level (default NOTSET).
+        extra_skip_packages: Additional module name prefixes to skip when
+            searching for the user-code frame (e.g. ["myapp.middleware"]).
+    """
+
+    def __init__(
+        self,
+        name: str,
+        level: int = logging.NOTSET,
+        extra_skip_packages: list[str] | None = None,
+    ) -> None:
+        super().__init__(name, level)
+        self.extra_skip_packages = extra_skip_packages
+
+    def makeRecord(  # noqa: N802
+        self,
+        name: str,
+        level: int,
+        fn: str,
+        lno: int,
+        msg: object,
+        args: Any,
+        exc_info: Any,
+        func: str | None = None,
+        extra: Mapping[str, object] | None = None,
+        sinfo: str | None = None,
+    ) -> logging.LogRecord:
+        record = super().makeRecord(name, level, fn, lno, msg, args, exc_info, func, extra, sinfo)
+        frame_info = _find_user_frame(self.extra_skip_packages)
+        if frame_info:
+            record.pathname = os.path.abspath(frame_info.filename)
+            record.filename = os.path.basename(frame_info.filename)
+            record.module = os.path.splitext(record.filename)[0]
+            record.funcName = frame_info.function
+            record.lineno = frame_info.lineno
+        return record
+
+
+def _install_object_logger(name: str) -> ObjectLogger:
+    """Create an ObjectLogger and register it in the logging system.
+
+    Directly writes into logging.root.manager.loggerDict so that
+    logging.getLogger(name) returns this ObjectLogger instance.
+    Migrates handlers, level, and propagate from any pre-existing Logger
+    (but not from PlaceHolder sentinels, which are logging internals).
+
+    Thread-safe: acquires the logging module lock during the operation.
+
+    Known limitation: code that obtained a reference via getLogger(name)
+    *before* this function runs will still hold the old Logger instance.
+    """
+    logging._acquireLock()  # type: ignore[attr-defined]  # noqa: SLF001
+    try:
+        existing = logging.root.manager.loggerDict.get(name)
+        logger = ObjectLogger(name)
+        logger.parent = logging.root
+        logger.propagate = True
+        if isinstance(existing, logging.Logger):
+            for handler in existing.handlers:
+                logger.addHandler(handler)
+            if existing.level != logging.NOTSET:
+                logger.setLevel(existing.level)
+            logger.propagate = existing.propagate
+        logging.root.manager.loggerDict[name] = logger
+    finally:
+        logging._releaseLock()  # type: ignore[attr-defined]  # noqa: SLF001
+    return logger
+
+
+# Module-level instance — imported by executor.py and usable by callers
+_sql_logger: ObjectLogger = _install_object_logger("sqlobjects.sql")
