@@ -126,12 +126,13 @@ def test_should_skip_frame_skips_site_packages():
 
 
 def test_should_skip_frame_skips_internal_modules():
-    """_should_skip_frame returns True for sqlobjects/sqlalchemy module names."""
+    """_should_skip_frame returns True for sqlobjects/sqlalchemy/logging module names."""
     from sqlobjects.sql_logging import _should_skip_frame
 
     assert _should_skip_frame("/app/sqlobjects/queries/executor.py", "sqlobjects.queries.executor", ()) is True
     assert _should_skip_frame("/app/sqlobjects/__init__.py", "sqlobjects", ()) is True
     assert _should_skip_frame("/app/sqlalchemy/engine.py", "sqlalchemy", ()) is True
+    assert _should_skip_frame("/usr/lib/python3.12/logging/__init__.py", "logging", ()) is True
 
 
 def test_should_skip_frame_skips_extra_prefixes():
@@ -242,3 +243,26 @@ def test_install_object_logger_migrates_existing_handlers():
 
     # Cleanup
     del stdlib_logging.root.manager.loggerDict[name]
+
+
+def test_object_logger_debug_call_rewrites_caller():
+    """ObjectLogger rewrites caller fields when called via .debug(), not just makeRecord."""
+    import logging as stdlib_logging
+
+    from sqlobjects.sql_logging import ObjectLogger
+
+    logger = ObjectLogger("test.via_debug")
+    logger.setLevel(stdlib_logging.DEBUG)
+    records = []
+
+    class Capture(stdlib_logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    logger.addHandler(Capture())
+    logger.debug("test message")  # full call path: debug → _log → makeRecord
+
+    assert len(records) == 1
+    r = records[0]
+    assert "test_sql_logging" in r.filename
+    assert r.funcName == "test_object_logger_debug_call_rewrites_caller"

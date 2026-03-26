@@ -22,7 +22,7 @@ from typing import Any
 __all__ = ["get_caller_frame", "ObjectLogger"]
 
 # Exact module names that are always considered internal
-_INTERNAL_MODULES = {"sqlobjects", "sqlalchemy"}
+_INTERNAL_MODULES = {"sqlobjects", "sqlalchemy", "logging"}
 
 # Module name prefixes that are always considered internal
 _INTERNAL_PREFIXES = ("sqlobjects.", "sqlalchemy.")
