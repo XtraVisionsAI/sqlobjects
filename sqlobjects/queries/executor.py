@@ -236,6 +236,9 @@ class QueryExecutor:
                 return False
 
         # Compile SQL for logging only when the logger is active (avoids overhead)
+        sql_str = ""
+        params: dict = {}
+        t0 = 0.0
         if _sql_logger.isEnabledFor(logging.DEBUG):
             try:
                 compiled = query.compile(
@@ -247,15 +250,12 @@ class QueryExecutor:
             except Exception:
                 sql_str = str(query)
                 params = {}
-        else:
-            sql_str = ""
-            params = {}
+            t0 = time.perf_counter()
 
-        t0 = time.perf_counter()
         result = await session.execute(query)
-        duration_ms = (time.perf_counter() - t0) * 1000
 
         if _sql_logger.isEnabledFor(logging.DEBUG):
+            duration_ms = (time.perf_counter() - t0) * 1000
             _sql_logger.debug(
                 sql_str,
                 extra={"sql": sql_str, "params": params, "duration_ms": duration_ms},
