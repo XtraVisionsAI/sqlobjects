@@ -85,6 +85,7 @@ async def test_no_log_when_logger_disabled(test_db):
 
     handler = Capture()
     sql_logger = logging.getLogger("sqlobjects.sql")
+    original_level = sql_logger.level
     sql_logger.setLevel(logging.WARNING)  # above DEBUG
     sql_logger.addHandler(handler)
 
@@ -94,3 +95,4 @@ async def test_no_log_when_logger_disabled(test_db):
         assert len(records) == 0
     finally:
         sql_logger.removeHandler(handler)
+        sql_logger.setLevel(original_level)
