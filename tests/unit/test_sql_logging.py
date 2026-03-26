@@ -83,8 +83,8 @@ def test_sql_caller_filter_overwrites_caller_fields():
     assert record.lineno != 99
 
 
-def test_sql_caller_filter_injects_duration_ms():
-    """SQLCallerFilter preserves duration_ms on the record."""
+def test_sql_caller_filter_preserves_extra_fields():
+    """filter() does not remove or overwrite pre-existing extra fields on the record."""
     from sqlobjects.sql_logging import SQLCallerFilter
 
     f = SQLCallerFilter()
@@ -93,6 +93,7 @@ def test_sql_caller_filter_injects_duration_ms():
 
     assert hasattr(record, "duration_ms")
     assert record.duration_ms == 1.5  # type: ignore[attr-defined]
+    assert record.sql == "SELECT 1"  # type: ignore[attr-defined]
 
 
 def test_sql_caller_filter_max_frames_one_sets_string_caller():

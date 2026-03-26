@@ -236,10 +236,11 @@ class QueryExecutor:
                 return False
 
         # Compile SQL for logging only when the logger is active (avoids overhead)
+        _logging_active = _sql_logger.isEnabledFor(logging.DEBUG)
         sql_str = ""
         params: dict = {}
         t0 = 0.0
-        if _sql_logger.isEnabledFor(logging.DEBUG):
+        if _logging_active:
             try:
                 compiled = query.compile(
                     dialect=session.bind.dialect,
@@ -254,7 +255,7 @@ class QueryExecutor:
 
         result = await session.execute(query)
 
-        if _sql_logger.isEnabledFor(logging.DEBUG):
+        if _logging_active:
             duration_ms = (time.perf_counter() - t0) * 1000
             _sql_logger.debug(
                 sql_str,
