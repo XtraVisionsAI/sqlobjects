@@ -29,6 +29,46 @@ _INTERNAL_PREFIXES = ("sqlobjects.", "sqlalchemy.")
 _THIS_FILE = os.path.abspath(__file__)
 
 
+def _should_skip_frame(
+    filepath: str,
+    module: str,
+    extra_skip_prefixes: tuple[str, ...],
+) -> bool:
+    """Return True if this frame should be skipped (library/internal frame).
+
+    Args:
+        filepath: frame_info.filename
+        module: frame.f_globals.get("__name__", "")
+        extra_skip_prefixes: tuple of module name prefixes to skip in addition
+            to the built-in sqlobjects/sqlalchemy prefixes.
+    """
+    if "site-packages" in filepath:
+        return True
+    if module in _INTERNAL_MODULES or module.startswith(_INTERNAL_PREFIXES):
+        return True
+    if os.path.abspath(filepath) == _THIS_FILE:
+        return True
+    if extra_skip_prefixes and module.startswith(extra_skip_prefixes):
+        return True
+    return False
+
+
+def _find_user_frame(
+    extra_skip_packages: list[str] | None = None,
+) -> inspect.FrameInfo | None:
+    """Return the first user-code FrameInfo, skipping library frames.
+
+    Applies the same skip rules as get_caller_frame() but returns the raw
+    FrameInfo instead of a formatted string. Returns None if no frame found.
+    """
+    extra_skip_prefixes: tuple[str, ...] = tuple(extra_skip_packages) if extra_skip_packages else ()
+    for frame_info in inspect.stack():
+        module = frame_info.frame.f_globals.get("__name__", "")
+        if not _should_skip_frame(frame_info.filename, module, extra_skip_prefixes):
+            return frame_info
+    return None
+
+
 def get_caller_frame(
     extra_skip_packages: list[str] | None = None,
     max_frames: int = 1,
@@ -50,37 +90,20 @@ def get_caller_frame(
         Frame string "path/to/file.py:lineno in funcname", or a list of such
         strings when max_frames > 1.
     """
-    skip_prefixes = _INTERNAL_PREFIXES
-    if extra_skip_packages:
-        skip_prefixes = skip_prefixes + tuple(extra_skip_packages)
-
+    extra_skip_prefixes: tuple[str, ...] = tuple(extra_skip_packages) if extra_skip_packages else ()
     frames: list[str] = []
 
     for frame_info in inspect.stack():
-        filepath = frame_info.filename
         module = frame_info.frame.f_globals.get("__name__", "")
-
-        # Skip site-packages frames (pip-installed third-party libs)
-        if "site-packages" in filepath:
+        if _should_skip_frame(frame_info.filename, module, extra_skip_prefixes):
             continue
-
-        # Skip sqlobjects/sqlalchemy frames (editable install)
-        if module in _INTERNAL_MODULES or module.startswith(skip_prefixes):
-            continue
-
-        # Skip this helper file itself
-        if os.path.abspath(filepath) == _THIS_FILE:
-            continue
-
-        rel_path = _relative_path(filepath)
+        rel_path = _relative_path(frame_info.filename)
         frames.append(f"{rel_path}:{frame_info.lineno} in {frame_info.function}")
-
         if len(frames) >= max_frames:
             break
 
     if not frames:
         return "<unknown>" if max_frames == 1 else ["<unknown>"]
-
     return frames[0] if max_frames == 1 else frames
 
 

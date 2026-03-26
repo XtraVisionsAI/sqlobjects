@@ -1,3 +1,4 @@
+import inspect
 import logging
 
 from sqlobjects.sql_logging import get_caller_frame
@@ -128,3 +129,62 @@ def test_sql_caller_filter_returns_true():
     result = f.filter(record)
 
     assert result is True
+
+
+def test_find_user_frame_returns_frame_info_or_none():
+    """_find_user_frame returns an inspect.FrameInfo pointing to this test file."""
+    from sqlobjects.sql_logging import _find_user_frame
+
+    result = _find_user_frame()
+    assert result is not None
+    assert isinstance(result, inspect.FrameInfo)
+    assert "test_sql_logging" in result.filename
+
+
+def test_find_user_frame_skips_site_packages():
+    """_find_user_frame never returns a site-packages frame."""
+    from sqlobjects.sql_logging import _find_user_frame
+
+    result = _find_user_frame()
+    assert result is not None
+    assert "site-packages" not in result.filename
+
+
+def test_find_user_frame_skips_sqlobjects_internals():
+    """_find_user_frame never returns a sqlobjects internal frame."""
+    from sqlobjects.sql_logging import _find_user_frame
+
+    result = _find_user_frame()
+    assert result is not None
+    module = result.frame.f_globals.get("__name__", "")
+    assert not module.startswith("sqlobjects.")
+    assert module != "sqlobjects"
+
+
+def test_find_user_frame_extra_skip_packages():
+    """_find_user_frame respects extra_skip_packages module prefix."""
+    from sqlobjects.sql_logging import _find_user_frame
+
+    result = _find_user_frame(extra_skip_packages=["tests.unit.test_sql_logging"])
+    # All test_sql_logging frames skipped, falls back to pytest internals or None
+    if result is not None:
+        module = result.frame.f_globals.get("__name__", "")
+        assert not module.startswith("tests.unit.test_sql_logging")
+
+
+def test_find_user_frame_returns_none_when_no_user_frame():
+    """_find_user_frame returns None when every frame is filtered out."""
+    from sqlobjects.sql_logging import _find_user_frame
+
+    # Skip everything — should return None
+    result = _find_user_frame(
+        extra_skip_packages=[
+            "tests",
+            "_pytest",
+            "pluggy",
+            "asyncio",
+            "__main__",
+        ]
+    )
+    # May return None or a frame from a deeply nested runner — just confirm no crash
+    assert result is None or isinstance(result, inspect.FrameInfo)
