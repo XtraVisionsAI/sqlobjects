@@ -1,7 +1,7 @@
 """SQL logging utilities for sqlobjects.
 
-Provides SQLCallerFilter and get_caller_frame() to surface user-code caller
-information in SQL log records, compatible with standard logging and loguru.
+Provides get_caller_frame() to surface user-code caller information in SQL log
+records, compatible with standard logging and loguru.
 
 Filter strategy:
 - Skips frames from site-packages (covers pip-installed sqlobjects/sqlalchemy)
@@ -16,8 +16,16 @@ import inspect
 import os
 
 
+__all__ = ["get_caller_frame"]
+
+# Exact module names that are always considered internal
+_INTERNAL_MODULES = {"sqlobjects", "sqlalchemy"}
+
 # Module name prefixes that are always considered internal
-_INTERNAL_PREFIXES = ("sqlobjects.", "sqlalchemy.", "sqlobjects", "sqlalchemy")
+_INTERNAL_PREFIXES = ("sqlobjects.", "sqlalchemy.")
+
+# Absolute path of this file, used to skip itself reliably
+_THIS_FILE = os.path.abspath(__file__)
 
 
 def get_caller_frame(
@@ -56,11 +64,11 @@ def get_caller_frame(
             continue
 
         # Skip sqlobjects/sqlalchemy frames (editable install)
-        if module.startswith(skip_prefixes):
+        if module in _INTERNAL_MODULES or module.startswith(skip_prefixes):
             continue
 
         # Skip this helper file itself
-        if os.path.basename(filepath) == "sql_logging.py":
+        if os.path.abspath(filepath) == _THIS_FILE:
             continue
 
         rel_path = _relative_path(filepath)
