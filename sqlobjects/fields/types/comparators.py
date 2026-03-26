@@ -50,6 +50,12 @@ class ComparatorMixin:
 
     def raw(self, sql: str, *args, **kwargs) -> FunctionExpression:
         from sqlalchemy import literal
+        from sqlalchemy.sql.elements import ColumnElement
+
+        def _to_sql_arg(arg):
+            if isinstance(arg, (ColumnElement, FunctionExpression)):
+                return arg
+            return literal(arg)
 
         if ... in args:
             all_args = []
@@ -57,9 +63,9 @@ class ComparatorMixin:
                 if arg is ...:
                     all_args.append(self)
                 else:
-                    all_args.append(literal(arg))
+                    all_args.append(_to_sql_arg(arg))
         else:
-            all_args = [self] + [literal(arg) for arg in args]
+            all_args = [self] + [_to_sql_arg(arg) for arg in args]
         raw_func = getattr(func, sql)
         return FunctionExpression(raw_func(*all_args, **kwargs))
 

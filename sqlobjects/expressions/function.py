@@ -183,7 +183,9 @@ class FunctionExpression:
 
         Args:
             sql: Raw SQL function name or expression
-            *args: Arguments to pass to the function. Use ... (Ellipsis) as placeholder for current expression
+            *args: Arguments to pass to the function. Use ... (Ellipsis) as placeholder for current expression.
+                   SQLAlchemy expressions (ColumnElement, FunctionExpression) are passed through as-is;
+                   plain Python values are wrapped with literal().
             **kwargs: Additional keyword arguments passed to the function
 
         Returns:
@@ -198,11 +200,16 @@ class FunctionExpression:
             User.age.avg().raw('CUSTOM_FUNCTION', 'param1', ..., 'param2')
             # Generates: CUSTOM_FUNCTION('param1', avg(age), 'param2')
 
-            # Only current expression
-            User.age.raw('CUSTOM_FUNCTION')
-            # Generates: CUSTOM_FUNCTION(age)
+            # Passing another SA expression as argument
+            User.name.raw('CUSTOM_FUNCTION', other_func_expr)
+            # Generates: CUSTOM_FUNCTION(name, other_func_expr)
         """
         from sqlalchemy import literal
+
+        def _to_sql_arg(arg):
+            if isinstance(arg, (ColumnElement, FunctionExpression)):
+                return arg
+            return literal(arg)
 
         # Check if ... (Ellipsis) is used as placeholder
         if ... in args:
@@ -212,12 +219,10 @@ class FunctionExpression:
                 if arg is ...:
                     all_args.append(self.expression)
                 else:
-                    all_args.append(literal(arg))
+                    all_args.append(_to_sql_arg(arg))
         else:
             # Default behavior: current expression as first argument
-            all_args = [self.expression]
-            for arg in args:
-                all_args.append(literal(arg))
+            all_args = [self.expression] + [_to_sql_arg(arg) for arg in args]
 
         # Use func to create the raw function call
         raw_func = getattr(_sa_func, sql)
@@ -424,6 +429,38 @@ class _FuncWrapper:
         def last_value(self, col: Any) -> LastValueFunction: ...
 
         def nth_value(self, col: Any, n: int) -> NthValueFunction: ...
+
+        def raw(self, sql: str, *args) -> FunctionExpression: ...
+
+    def raw(self, sql: str, *args) -> "FunctionExpression":
+        """Call an arbitrary SQL function by name.
+
+        Unlike col.raw() / FunctionExpression.raw() which insert the current
+        expression as the first argument, this standalone form takes the function
+        name and all arguments explicitly.
+
+        Args:
+            sql: SQL function name (e.g. "ts_rank", "to_tsvector")
+            *args: Arguments passed to the function. SQLAlchemy expressions
+                   (ColumnElement, FunctionExpression) are used as-is; plain
+                   Python values are wrapped with literal().
+
+        Examples:
+            func.raw("ts_rank", DocumentIndexes.content_vector, query_vec)
+            # → ts_rank(document_indexes.content_vector, <query_vec>)
+
+            func.raw("to_tsvector", "'simple'::regconfig", "some text")
+            # → to_tsvector('simple'::regconfig, 'some text')
+        """
+        from sqlalchemy import literal
+
+        def _to_sql_arg(arg):
+            if isinstance(arg, (ColumnElement, FunctionExpression)):
+                return arg
+            return literal(arg)
+
+        sa_func = getattr(_sa_func, sql)
+        return FunctionExpression(sa_func(*[_to_sql_arg(a) for a in args]))
 
     def __getattr__(self, name: str) -> Any:
         """Delegate to SQLAlchemy func for all other functions."""
