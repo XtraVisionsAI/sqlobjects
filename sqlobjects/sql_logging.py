@@ -245,8 +245,7 @@ def _install_object_logger(name: str) -> ObjectLogger:
     Known limitation: code that obtained a reference via getLogger(name)
     *before* this function runs will still hold the old Logger instance.
     """
-    logging._acquireLock()  # type: ignore[attr-defined]  # noqa: SLF001
-    try:
+    with logging._lock:  # type: ignore[attr-defined]  # noqa: SLF001
         existing = logging.root.manager.loggerDict.get(name)
         logger = ObjectLogger(name)
         logger.parent = logging.root
@@ -258,8 +257,6 @@ def _install_object_logger(name: str) -> ObjectLogger:
                 logger.setLevel(existing.level)
             logger.propagate = existing.propagate
         logging.root.manager.loggerDict[name] = logger
-    finally:
-        logging._releaseLock()  # type: ignore[attr-defined]  # noqa: SLF001
     return logger
 
 
