@@ -16,7 +16,7 @@ from .objects import (
     TransactionMode,
 )
 from .queryset import Q, QuerySet
-from .sql_logging import SQLCallerFilter, get_caller_frame
+from .sql_logging import ObjectLogger, get_caller_frame
 
 
 __version__ = "0.3.0"
@@ -43,6 +43,6 @@ __all__ = [
     "ErrorHandling",
     "ConflictResolution",
     # SQL logging
-    "SQLCallerFilter",
+    "ObjectLogger",
     "get_caller_frame",
 ]
