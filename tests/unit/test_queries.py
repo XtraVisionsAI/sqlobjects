@@ -62,6 +62,41 @@ class TestQueryBuilding:
         qs = QueryTestUser.objects.order_by("age", "-username")
         assert isinstance(qs, QuerySet)
 
+    def test_order_by_replaces_previous_ordering(self):
+        """Test that chained order_by replaces previous ordering instead of appending."""
+        qs1 = QueryTestUser.objects.order_by("username")
+        assert qs1._builder.ordering == ["username"]
+
+        # Second order_by should replace, not append
+        qs2 = qs1.order_by("-age")
+        assert qs2._builder.ordering == ["-age"]
+
+        # Original should be unchanged (immutability)
+        assert qs1._builder.ordering == ["username"]
+
+    def test_order_by_replaces_same_field_different_direction(self):
+        """Test order_by('sent_at').order_by('-sent_at') produces only one ordering."""
+        qs = QueryTestUser.objects.order_by("age").order_by("-age")
+        assert qs._builder.ordering == ["-age"]
+
+    def test_order_by_replaces_default_ordering(self):
+        """Test that explicit order_by replaces default ordering from ModelConfig."""
+
+        class OrderedUser(ObjectModel):
+            id: Column[int] = identity()
+            username: Column[str] = StringColumn(length=50)
+            age: Column[int] = IntegerColumn(nullable=True)
+
+        # Simulate default ordering set by ModelConfig
+        OrderedUser._default_ordering = ["username"]  # type: ignore
+
+        qs = OrderedUser.objects.filter()  # default ordering applied
+        assert qs._builder.ordering == ["username"]
+
+        # Explicit order_by should replace default ordering
+        qs2 = qs.order_by("-age")
+        assert qs2._builder.ordering == ["-age"]
+
     def test_pagination_building(self):
         """Test pagination query building"""
         # Limit only

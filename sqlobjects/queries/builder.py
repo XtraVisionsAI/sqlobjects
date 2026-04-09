@@ -70,16 +70,16 @@ class QueryBuilder:
         return new_builder
 
     def add_ordering(self, *fields):
-        """Add ORDER BY fields to the query.
+        """Set ORDER BY fields for the query, replacing any existing ordering.
 
         Args:
             *fields: Field names or SQLAlchemy ordering expressions
 
         Returns:
-            New QueryBuilder instance with added ordering
+            New QueryBuilder instance with replaced ordering
         """
         new_builder = self.copy()
-        new_builder.ordering.extend(fields)
+        new_builder.ordering = list(fields)
         return new_builder
 
     def add_limit(self, count: int):
