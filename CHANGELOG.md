@@ -1,3 +1,9 @@
+## 1.9.1 (2026-04-09)
+
+### Fix
+
+- **query**: order_by uses replace semantics instead of append
+
 ## 1.9.0 (2026-03-27)
 
 ### Feat
