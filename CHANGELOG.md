@@ -1,3 +1,13 @@
+## 1.10.0 (2026-07-24)
+
+### Feat
+
+- **model**: add public get_dirty_fields() accessor on BaseMixin
+
+### Fix
+
+- **build**: sync __version__ with pyproject and auto-update via cz version_files
+
 ## 1.9.1 (2026-04-09)
 
 ### Fix
