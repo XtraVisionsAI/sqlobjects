@@ -136,6 +136,14 @@ class BaseMixin:
         if not hasattr(self, "_state_manager"):
             self._state_manager = _StateManager()
 
+    def get_dirty_fields(self) -> set[str]:
+        """Get fields modified since the last save or database load.
+
+        Returns:
+            Set of field names with unsaved changes
+        """
+        return self._state_manager.get_dirty_fields().copy()
+
     @classmethod
     def get_table(cls) -> Table:
         """Get SQLAlchemy Core Table definition.

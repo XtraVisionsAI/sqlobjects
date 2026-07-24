@@ -128,6 +128,24 @@ class TestInstanceCreation:
         assert "name" in dirty_fields
         assert "age" not in dirty_fields
 
+    def test_get_dirty_fields_public_api(self):
+        """Test public get_dirty_fields() accessor"""
+        user = TestUser(name="Original", age=25)
+
+        dirty_fields = user.get_dirty_fields()
+        assert "name" in dirty_fields
+        assert "age" in dirty_fields
+
+        # Returned set is a copy: mutating it must not affect internal state
+        dirty_fields.clear()
+        assert "name" in user.get_dirty_fields()
+
+        user._state_manager.clear_dirty_fields()
+        assert user.get_dirty_fields() == set()
+
+        user.name = "Modified"
+        assert user.get_dirty_fields() == {"name"}
+
 
 class TestModelOperations:
     """Test model operations and smart detection"""
