@@ -61,7 +61,7 @@ await User.objects.bulk_create(
 # Standard update (medium performance)
 affected = await User.objects.filter(
     User.is_active == False
-).update(values={"status": "inactive"})
+).update(status="inactive")
 
 # True bulk update (10-100x faster for large datasets)
 mappings = [
@@ -230,10 +230,9 @@ posts = await Post.objects.join(active_users, Post.author_id == active_users.c.i
 async for user in User.objects.filter(User.is_active == True).iterator():
     await process_user(user)
 
-# Custom chunk size and memory cleanup
+# Custom chunk size
 async for user in User.objects.iterator(
-    chunk_size=1000,
-    memory_cleanup_interval=10  # Cleanup every 10 chunks
+    chunk_size=1000
 ):
     await process_user(user)
 
@@ -367,12 +366,14 @@ async def check_database_health():
 ### Query Analysis
 
 ```python
-# Analyze query performance
-explain_result = await User.objects.filter(User.age >= 18).explain(analyze=True)
-print(explain_result)
+# Analyze query performance. A terminal query expression (e.g. from .all())
+# exposes an awaitable explain() that returns the plan as a string. It accepts
+# analyze and verbose flags; there is no JSON/output= option.
+plan = await User.objects.filter(User.age >= 18).all().explain(analyze=True)
+print(plan)
 
-# JSON format for programmatic analysis
-explain_json = await User.objects.filter(User.age >= 18).explain(output="json")
+# Verbose plan with more detail
+plan = await User.objects.filter(User.age >= 18).all().explain(analyze=True, verbose=True)
 
 # Identify slow queries
 import time

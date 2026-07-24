@@ -762,7 +762,7 @@ class QuerySet(Generic[T]):
             hierarchy = base.union_all(recursive_part)
             all_employees = await Employee.objects.with_cte(
                 hierarchy
-            ).select_from(hierarchy).all()
+            ).all()
         """
         return CTEExpression(self, name, recursive)
 

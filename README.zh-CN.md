@@ -19,6 +19,8 @@ ORM API 与 SQLAlchemy Core 的性能和灵活性相结合。
 - **📊 高性能** - 基于 SQLAlchemy Core 实现最佳性能
 - **🔄 智能操作** - 自动 CREATE/UPDATE 检测和批量操作
 - **🎣 生命周期钩子** - 全面的数据库操作信号系统
+- **🌊 级联操作** - 数据库级与 ORM 级的级联删除/更新，并支持自动检测
+- **📝 SQL 日志** - 零配置的 `sqlobjects.sql` 日志器，自动将调用位置重写为用户代码
 - **🗄️ 多数据库支持** - 无缝的多数据库配置和路由
 
 ## 🚀 快速开始
@@ -60,7 +62,7 @@ active_users = await User.objects.filter(
 ).order_by("-age").limit(10).all()
 
 # 使用 Q 对象的复杂查询
-from sqlobjects.queries import Q
+from sqlobjects import Q
 
 users = await User.objects.filter(
     Q(User.age >= 18) & (Q(User.username.like("%admin%")) | Q(User.is_active == True))
@@ -351,9 +353,12 @@ uv run pytest
 
 查看我们的 [TODO.md](TODO.md) 了解计划功能：
 
-- **v2.0**: 数据库健康检查、窗口函数、高级批量操作
-- **v2.1**: 高级字段优化、查询性能工具
-- **v2.2+**: CTE 支持、高级 SQL 函数
+- **数据库管理**：连接健康检查、动态切换默认数据库、连接池监控
+- **高级 SQL**：更多聚合函数（数组 / JSON 聚合）
+- **查询优化**：索引建议与慢查询分析工具
+- **数据迁移**：基于模型差异的迁移生成与分批数据迁移工具
+
+已实现：窗口函数、CTE（含递归）、`EXPLAIN` 查询分析、级联操作、SQL 日志以及高性能批量操作。
 
 ## 📄 许可证
 

@@ -19,6 +19,8 @@ loading. SQLObjects combines the familiar Django ORM API with the performance an
 - **📊 High performance** - Built on SQLAlchemy Core for optimal performance
 - **🔄 Smart operations** - Automatic CREATE/UPDATE detection and bulk operations
 - **🎣 Lifecycle hooks** - Comprehensive signal system for database operations
+- **🌊 Cascade operations** - Database- and ORM-level cascade deletes/updates with automatic detection
+- **📝 SQL logging** - Zero-config `sqlobjects.sql` logger with user-code caller rewriting
 - **🗄️ Multi-database support** - Seamless multi-database configuration and routing
 
 ## 🚀 Quick Start
@@ -60,7 +62,7 @@ active_users = await User.objects.filter(
 ).order_by("-age").limit(10).all()
 
 # Complex queries with Q objects
-from sqlobjects.queries import Q
+from sqlobjects import Q
 
 users = await User.objects.filter(
     Q(User.age >= 18) & (Q(User.username.like("%admin%")) | Q(User.is_active == True))
@@ -351,9 +353,14 @@ uv run pytest
 
 See our [TODO.md](TODO.md) for planned features:
 
-- **v2.0**: Database health checks, window functions, advanced bulk operations
-- **v2.1**: Advanced field optimization, query performance tools
-- **v2.2+**: CTE support, advanced SQL functions
+- **Database management**: connection health checks, dynamic default-database switching, connection-pool monitoring
+- **Advanced SQL**: additional aggregate functions (array / JSON aggregation)
+- **Query optimization**: index suggestions and slow-query analysis tools
+- **Migrations**: model-diff migration generation and batched data-migration tooling
+
+Already implemented: window functions, CTEs (including recursive), `EXPLAIN`
+query analysis, cascade operations, SQL logging, and high-performance bulk
+operations.
 
 ## 📄 License
 

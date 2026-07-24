@@ -68,7 +68,7 @@ users = await User.objects.exclude(User.is_deleted == True).all()
 ### 使用 Q 对象进行复杂逻辑查询
 
 ```python
-from sqlobjects.queries import Q
+from sqlobjects import Q
 
 # OR 条件
 users = await User.objects.filter(
@@ -245,11 +245,6 @@ users = await User.objects.extra(
     params=[18]
 ).all()
 
-# 缓存控制
-users = await User.objects.no_cache().filter(
-    User.status == "online"
-).all()
-
 # 跳过默认排序以提高性能
 count = await User.objects.skip_default_ordering().count()
 
@@ -359,6 +354,12 @@ users = await User.objects.select_for_share(
 ```python
 # 检查存在性
 exists = await User.objects.filter(User.email == "test@example.com").exists()
+
+# 批量删除匹配的行。cascade 策略控制关联行的处理方式：
+# "auto"（默认）根据模型的关系和删除信号选择策略，"full" 逐实例执行
+# ORM 级联，"fast" 执行最小化的外键级联，"none" 发出直接的 SQL 删除。
+deleted = await User.objects.filter(User.is_active == False).delete()
+deleted = await User.objects.filter(User.is_active == False).delete(cascade="none")
 
 # 原生 SQL 执行
 users = await User.objects.raw(
@@ -510,16 +511,25 @@ stats = await User.objects.aggregate(
 ### 原生 SQL
 
 ```python
-# 原生 SQL 查询
+# 原生 SQL 查询 - raw() 是异步方法，返回实例列表
 users = await User.objects.raw(
     "SELECT * FROM users WHERE age > :min_age AND created_at > :date",
     {"min_age": 18, "date": datetime.now() - timedelta(days=30)}
-).all()
+)
 
 # 原生表达式
 users = await User.objects.annotate(
     custom_field=text("CASE WHEN age >= 18 THEN 'adult' ELSE 'minor' END")
 ).all()
+
+# func.raw() 按名称调用任意 SQL 函数，参数既可以是普通值，也可以是
+# SQLAlchemy 表达式（列/其他函数表达式），表达式会作为 SQL 片段透传，
+# 而非绑定参数。
+from sqlobjects.expressions import func
+
+docs = await Document.objects.annotate(
+    rank=func.raw("ts_rank", Document.content_vector, func.raw("to_tsvector", Document.body))
+).order_by("-rank").all()
 ```
 
 ## 关联查询
@@ -554,24 +564,6 @@ users = await User.objects.annotate(
 
 ## 性能优化
 
-### 缓存控制
-
-```python
-# 为频繁访问的数据使用缓存
-users = await User.objects.filter(User.is_active == True).all()
-
-# 为实时数据跳过缓存
-live_data = await User.objects.no_cache().filter(
-    User.last_login > datetime.now() - timedelta(minutes=1)
-).all()
-
-# 监控缓存性能
-stats = User.objects.get_cache_stats()
-if stats["hit_rate"] < 0.5:
-    # 考虑查询优化
-    pass
-```
-
 ### 高效查询
 
 ```python
@@ -582,10 +574,9 @@ has_users = await User.objects.filter(User.is_active == True).exists()
 async for user in User.objects.filter(User.is_active == True).iterator():
     await process_user(user)
 
-# 带内存清理的批处理
+# 使用自定义块大小的批处理
 async for user in User.objects.iterator(
-    chunk_size=1000,
-    memory_cleanup_interval=10
+    chunk_size=1000
 ):
     await process_user(user)
 
@@ -662,18 +653,21 @@ recursive_part = Employee.objects.join(
     base, Employee.manager_id == base.c.id
 )
 hierarchy = base.union_all(recursive_part)
-all_employees = await Employee.objects.with_cte(hierarchy).select_from(hierarchy).all()
+all_employees = await Employee.objects.with_cte(hierarchy).all()
 ```
 
 ### 查询分析
 
-```python
-# 解释查询执行
-explain_result = await User.objects.filter(User.age >= 18).explain(analyze=True)
-print(explain_result)
+终端查询表达式（例如 `.all()` 返回的表达式）暴露一个可等待的 `explain()`，以字符串形式返回执行计划。它接受 `analyze` 和 `verbose` 标志；没有 JSON/`output=` 选项。
 
-# 用于程序化分析的 JSON 格式
-explain_json = await User.objects.filter(User.age >= 18).explain(output="json")
+```python
+# 解释查询执行（以字符串形式返回计划）
+plan = await User.objects.filter(User.age >= 18).all().explain(analyze=True)
+print(plan)
+
+# 更详细的详尽计划
+plan = await User.objects.filter(User.age >= 18).all().explain(analyze=True, verbose=True)
+print(plan)
 ```
 
 ### QuerySet 快捷方法

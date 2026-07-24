@@ -11,7 +11,7 @@ environments and asynchronous operations.
 
 ### 1. Global Database Management
 
-DatabaseManager serves as a global singleton managing multi-database connections, while Database class provides event
+An internal database manager (`_DatabaseManager`) serves as a global singleton managing multi-database connections, while the Database class provides event
 handling capabilities:
 
 ```python
@@ -27,13 +27,13 @@ main_db, analytics_db = await init_dbs({
 def on_connect(conn, record):
     print("Database connected")
 
-# DatabaseManager manages all database instances
+# The internal _DatabaseManager manages all database instances
 # Supports default database and named database access
 ```
 
 ### 2. ContextVar-Based Session Context
 
-AsyncSession class provides intelligent connection management, SessionContextManager provides context-level session
+AsyncSession class provides intelligent connection management, and an internal session context manager (`_SessionContextManager`) provides context-level session
 management based on `contextvars.ContextVar`:
 
 ```python
@@ -76,11 +76,11 @@ class User(ObjectModel):  # Inherits ModelMixin + ModelProcessor metaclass
 
 # ObjectModel built-in features:
 # - SignalMixin: Signal system
-# - HistoryTrackingMixin: History tracking
 # - FieldCacheMixin: Field caching and proxy
 # - ValidationMixin: Validation system
 # - DeferredLoadingMixin: Deferred loading
 # - SessionMixin: Session management
+# - _StateManager: Dirty-field tracking and instance state (history of changes)
 
 # Instance operations - intelligent detection and signal emission
 user = User(name="John", email="john@example.com")
@@ -124,18 +124,20 @@ class Product(ObjectModel):
 
 **Global Management Layer**
 
-- **DatabaseManager**: Global database manager, manages multiple database instances
+- **_DatabaseManager**: Internal global database manager (`database/manager.py`), manages multiple database instances. Not accessed directly; the public entry points are the module-level functions `init_db`/`init_dbs`/`close_db`/`close_dbs`.
 - **Database**: Database instance, provides event handling and connection management
 - **AsyncSession**: Intelligent session class, provides connection management and transaction control
-- **SessionContextManager**: Global session context manager, ContextVar-based context-level session management
+- **_SessionContextManager**: Internal global session context manager (`session.py`), ContextVar-based context-level session management. Not accessed directly; the public entry points are the module-level functions `ctx_session`/`get_session`/`has_session`.
 
 **Model Layer**
 
 - **ObjectModel**: Composition pattern model base class, integrates ModelMixin + ModelProcessor metaclass
 - **ModelProcessor**: Metaclass processor, automatically generates SQLAlchemy tables and objects manager
-- **ModelMixin**: Composes all functional Mixins through inheritance chain:
+- **ModelMixin**: Defined as `class ModelMixin(DataConversionMixin, SignalMixin)` (`model.py`). Its
+  functionality comes from a single linear inheritance chain rooted at `DataConversionMixin`, plus
+  `SignalMixin` as a direct base:
+  - DataConversionMixin (data conversion functionality) — the direct base
   - FieldCacheMixin (field caching and attribute access optimization)
-  - DataConversionMixin (data conversion functionality)
   - DeferredLoadingMixin (deferred loading functionality)
   - ValidationMixin (validation logic)
   - PrimaryKeyMixin (primary key operations)
@@ -145,35 +147,41 @@ class Product(ObjectModel):
 **Functional Mixin Layer**
 
 - **FieldCacheMixin**: Field caching and intelligent attribute access, integrated proxy system
-- **SignalMixin**: Signal system, built into ObjectModel through separate inheritance
-- **HistoryTrackingMixin**: History tracking and dirty field detection
+- **SignalMixin**: Signal system, a direct base class of ModelMixin (composed alongside the DataConversionMixin chain)
 - **ValidationMixin**: Validation system integration
 - **DeferredLoadingMixin**: Deferred loading functionality
 - **SessionMixin**: Session management and using() method
 
 **State Management Layer**
 
-- **StateManager**: Unified instance state management, supports dirty fields, deferred fields, proxy cache
-- **DeferredFieldProxy**: Deferred field proxy, supports lazy loading and caching
-- **RelationFieldProxy**: Relationship field proxy, supports relationship lazy loading
+- **_StateManager**: Internal unified instance state management (`mixins.py`), supports dirty-field
+  tracking (the basis for change history), deferred fields, and proxy/object cache
+- **DeferredObject**: Deferred field proxy, supports lazy loading and caching
+- **RelatedObject** / **RelatedCollection**: Relationship field proxies, support relationship lazy loading
+  (single object vs. collection; see `fields/proxies.py`)
 
 **Web Framework Integration Layer (`contrib/`)**
 
 - **SessionMiddleware** (`contrib/asgi.py`): ASGI middleware providing request-scoped session management with auto commit/rollback
 - **get_db_session** (`contrib/fastapi.py`): FastAPI dependency that yields a transactional session via `ctx_session()`
 
+**Cross-cutting Subsystems**
+
+- **SQL Logging** (`sql_logging.py`): `ObjectLogger` rewrites log-record caller fields to the real user-code call site; installed as the `sqlobjects.sql` logger and used by the query executor. See document 05.
+- **Cascade** (`cascade.py`): unified cascade strategy coordinating database-level `ondelete`/`onupdate` and ORM-level `cascade`, with dependency resolution and cascade execution. See document 04.
+
 ### Design Philosophy
 
 **Composition Pattern**: Uses Mixin composition rather than complex inheritance for better maintainability
-**Global Management**: Global DatabaseManager and SessionContextManager instances for simplified usage
+**Global Management**: Global internal _DatabaseManager and _SessionContextManager instances (fronted by module-level functions) for simplified usage
 **Event-Driven**: Database class provides extension points through event system
 **Intelligent Detection**: Automatic detection of CREATE/UPDATE operations, dirty field tracking, deferred loading
 **Metaclass-Driven**: ModelProcessor metaclass automatically handles model definition and table generation
-**Unified State**: StateManager unifies instance state management, supporting multiple state types
+**Unified State**: _StateManager unifies instance state management, supporting multiple state types
 
 ### Integration with Other Modules
 
-**Data Operation Module**: Obtains sessions through SessionContextManager
+**Data Operation Module**: Obtains sessions through the module-level session context (`ctx_session`/`get_session`, backed by the internal `_SessionContextManager`)
 **Field System Module**: Processes field definitions through ModelProcessor
 **Relationship Processing Module**: Provides relationship support through ObjectModel
 
@@ -192,7 +200,7 @@ await drop_tables(base_class, db_name=None)
 
 # Connection management
 await close_db(db_name=None)
-await close_all_dbs()
+await close_dbs(db_names=None)
 ```
 
 ### Session Management
@@ -206,7 +214,7 @@ async with ctx_sessions(*db_names) as sessions:
     pass
 
 # Recommended to use context managers rather than directly getting sessions
-# SessionContextManager.get_session() is mainly for internal implementation
+# The module-level get_session() (backed by the internal _SessionContextManager) is mainly for internal implementation
 ```
 
 ### Model Definition

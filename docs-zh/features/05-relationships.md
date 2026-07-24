@@ -472,6 +472,102 @@ memberships = await Membership.objects.filter(
 ).all()
 ```
 
+## 级联操作
+
+SQLObjects 在两个独立层面支持级联删除和更新：**数据库层**（由数据库引擎强制执行的外键引用动作）和 **ORM 层**（保存或删除实例时由 SQLObjects 处理的关系级联）。两者可单独使用，也可同时使用。
+
+### 数据库层级联（foreign_key）
+
+`foreign_key()` 字段描述符接受 `ondelete` 和 `onupdate` 引用动作。它们通过生成的 `FOREIGN KEY` 约束由数据库强制执行。传入 `OnDelete` / `OnUpdate` 枚举成员或等价的字符串（`"CASCADE"`、`"SET NULL"`、`"RESTRICT"`、`"NO ACTION"`）。
+
+```python
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, StringColumn, TextColumn, foreign_key
+from sqlobjects import OnDelete
+
+class Comment(ObjectModel):
+    body: Column[str] = TextColumn()
+
+    # 当被引用的 post 被删除时，数据库同时删除该 comment。
+    post_id: Column[int] = foreign_key("Post.id", ondelete=OnDelete.CASCADE)
+
+    # 将外键置为 NULL 而不是删除该行。
+    author_id: Column[int] = foreign_key(
+        "User.id", nullable=True, ondelete=OnDelete.SET_NULL
+    )
+```
+
+`OnDelete` 从顶层 `sqlobjects` 包导出。引用动作的字符串取值为 `CASCADE`、`SET NULL`、`RESTRICT` 和 `NO ACTION`。
+
+### ORM 层级联（relationship）
+
+`relationship()` 函数接受 `cascade` 选项和 `passive_deletes` 标志。ORM 级联决定 SQLObjects 如何在内存中加载的关联实例之间传播保存/删除操作。
+
+```python
+from sqlobjects import relationship, CascadePresets
+from sqlobjects.fields.relations import Related
+
+class User(ObjectModel):
+    username: Column[str] = StringColumn(length=50)
+
+# 删除 User 会级联到它的 posts（孤立的 posts 也会被移除）。
+User.posts: Related[list["Post"]] = relationship(
+    "Post",
+    foreign_keys="Post.author_id",
+    cascade=CascadePresets.ALL_DELETE_ORPHAN,
+    passive_deletes=True,  # 让数据库处理实际的行删除
+)
+```
+
+当数据库已经通过 `ondelete=OnDelete.CASCADE` 外键执行级联时，设置 `passive_deletes=True`，这样 SQLObjects 就不会再逐行发出删除。
+
+### 级联预设
+
+`CascadePresets` 为常见场景提供现成的级联字符串（`cascade` 参数也接受原始字符串、`CascadeOption` 或 `CascadeOption` 值的集合）：
+
+| 预设 | 展开为 |
+| --- | --- |
+| `CascadePresets.NONE` | `""` |
+| `CascadePresets.SAVE_UPDATE` | `"save-update"` |
+| `CascadePresets.DELETE` | `"delete"` |
+| `CascadePresets.ALL` | `"save-update, merge, refresh-expire"` |
+| `CascadePresets.ALL_DELETE_ORPHAN` | `"all, delete-orphan"` |
+| `CascadePresets.SAVE_DELETE` | `"save-update, delete"` |
+
+```python
+from sqlobjects import CascadePresets, CascadeOption
+
+# 使用预设
+posts = relationship("Post", foreign_keys="Post.author_id",
+                     cascade=CascadePresets.SAVE_DELETE)
+
+# 使用一组独立选项
+posts = relationship("Post", foreign_keys="Post.author_id",
+                     cascade={CascadeOption.SAVE_UPDATE, CascadeOption.DELETE})
+```
+
+### delete() 上的自动级联检测
+
+`Model.delete(cascade=None)`（默认）通过检查模型的关系自动检测是否需要级联处理。你也可以显式强制其行为：
+
+```python
+user = await User.objects.get(User.id == 1)
+
+await user.delete()                # cascade=None → 从关系自动检测
+await user.delete(cascade=True)    # 强制 ORM 级联处理
+await user.delete(cascade=False)   # 直接删除，跳过级联
+```
+
+对于批量删除，`QuerySet.delete()` 改为接受字符串策略：`"auto"`（默认）、`"full"`、`"fast"` 或 `"none"`（参见 [CRUD 操作](04-crud-operations.md#批量删除)）。
+
+```python
+# auto 策略：根据模型的删除信号和关系选择
+deleted = await Comment.objects.filter(Comment.post_id == 1).delete()
+
+# 不带 ORM 级联处理的直接 SQL 删除
+deleted = await Comment.objects.filter(Comment.post_id == 1).delete(cascade="none")
+```
+
 ## 最佳实践
 
 ### 关系设计

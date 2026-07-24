@@ -16,6 +16,8 @@ Learn how to configure and manage database connections, sessions, and transactio
 - Session management patterns
 - Transaction control
 - Database events and lifecycle management
+- SQL logging (`sqlobjects.sql` logger)
+- ASGI / FastAPI integration (SessionMiddleware, `get_db_session`)
 
 ### [02. Model Definition](02-model-definition.md)
 
@@ -28,6 +30,7 @@ Understand how to define models with fields, validation, and configuration.
 - Field-level and model-level validation
 - Code generation control with dataclass integration
 - Identity columns and computed columns
+- Composite and named foreign key constraints (`foreignkey()`)
 - Custom field types and type registration
 
 ### [03. Data Querying](03-querying-data.md)
@@ -52,6 +55,7 @@ Learn comprehensive create, read, update, delete operations.
 - Smart save() with automatic CREATE/UPDATE detection
 - Detached instance operations
 - Transaction management
+- Cascade deletes with automatic detection
 - Performance optimization for large datasets
 
 ### [05. Relationships](05-relationships.md)
@@ -64,6 +68,7 @@ Implement and optimize relationships between models.
 - Lazy and eager loading strategies
 - JOIN optimization and manual joins
 - Relationship querying and filtering
+- Cascade operations (database-level and ORM-level)
 - Complex relationship patterns
 
 ### [06. Validation and Signals](06-validation-signals.md)

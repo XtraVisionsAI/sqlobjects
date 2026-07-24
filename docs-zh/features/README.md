@@ -13,6 +13,8 @@
 - 会话管理模式
 - 事务控制
 - 数据库事件和生命周期管理
+- SQL 日志（`sqlobjects.sql` 日志器）
+- ASGI / FastAPI 集成（SessionMiddleware、`get_db_session`）
 
 ### [02. 模型定义](02-model-definition.md)
 了解如何定义带有字段、验证和配置的模型。
@@ -23,6 +25,7 @@
 - 字段级和模型级验证
 - 数据类集成的代码生成控制
 - 身份列和计算列
+- 复合与命名外键约束（`foreignkey()`）
 - 自定义字段类型和类型注册
 
 ### [03. 数据查询](03-querying-data.md)
@@ -43,6 +46,7 @@
 - 智能save()与自动CREATE/UPDATE检测
 - 分离实例操作
 - 事务管理
+- 带自动检测的级联删除
 - 大数据集的性能优化
 
 ### [05. 关系操作](05-relationships.md)
@@ -53,6 +57,7 @@
 - 延迟和预加载策略
 - JOIN优化和手动连接
 - 关系查询和过滤
+- 级联操作（数据库层和 ORM 层）
 - 复杂关系模式
 
 ### [06. 验证和信号](06-validation-signals.md)

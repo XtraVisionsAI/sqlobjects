@@ -41,7 +41,6 @@ QuerySet 使用组合模式，通过 QueryBuilder 和 QueryExecutor 组件实现
 class QuerySet:
     def __init__(self, table, model_class, db_or_session=None):
         self._builder = QueryBuilder(model_class)      # 查询构建
-        self._executor = QueryExecutor(db_or_session)   # 查询执行器
         self._executor = QueryExecutor(db_or_session)   # 统一执行
 
 # 链式构建 - 每个方法返回新的 QuerySet 实例
@@ -130,6 +129,19 @@ deleted_rows = await User.objects.bulk_delete([1, 2, 3], batch_size=1000)
 **执行层**
 - **QueryExecutor**: 统一查询执行引擎，支持多种查询类型、迭代器和延迟加载
 
+**表达式子系统 (`expressions/`)**
+
+`expressions/` 包提供查询流程所依赖的可组合 SQL 表达式对象。每个模块贡献一类表达式：
+
+- **window.py**: 窗口函数（`WindowFunction` 基类，包含 `RowNumberFunction`、`RankFunction`、`DenseRankFunction`、`PercentRankFunction`、`NtileFunction`、`LagFunction`、`LeadFunction`、`FirstValueFunction`、`LastValueFunction`、`NthValueFunction`）以及 `WindowSpec`。窗口函数通过 `func.row_number()`、`func.rank()` 等创建，用 `.over(partition_by=..., order_by=..., rows=..., range_=...)` 配置，并作为注解使用：`User.objects.annotate(rank=func.rank().over(order_by=[User.age])).all()`。窗口函数不能直接执行。
+- **cte.py**: 用于公共表表达式（CTE）的 `CTEExpression`。入口是 `QuerySet.cte(name, recursive=False)`（将当前 QuerySet 转为 CTE）和 `QuerySet.with_cte(*ctes)`（在查询中使用一个或多个 CTE）；通过 `recursive=True` 和 `union_all` 支持递归 CTE。
+- **subquery.py**: 用于相关子查询和独立子查询的 `SubqueryExpression`。
+- **scalar.py**: 返回标量的表达式（`ScalarSubquery`、`CountExpression`、`ExistsExpression`）。
+- **aggregate.py**: 用于 `annotate()`/`aggregate()` 中聚合函数的 `AggregateExpression`。
+- **function.py**: `func` 工厂（`FunctionExpression`），对 SQLAlchemy 函数的类型安全封装，同时暴露窗口函数构造器；`func.raw(name, *args)` 可构建任意 SQL 函数。
+- **explain.py**: `ExplainResult`，查询计划检查的字符串型结果（参见文档 05）。
+- **terminal.py**: 支撑执行方法（如 `all`、`first`、`last`、`earliest`、`latest`、`values`、`values_list`、`dates`、`datetimes`、`get_item`）的终端表达式辅助工具。
+
 ### 设计理念
 
 **描述符模式**: 通过 ObjectsDescriptor 为每个模型类提供独立的管理器实例
@@ -142,7 +154,7 @@ deleted_rows = await User.objects.bulk_delete([1, 2, 3], batch_size=1000)
 
 ### 与其他模块的集成
 
-**核心架构模块**: 通过 SessionContextManager 获取数据库会话
+**核心架构模块**: 通过模块级会话上下文（`ctx_session`/`get_session`）获取数据库会话
 **字段系统模块**: 支持字段表达式和函数调用
 **关系处理模块**: 集成 select_related 和 prefetch_related
 
@@ -173,7 +185,8 @@ await User.objects.bulk_delete(ids, id_field)
 ```python
 # 查询构建方法（返回 QuerySet）
 .filter(*conditions) / .exclude(*conditions)
-.order_by(*fields) / .limit(count) / .offset(count)
+.order_by(*fields)  # 替换已有排序（而非追加）；参见 QueryBuilder.add_ordering
+.limit(count) / .offset(count)
 .only(*fields) / .defer(*fields)
 .select_related(*fields) / .prefetch_related(*fields)
 .distinct(*fields) / .annotate(**kwargs)

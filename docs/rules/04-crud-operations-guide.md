@@ -69,7 +69,7 @@ mappings = [
 await User.objects.bulk_update(mappings, match_fields=["id"], batch_size=1000)
 
 # Update all matching records
-await User.objects.filter(User.department == "sales").update_all(is_active=False)
+await User.objects.filter(User.department == "sales").update(is_active=False)
 ```
 
 ### Delete Operations
@@ -84,8 +84,36 @@ user_ids = [1, 2, 3, 4, 5]
 await User.objects.bulk_delete(user_ids, id_field="id", batch_size=1000)
 
 # Delete all matching records
-await User.objects.filter(User.is_active == False).delete_all()
+await User.objects.filter(User.is_active == False).delete()
 ```
+
+### Cascade on Delete
+
+Both delete entry points detect and apply cascade behavior automatically:
+
+- **`instance.delete(cascade=None)`** — with the default `None`, the instance
+  auto-detects whether any relationship declares an on-delete cascade and
+  handles related objects accordingly. Pass `cascade=True` to force cascade
+  handling or `cascade=False` to skip it and issue a direct delete.
+- **`QuerySet.delete(cascade="auto")`** — accepts a strategy string:
+  - `"auto"` (default): choose automatically based on the model's relationships
+    and delete signals
+  - `"full"`: complete cascade deletion with full ORM functionality (fires signals)
+  - `"fast"`: fast cascade deletion with minimal ORM processing
+  - `"none"`: direct SQL deletion without any ORM cascade processing
+
+```python
+# Instance delete with explicit cascade control
+user = await User.objects.get(User.id == 1)
+await user.delete(cascade=True)   # force cascade
+await user.delete(cascade=False)  # skip cascade, direct delete
+
+# QuerySet delete with an explicit strategy
+await User.objects.filter(User.is_active == False).delete(cascade="fast")
+```
+
+See the Relationships guide for how cascade behavior is configured on
+relationships and foreign keys.
 
 ### Bulk Operations
 
@@ -192,8 +220,8 @@ user.is_active = False
 await user.save()  # Only updates email and is_active fields
 
 # Check dirty fields
-if user._has_changes():
-    changed_fields = user._get_changed_fields()
+changed_fields = user.get_dirty_fields()
+if changed_fields:
     print(f"Modified fields: {changed_fields}")
 ```
 

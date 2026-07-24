@@ -69,7 +69,7 @@ users = await User.objects.exclude(User.is_deleted == True).all()
 ### Complex Logic Queries with Q Objects
 
 ```python
-from sqlobjects.queries import Q
+from sqlobjects import Q
 
 # OR conditions
 users = await User.objects.filter(
@@ -246,11 +246,6 @@ users = await User.objects.extra(
     params=[18]
 ).all()
 
-# Cache control
-users = await User.objects.no_cache().filter(
-    User.status == "online"
-).all()
-
 # Skip default ordering for performance
 count = await User.objects.skip_default_ordering().count()
 
@@ -360,6 +355,13 @@ users = await User.objects.select_for_share(
 ```python
 # Check existence
 exists = await User.objects.filter(User.email == "test@example.com").exists()
+
+# Bulk delete matching rows. The cascade strategy controls how related rows
+# are handled: "auto" (default) picks a strategy from the model's relationships
+# and delete signals, "full" runs per-instance ORM cascade, "fast" does a
+# minimal foreign-key cascade, and "none" issues a direct SQL delete.
+deleted = await User.objects.filter(User.is_active == False).delete()
+deleted = await User.objects.filter(User.is_active == False).delete(cascade="none")
 
 # Raw SQL execution
 users = await User.objects.raw(
@@ -511,16 +513,25 @@ stats = await User.objects.aggregate(
 ### Raw SQL
 
 ```python
-# Raw SQL queries
+# Raw SQL queries - raw() is an async method that returns a list of instances
 users = await User.objects.raw(
     "SELECT * FROM users WHERE age > :min_age AND created_at > :date",
     {"min_age": 18, "date": datetime.now() - timedelta(days=30)}
-).all()
+)
 
 # Raw expressions
 users = await User.objects.annotate(
     custom_field=text("CASE WHEN age >= 18 THEN 'adult' ELSE 'minor' END")
 ).all()
+
+# func.raw() calls an arbitrary SQL function by name and accepts both plain
+# values and SQLAlchemy expressions (columns/other function expressions) as
+# arguments, passing expressions through as SQL fragments rather than binds.
+from sqlobjects.expressions import func
+
+docs = await Document.objects.annotate(
+    rank=func.raw("ts_rank", Document.content_vector, func.raw("to_tsvector", Document.body))
+).order_by("-rank").all()
 ```
 
 ## Related Queries
@@ -555,24 +566,6 @@ users = await User.objects.annotate(
 
 ## Performance Optimization
 
-### Cache Control
-
-```python
-# Use cache for frequently accessed data
-users = await User.objects.filter(User.is_active == True).all()
-
-# Skip cache for real-time data
-live_data = await User.objects.no_cache().filter(
-    User.last_login > datetime.now() - timedelta(minutes=1)
-).all()
-
-# Monitor cache performance
-stats = User.objects.get_cache_stats()
-if stats["hit_rate"] < 0.5:
-    # Consider query optimization
-    pass
-```
-
 ### Efficient Queries
 
 ```python
@@ -583,10 +576,9 @@ has_users = await User.objects.filter(User.is_active == True).exists()
 async for user in User.objects.filter(User.is_active == True).iterator():
     await process_user(user)
 
-# Batch processing with memory cleanup
+# Batch processing with a custom chunk size
 async for user in User.objects.iterator(
-    chunk_size=1000,
-    memory_cleanup_interval=10
+    chunk_size=1000
 ):
     await process_user(user)
 
@@ -663,18 +655,23 @@ recursive_part = Employee.objects.join(
     base, Employee.manager_id == base.c.id
 )
 hierarchy = base.union_all(recursive_part)
-all_employees = await Employee.objects.with_cte(hierarchy).select_from(hierarchy).all()
+all_employees = await Employee.objects.with_cte(hierarchy).all()
 ```
 
 ### Query Analysis
 
-```python
-# Explain query execution
-explain_result = await User.objects.filter(User.age >= 18).explain(analyze=True)
-print(explain_result)
+Terminal query expressions (for example the one returned by `.all()`) expose an
+awaitable `explain()` that returns the execution plan as a string. It accepts
+`analyze` and `verbose` flags; there is no JSON/`output=` option.
 
-# JSON format for programmatic analysis
-explain_json = await User.objects.filter(User.age >= 18).explain(output="json")
+```python
+# Explain query execution (returns the plan as a string)
+plan = await User.objects.filter(User.age >= 18).all().explain(analyze=True)
+print(plan)
+
+# Verbose plan with more detail
+plan = await User.objects.filter(User.age >= 18).all().explain(analyze=True, verbose=True)
+print(plan)
 ```
 
 ### QuerySet Shortcut Methods

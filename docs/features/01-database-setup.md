@@ -191,7 +191,7 @@ def setup_connection(dbapi_connection, connection_record):
 ### Graceful Shutdown
 
 ```python
-from sqlobjects.database import close_db, close_dbs, close_all_dbs
+from sqlobjects.database import close_db, close_dbs
 
 # Close specific database by name
 await close_db("analytics")
@@ -202,11 +202,11 @@ await close_db("main", auto_default=True)
 # Close multiple specific databases
 await close_dbs(["analytics", "backup"])
 
-# Close all databases
-await close_all_dbs()
+# Close all databases (call with no arguments)
+await close_dbs()
 
-# Close Database instance directly
-await analytics_db.close()
+# Close a Database instance directly
+await analytics_db.disconnect()
 ```
 
 ### Health Checks
@@ -218,6 +218,65 @@ try:
     print(f"Database healthy: {count} users")
 except Exception as e:
     print(f"Database error: {e}")
+```
+
+## SQL Logging
+
+SQLObjects emits executed statements through the standard `logging` module under
+the logger name `sqlobjects.sql`. Logging is zero-configuration: the query
+executor only compiles SQL for logging when the logger is actually enabled for
+`DEBUG`, so there is no overhead when logging is off.
+
+### Enabling SQL Logging
+
+```python
+import logging
+
+# Emit SQL to the console at DEBUG level
+logging.basicConfig(level=logging.DEBUG)
+logging.getLogger("sqlobjects.sql").setLevel(logging.DEBUG)
+
+# Any query now logs its SQL
+users = await User.objects.filter(User.is_active == True).all()
+```
+
+Each SQL log record carries structured data in `record.__dict__` that you can
+consume from a custom handler:
+
+- `sql` - the compiled SQL string (bind parameters not inlined)
+- `params` - a dict of the bind parameters
+- `duration_ms` - execution time in milliseconds
+
+```python
+class SQLHandler(logging.Handler):
+    def emit(self, record):
+        print(f"[{record.duration_ms:.1f}ms] {record.sql}")
+        print(f"    params: {record.params}")
+
+sql_logger = logging.getLogger("sqlobjects.sql")
+sql_logger.setLevel(logging.DEBUG)
+sql_logger.addHandler(SQLHandler())
+```
+
+### Caller Location Rewriting
+
+`sqlobjects.sql` is an `ObjectLogger` instance (`sqlobjects/sql_logging.py`).
+It overrides `makeRecord()` to rewrite each record's caller fields
+(`pathname`, `filename`, `module`, `funcName`, `lineno`) to the first
+**user-code** frame, skipping frames from `sqlobjects.*`, `sqlalchemy.*`, the
+standard `logging` package, and any `site-packages`. This means log output
+points at the line in your application that issued the query rather than at
+internal library code, and it works with any handler (including loguru's
+`InterceptHandler`) without extra filter configuration.
+
+For custom scenarios you can also resolve the caller frame directly:
+
+```python
+from sqlobjects import get_caller_frame
+
+frame = get_caller_frame()                       # "app/service.py:42 in list_users"
+frames = get_caller_frame(max_frames=3)          # list of frame strings
+frame = get_caller_frame(extra_skip_packages=["myapp.middleware"])
 ```
 
 ## Best Practices

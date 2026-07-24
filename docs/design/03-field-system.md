@@ -51,7 +51,7 @@ username: Column[str] = column(
     init=True, repr=True, compare=False, hash=None, kw_only=False
 )
 
-# Foreign key fields
+# Foreign key fields (low-level form; prefer the foreign_key() descriptor — see API Reference)
 author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
 ```
 
@@ -236,7 +236,24 @@ field.case(*conditions, else_=None) / field.greatest(*args) / field.least(*args)
 identity(start=1, increment=1, minvalue=None, maxvalue=None, cycle=False, cache=None, **kwargs)
 computed(sqltext, persisted=None, column_type="auto", **kwargs)
 
-# Foreign key fields (use SQLAlchemy ForeignKey)
+# Foreign key fields
+#
+# Recommended: the foreign_key() field descriptor (sqlobjects.fields).
+# Accepts a "Class.column" reference (resolved to the table automatically) or a
+# raw "table.column", plus ondelete/onupdate constraint behavior.
+from sqlobjects.fields import foreign_key
+author_id: Column[int] = foreign_key("User.id", ondelete="CASCADE")
+
+# Recommended for composite / explicitly named FK constraints: the foreignkey()
+# constraint builder (sqlobjects.metadata), used inside Config.constraints.
+from sqlobjects.metadata import foreignkey
+# class Config:
+#     constraints = [
+#         foreignkey("author_id", "User.id", name="fk_posts_author", ondelete="CASCADE"),
+#         foreignkey(["a_id", "b_id"], ["A.id", "B.id"]),  # composite FK
+#     ]
+
+# Low-level alternative: pass a SQLAlchemy ForeignKey to column(foreign_key=...)
 from sqlalchemy import ForeignKey
 author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
 
@@ -255,6 +272,39 @@ get_column_from_field(field_def)
 # Validation and metadata
 get_field_validators(model_class, field_name)
 get_model_metadata(model_class)
+```
+
+### Foreign Key APIs
+
+Two recommended entry points sit above the low-level `column(foreign_key=ForeignKey(...))` form:
+
+```python
+# foreign_key() field descriptor — sqlobjects/fields/functions.py
+foreign_key(
+    reference,                 # "Class.column" (resolved automatically) or "table.column"
+    *,
+    type="auto",
+    nullable=True,
+    ondelete=None,             # OnDelete enum or "CASCADE"/"SET NULL"/"RESTRICT"/"NO ACTION"
+    onupdate=None,
+    deferrable=False,
+    initially="IMMEDIATE",
+    **kwargs
+) -> Column
+
+# foreignkey() constraint builder — sqlobjects/metadata.py
+# For composite and/or explicitly named FK constraints; used in Config.constraints.
+foreignkey(
+    fields,                    # local field name(s): str or list[str]
+    references,                # "Class.column"/"table.column" or list thereof
+    *,
+    name=None,
+    ondelete=None,
+    onupdate=None,
+    deferrable=False,
+    initially="IMMEDIATE",
+    **kwargs
+) -> ForeignKeyConstraint
 ```
 
 ### Type Registration System

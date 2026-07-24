@@ -473,6 +473,119 @@ memberships = await Membership.objects.filter(
 ).all()
 ```
 
+## Cascade Operations
+
+SQLObjects supports cascading deletes and updates at two independent levels:
+the **database level** (foreign key referential actions enforced by the
+database engine) and the **ORM level** (relationship cascade handled by
+SQLObjects when saving or deleting instances). You can use either or both.
+
+### Database-Level Cascade (foreign_key)
+
+The `foreign_key()` field descriptor accepts `ondelete` and `onupdate`
+referential actions. These are enforced by the database via the generated
+`FOREIGN KEY` constraint. Pass an `OnDelete` / `OnUpdate` enum member or the
+equivalent string (`"CASCADE"`, `"SET NULL"`, `"RESTRICT"`, `"NO ACTION"`).
+
+```python
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, StringColumn, TextColumn, foreign_key
+from sqlobjects import OnDelete
+
+class Comment(ObjectModel):
+    body: Column[str] = TextColumn()
+
+    # When the referenced post is deleted, the database deletes this comment too.
+    post_id: Column[int] = foreign_key("Post.id", ondelete=OnDelete.CASCADE)
+
+    # Set the FK to NULL instead of deleting the row.
+    author_id: Column[int] = foreign_key(
+        "User.id", nullable=True, ondelete=OnDelete.SET_NULL
+    )
+```
+
+`OnDelete` is exported from the top-level `sqlobjects` package. The referential
+action string values are `CASCADE`, `SET NULL`, `RESTRICT`, and `NO ACTION`.
+
+### ORM-Level Cascade (relationship)
+
+The `relationship()` function accepts a `cascade` option and a
+`passive_deletes` flag. ORM cascade determines how SQLObjects propagates
+save/delete operations across related instances loaded in memory.
+
+```python
+from sqlobjects import relationship, CascadePresets
+from sqlobjects.fields.relations import Related
+
+class User(ObjectModel):
+    username: Column[str] = StringColumn(length=50)
+
+# Deleting a User cascades to its posts (and orphaned posts are removed).
+User.posts: Related[list["Post"]] = relationship(
+    "Post",
+    foreign_keys="Post.author_id",
+    cascade=CascadePresets.ALL_DELETE_ORPHAN,
+    passive_deletes=True,  # Let the database handle the actual row deletion
+)
+```
+
+Set `passive_deletes=True` when the database already performs the cascade via
+an `ondelete=OnDelete.CASCADE` foreign key, so SQLObjects does not also issue
+per-row deletes.
+
+### Cascade Presets
+
+`CascadePresets` provides ready-made cascade strings for common cases (the
+`cascade` argument also accepts a raw string, a `CascadeOption`, or a set of
+`CascadeOption` values):
+
+| Preset | Expands to |
+| --- | --- |
+| `CascadePresets.NONE` | `""` |
+| `CascadePresets.SAVE_UPDATE` | `"save-update"` |
+| `CascadePresets.DELETE` | `"delete"` |
+| `CascadePresets.ALL` | `"save-update, merge, refresh-expire"` |
+| `CascadePresets.ALL_DELETE_ORPHAN` | `"all, delete-orphan"` |
+| `CascadePresets.SAVE_DELETE` | `"save-update, delete"` |
+
+```python
+from sqlobjects import CascadePresets, CascadeOption
+
+# Using a preset
+posts = relationship("Post", foreign_keys="Post.author_id",
+                     cascade=CascadePresets.SAVE_DELETE)
+
+# Using a set of individual options
+posts = relationship("Post", foreign_keys="Post.author_id",
+                     cascade={CascadeOption.SAVE_UPDATE, CascadeOption.DELETE})
+```
+
+### Automatic Cascade Detection on delete()
+
+`Model.delete(cascade=None)` (the default) auto-detects whether cascade
+handling is required by inspecting the model's relationships. You can force the
+behavior explicitly:
+
+```python
+user = await User.objects.get(User.id == 1)
+
+await user.delete()                # cascade=None → auto-detect from relationships
+await user.delete(cascade=True)    # force ORM cascade handling
+await user.delete(cascade=False)   # direct delete, skip cascade
+```
+
+For bulk deletes, `QuerySet.delete()` accepts a string strategy instead:
+`"auto"` (default), `"full"`, `"fast"`, or `"none"` (see
+[CRUD Operations](04-crud-operations.md#bulk-deletion)).
+
+```python
+# Auto strategy: chosen from the model's delete signals and relationships
+deleted = await Comment.objects.filter(Comment.post_id == 1).delete()
+
+# Direct SQL delete without ORM cascade processing
+deleted = await Comment.objects.filter(Comment.post_id == 1).delete(cascade="none")
+```
+
 ## Best Practices
 
 ### Relationship Design

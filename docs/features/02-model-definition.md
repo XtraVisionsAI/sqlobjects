@@ -220,7 +220,7 @@ username: Column[str] = column(type="string")
 created_at: Column[datetime] = column(
     type="datetime",
     default_factory=datetime.now,  # Dynamic default
-    validators=[validate_datetime()]  # Field-level validation
+    validators=[validate_datetime_range()]  # Field-level validation
 )
 
 # Insert-only defaults
@@ -329,7 +329,7 @@ class User(ObjectModel):
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, StringColumn, NumericColumn
-from sqlobjects.config import index, constraint, unique
+from sqlobjects.metadata import index, constraint, unique
 from decimal import Decimal
 
 class Product(ObjectModel):
@@ -345,6 +345,37 @@ class Product(ObjectModel):
         constraints = [
             constraint("price > 0", "chk_positive_price"),
             unique("name", "sku", name="uq_name_sku")
+        ]
+```
+
+#### Composite and Named Foreign Key Constraints
+
+For simple single-column foreign keys, prefer the `foreign_key()` field descriptor
+(see [Foreign Key Fields](#foreign-key-fields)). When you need a **composite**
+foreign key or an explicitly **named** constraint, use the `foreignkey()`
+constraint builder from `sqlobjects.metadata` and place it in `Config.constraints`.
+The `references` argument accepts either model class names (e.g. `"User.id"`) or
+table names (e.g. `"users.id"`):
+
+```python
+from sqlobjects.metadata import foreignkey
+
+class OrderItem(ObjectModel):
+    order_id: Column[int] = column(type="integer")
+    product_sku: Column[str] = StringColumn(length=50)
+    warehouse_code: Column[str] = StringColumn(length=20)
+
+    class Config:
+        constraints = [
+            # Named single-column foreign key with a referential action
+            foreignkey("order_id", "Order.id", name="fk_items_order", ondelete="CASCADE"),
+
+            # Composite foreign key referencing two columns
+            foreignkey(
+                ["product_sku", "warehouse_code"],
+                ["Inventory.sku", "Inventory.warehouse_code"],
+                name="fk_items_inventory",
+            ),
         ]
 ```
 

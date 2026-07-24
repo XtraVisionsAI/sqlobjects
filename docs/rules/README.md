@@ -4,11 +4,11 @@ Best practices and usage patterns for SQLObjects, optimized for AI coding assist
 
 ## Quick Navigation
 
-- **[01. Database & Session Guide](01-database-session-guide.md)** - Connection management and transactions
+- **[01. Database & Session Guide](01-database-session-guide.md)** - Connection management, transactions, and SQL logging
 - **[02. Model Definition Guide](02-model-definition-guide.md)** - Model creation and field configuration
 - **[03. Query Operations Guide](03-query-operations-guide.md)** - Filtering, sorting, and data retrieval
 - **[04. CRUD Operations Guide](04-crud-operations-guide.md)** - Create, read, update, delete operations
-- **[05. Relationships Guide](05-relationships-guide.md)** - Model relationships and loading strategies
+- **[05. Relationships Guide](05-relationships-guide.md)** - Model relationships, loading strategies, and cascade operations
 - **[06. Validation & Signals Guide](06-validation-signals-guide.md)** - Data validation and lifecycle hooks
 - **[07. Performance Guide](07-performance-guide.md)** - Optimization techniques and best practices
 

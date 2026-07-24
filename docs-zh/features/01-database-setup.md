@@ -190,7 +190,7 @@ def setup_connection(dbapi_connection, connection_record):
 ### 优雅关闭
 
 ```python
-from sqlobjects.database import close_db, close_dbs, close_all_dbs
+from sqlobjects.database import close_db, close_dbs
 
 # 按名称关闭特定数据库
 await close_db("analytics")
@@ -201,11 +201,11 @@ await close_db("main", auto_default=True)
 # 关闭多个特定数据库
 await close_dbs(["analytics", "backup"])
 
-# 关闭所有数据库
-await close_all_dbs()
+# 关闭所有数据库（不带参数调用）
+await close_dbs()
 
 # 直接关闭 Database 实例
-await analytics_db.close()
+await analytics_db.disconnect()
 ```
 
 ### 健康检查
@@ -217,6 +217,54 @@ try:
     print(f"数据库健康: {count} 个用户")
 except Exception as e:
     print(f"数据库错误: {e}")
+```
+
+## SQL 日志
+
+SQLObjects 通过标准 `logging` 模块以日志器名 `sqlobjects.sql` 发出已执行的语句。日志是零配置的：查询执行器仅在该日志器确实对 `DEBUG` 启用时才编译 SQL 以供记录，因此关闭日志时没有开销。
+
+### 启用 SQL 日志
+
+```python
+import logging
+
+# 在 DEBUG 级别将 SQL 输出到控制台
+logging.basicConfig(level=logging.DEBUG)
+logging.getLogger("sqlobjects.sql").setLevel(logging.DEBUG)
+
+# 现在任何查询都会记录其 SQL
+users = await User.objects.filter(User.is_active == True).all()
+```
+
+每条 SQL 日志记录在 `record.__dict__` 中携带结构化数据，可从自定义处理器中消费：
+
+- `sql` - 编译后的 SQL 字符串（未内联绑定参数）
+- `params` - 绑定参数的字典
+- `duration_ms` - 执行时间（毫秒）
+
+```python
+class SQLHandler(logging.Handler):
+    def emit(self, record):
+        print(f"[{record.duration_ms:.1f}ms] {record.sql}")
+        print(f"    params: {record.params}")
+
+sql_logger = logging.getLogger("sqlobjects.sql")
+sql_logger.setLevel(logging.DEBUG)
+sql_logger.addHandler(SQLHandler())
+```
+
+### 调用者位置重写
+
+`sqlobjects.sql` 是一个 `ObjectLogger` 实例（`sqlobjects/sql_logging.py`）。它重写 `makeRecord()`，将每条记录的调用者字段（`pathname`、`filename`、`module`、`funcName`、`lineno`）重写为第一个**用户代码**帧，跳过来自 `sqlobjects.*`、`sqlalchemy.*`、标准 `logging` 包以及任何 `site-packages` 的帧。这意味着日志输出指向应用中发起查询的那一行，而不是库的内部代码，并且它对任何处理器（包括 loguru 的 `InterceptHandler`）都有效，无需额外的过滤器配置。
+
+对于自定义场景，你也可以直接解析调用者帧：
+
+```python
+from sqlobjects import get_caller_frame
+
+frame = get_caller_frame()                       # "app/service.py:42 in list_users"
+frames = get_caller_frame(max_frames=3)          # 帧字符串列表
+frame = get_caller_frame(extra_skip_packages=["myapp.middleware"])
 ```
 
 ## 最佳实践

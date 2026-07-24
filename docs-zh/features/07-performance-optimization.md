@@ -60,7 +60,7 @@ await User.objects.bulk_create(
 # 标准更新（中等性能）
 affected = await User.objects.filter(
     User.is_active == False
-).update(values={"status": "inactive"})
+).update(status="inactive")
 
 # 真正的批量更新（对大型数据集快 10-100 倍）
 mappings = [
@@ -229,10 +229,9 @@ posts = await Post.objects.join(active_users, Post.author_id == active_users.c.i
 async for user in User.objects.filter(User.is_active == True).iterator():
     await process_user(user)
 
-# 自定义块大小和内存清理
+# 自定义块大小
 async for user in User.objects.iterator(
-    chunk_size=1000,
-    memory_cleanup_interval=10  # 每 10 个块清理一次
+    chunk_size=1000
 ):
     await process_user(user)
 
@@ -366,12 +365,14 @@ async def check_database_health():
 ### 查询分析
 
 ```python
-# 分析查询性能
-explain_result = await User.objects.filter(User.age >= 18).explain(analyze=True)
-print(explain_result)
+# 分析查询性能。终端查询表达式（例如来自 .all()）暴露一个可等待的
+# explain()，以字符串形式返回计划。它接受 analyze 和 verbose 标志；
+# 没有 JSON/output= 选项。
+plan = await User.objects.filter(User.age >= 18).all().explain(analyze=True)
+print(plan)
 
-# 用于程序化分析的 JSON 格式
-explain_json = await User.objects.filter(User.age >= 18).explain(output="json")
+# 更详细的详尽计划
+plan = await User.objects.filter(User.age >= 18).all().explain(analyze=True, verbose=True)
 
 # 识别慢查询
 import time

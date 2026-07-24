@@ -58,9 +58,10 @@ class User(ObjectModel):  # Built-in signal support
 ```python
 from sqlobjects.validators import (
     validate_email, validate_url, validate_length, validate_range,
-    validate_regex, validate_choices, validate_date, validate_time,
-    validate_decimal, validate_json
+    validate_regex, validate_choice, validate_not_empty, validate_positive,
+    validate_datetime_range
 )
+from datetime import datetime
 
 class User(ObjectModel):
     # Email validation
@@ -75,27 +76,28 @@ class User(ObjectModel):
     # Regular expression validation
     phone: Column[str] = StringColumn(validators=[validate_regex(r"^\d{3}-\d{3}-\d{4}$")])
 
-    # Choices validation
-    status: Column[str] = StringColumn(validators=[validate_choices(["active", "inactive", "pending"])])
+    # Choice validation (value must be one of the allowed choices)
+    status: Column[str] = StringColumn(validators=[validate_choice(["active", "inactive", "pending"])])
 
     # URL validation
     website: Column[str] = StringColumn(validators=[validate_url()])
 
-    # Date/time validation
-    birth_date: Column[str] = StringColumn(validators=[validate_date("%Y-%m-%d")])
-    work_time: Column[str] = StringColumn(validators=[validate_time("%H:%M")])
+    # Not-empty validation
+    display_name: Column[str] = StringColumn(validators=[validate_not_empty()])
 
-    # Decimal validation
-    price: Column[str] = StringColumn(validators=[validate_decimal(10, 2)])
+    # Positive-number validation
+    credits: Column[int] = IntegerColumn(validators=[validate_positive()])
 
-    # JSON validation
-    metadata: Column[str] = StringColumn(validators=[validate_json()])
+    # Datetime range validation
+    signup_at: Column[datetime] = DateTimeColumn(
+        validators=[validate_datetime_range(min_date=datetime(2020, 1, 1))]
+    )
 ```
 
 ### Advanced Validators
 
 ```python
-from sqlobjects.validators import validate_regex, validate_choices
+from sqlobjects.validators import validate_regex, validate_choice
 
 class Document(ObjectModel):
     title: Column[str] = StringColumn(length=200)
@@ -110,7 +112,7 @@ class Document(ObjectModel):
 
     # Document type validation
     doc_type: Column[str] = StringColumn(validators=[
-        validate_choices(["report", "manual", "specification", "other"])
+        validate_choice(["report", "manual", "specification", "other"])
     ])
 
     # File size validation (string representation)
@@ -164,20 +166,23 @@ class User(ObjectModel):
 
 ### Combining Validators
 
+The `validators` parameter is a list, and every validator in it is applied in
+sequence to the field value (see `validate_field_value` in
+`sqlobjects/validators.py`). To combine multiple validators, just list them —
+there is no separate combinator helper:
+
 ```python
-from sqlobjects.validators import combine_validators
+from sqlobjects.validators import validate_length, validate_regex, validate_email
 
 class User(ObjectModel):
-    # Combine multiple validators
+    # Multiple validators run in order: length first, then pattern, then custom
     username: Column[str] = StringColumn(validators=[
-        combine_validators(
-            validate_length(3, 50),
-            validate_regex(r"^[a-zA-Z0-9_]+$"),
-            validate_username  # Custom validator
-        )
+        validate_length(3, 50),
+        validate_regex(r"^[a-zA-Z0-9_]+$"),
+        validate_username,  # Custom validator function
     ])
 
-    # Multiple independent validators
+    # Built-in and length validators together
     email: Column[str] = StringColumn(validators=[
         validate_email(),
         validate_length(5, 100)
@@ -234,9 +239,10 @@ system_user = await User.objects.create(
 
 # Manual validation
 user = User(username="alice", email="alice@example.com")
-user.validate_all()  # Validate all fields and model
-user.validate_fields(["username", "email"])  # Validate specific fields
-user.validate()  # Model-level validation only
+user.validate_all_fields()  # Validate all fields
+user.validate_all_fields(["username", "email"])  # Validate specific fields
+user.validate_field("username")  # Validate a single field
+user.validate()  # Model-level validation only (if defined on the model)
 
 # Validation on save
 user = User(username="bob", email="bob@example.com")
@@ -252,7 +258,7 @@ from sqlobjects.exceptions import ValidationError, ValidationErrorCollector
 # Single validation error
 try:
     user = User(username="ab", email="invalid-email")
-    user.validate_all()
+    user.validate_all_fields()
 except ValidationError as e:
     print(f"Validation failed: {e.message}")
     print(f"Field: {e.field}")
@@ -261,7 +267,7 @@ except ValidationError as e:
 # Multiple validation errors
 try:
     user = User(username="a", email="bad", age=-5)
-    user.validate_all()
+    user.validate_all_fields()
 except ValidationError as e:
     if hasattr(e, 'errors') and e.errors:
         for field, errors in e.errors.items():

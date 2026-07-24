@@ -131,10 +131,6 @@ active_users = await User.objects.filter(User.is_active == True).all()
 
 # Pagination
 users_page = await User.objects.offset(20).limit(10).all()
-
-# Random sampling
-random_users = await User.objects.random(5)
-sample_users = await User.objects.sample(10)
 ```
 
 ### Bulk Retrieval
@@ -176,16 +172,16 @@ await user.save()  # Automatically detects UPDATE operation
 # Update multiple records with same values
 affected = await User.objects.filter(
     User.is_active == False
-).update(values={
-    "status": "inactive",
-    "updated_at": datetime.now()
-})
+).update(
+    status="inactive",
+    updated_at=datetime.now()
+)
 
 # Conditional update using Q objects
 affected = await User.objects.filter(
     Q(User.last_login < datetime.now() - timedelta(days=30)) |
     Q(User.login_count == 0)
-).update(values={"is_active": False})
+).update(is_active=False)
 
 # Bulk update with conflict resolution
 mappings = [
@@ -201,9 +197,11 @@ affected = await User.objects.bulk_update(
 )
 
 # With conflict handling
+from sqlobjects import ConflictResolution
+
 affected = await User.objects.bulk_create(
     users_data,
-    on_conflict="ignore",  # Skip duplicates
+    on_conflict=ConflictResolution.IGNORE,  # Skip duplicates
     batch_size=1000
 )
 ```
@@ -240,6 +238,13 @@ await user.delete()
 user = User(id=1)
 await user.delete()  # Automatically attaches to session
 ```
+
+`Model.delete(cascade=None)` auto-detects whether cascade handling is needed
+based on the model's relationships. Pass `cascade=True` to force cascade
+handling or `cascade=False` for a direct delete without cascade. Database-level
+foreign key actions (`OnDelete.CASCADE`, etc.) and ORM-level `relationship(cascade=...)`
+are configured on the model itself; see the
+[Cascade Operations](05-relationships.md#cascade-operations) section for details.
 
 ### Bulk Deletion
 
@@ -375,7 +380,7 @@ async with ctx_session() as session:
         user = await User.objects.using(session).create(username="manual_tx")
         await User.objects.using(session).filter(
             User.is_active == False
-        ).update(values={"status": "archived"})
+        ).update(status="archived")
     
         # Manual commit
         await session.commit()
@@ -472,7 +477,7 @@ except Exception as e:
     for mapping in mappings:
         try:
             await User.objects.filter(User.id == mapping["id"]).update(
-                values={k: v for k, v in mapping.items() if k != "id"}
+                **{k: v for k, v in mapping.items() if k != "id"}
             )
         except Exception as individual_error:
             logger.error(f"Individual update failed for ID {mapping['id']}: {individual_error}")
@@ -505,7 +510,7 @@ if len(user_updates) > 100:
 else:
     # Individual updates (better error handling)
     for update in user_updates:
-        await User.objects.filter(User.id == update["id"]).update(values=update)
+        await User.objects.filter(User.id == update["id"]).update(**update)
 ```
 
 ### Session Usage

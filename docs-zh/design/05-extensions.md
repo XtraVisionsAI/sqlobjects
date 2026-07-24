@@ -78,26 +78,17 @@ collector.raise_if_errors()
 通过批量操作优化和 FieldCacheMixin 代理系统提升性能：
 
 ```python
-# QueryCache FIFO 缓存 - 自动管理缓存大小
-users = await User.objects.filter(User.is_active == True).all()  # 缓存未命中
-users = await User.objects.filter(User.is_active == True).all()  # 缓存命中
-
-# 缓存统计和控制
-stats = QuerySet.get_cache_stats()
-print(f"Hit rate: {stats['hit_rate']:.2%}")
-QuerySet.clear_query_cache()
-
 # 批量操作优化 - 使用 bindparam 和批处理
 await User.objects.bulk_create(users_data)  # 自动批处理
 affected = await User.objects.bulk_update(update_data, batch_size=500)
 
 # FieldCacheMixin 代理系统 - 自动处理延迟字段
 user = await User.objects.only("name").first()  # bio 字段延迟
-# user.bio 返回 DeferredFieldProxy
+# user.bio 返回 DeferredObject
 # await user.bio.fetch() 实际加载数据
 
-# 关系代理 - RelationFieldProxy
-# user.posts 返回 RelationFieldProxy
+# 关系代理 - RelatedObject / RelatedCollection
+# user.posts 返回 RelatedCollection
 # await user.posts.fetch() 加载关系数据
 ```
 
@@ -119,6 +110,27 @@ field_stats = User._get_field_cache()
 print(f"Field categories: {list(field_stats.keys())}")
 ```
 
+### 5. SQL 日志
+
+SQLObjects 附带一个零配置的 SQL 日志器（`sqlobjects/sql_logging.py`），它将每条被记录的语句归因到用户自己的代码，而非库内部的某个帧：
+
+```python
+import logging
+
+# 将 "sqlobjects.sql" 日志器设为 DEBUG 即可开启 SQL 日志。
+logging.getLogger("sqlobjects.sql").setLevel(logging.DEBUG)
+logging.basicConfig()
+
+users = await User.objects.filter(User.is_active == True).all()
+# 发出的记录的 filename/lineno/funcName 指向用户代码中的调用者，
+# 而不是 executor.py 或某个 SQLAlchemy 内部帧。
+```
+
+- **ObjectLogger**（`logging.Logger` 子类）：重写 `makeRecord()`，将标准的调用者字段（`pathname`、`filename`、`module`、`funcName`、`lineno`）重写为第一个用户代码帧。由于重写发生在记录上，任何挂载的处理器 —— 包括 loguru 的 `InterceptHandler` —— 都会显示真实调用位置，无需额外的 `Filter` 配置。
+- **帧跳过**（`_find_user_frame` / `_should_skip_frame`）：遍历 `inspect.stack()`，跳过来自 `site-packages` 的帧、合成的 `<...>` 文件名、模块名恰好为 `sqlobjects`/`sqlalchemy`/`logging` 或以 `sqlobjects.`/`sqlalchemy.` 为前缀的帧（覆盖可编辑安装）、`sql_logging.py` 文件本身，以及调用者提供的任何 `extra_skip_packages` 前缀。
+- **安装**：模块通过 `_install_object_logger()` 将自身安装为名为 `sqlobjects.sql` 的日志器，该函数（在 logging 锁下）将 `ObjectLogger` 直接写入 `logging.root.manager.loggerDict`，并迁移任何已存在的处理器/级别/propagate。`QueryExecutor` 通过此日志器发出 SQL，仅在日志器对 `DEBUG` 启用时才编译 SQL 以供记录（关闭日志时避免开销）。
+- **公开 API**：`ObjectLogger` 与 `get_caller_frame(extra_skip_packages=None, max_frames=1) -> str | list[str]`，后者以 `"path:lineno in func"` 字符串形式返回第一个（或多个）用户代码帧，供自定义场景使用。
+
 ## 模块架构
 
 ### 核心组件
@@ -126,7 +138,7 @@ print(f"Field categories: {list(field_stats.keys())}")
 **模型集成层**
 
 - **ObjectModel**: 完整的模型基类，组合所有 Mixins，内置扩展功能
-- **ModelMixin**: 组合 FieldCacheMixin + SignalMixin
+- **ModelMixin**: 定义为 `ModelMixin(DataConversionMixin, SignalMixin)` —— DataConversionMixin 链（其中包含 FieldCacheMixin）加上 SignalMixin
 
 **信号系统层**
 
@@ -146,19 +158,24 @@ print(f"Field categories: {list(field_stats.keys())}")
 
 **状态管理层**
 
-- **StateManager**: 统一实例状态管理，支持多种状态类型
-- **HistoryTrackingMixin**: 历史跟踪和脏字段检测
+- **_StateManager**: 内部统一实例状态管理，支持多种状态类型
+- **脏字段跟踪**: 变更检测由 `_StateManager`（跟踪的脏字段）处理，它是变更历史的基础 —— 没有单独的历史 mixin
 
 **性能工具层**
 
 - **FieldCache**: 字段元数据缓存机制，集成到模型类
 - **ValidationError**: 分层异常系统，支持单字段和多字段错误
 
+**SQL 日志层 (`sql_logging.py`)**
+
+- **ObjectLogger**: `logging.Logger` 子类，将 LogRecord 的调用者字段重写为用户代码调用位置；安装为 `sqlobjects.sql` 日志器，供 `QueryExecutor` 使用
+- **get_caller_frame() / _find_user_frame() / _should_skip_frame()**: 用户帧发现，跳过库和内部帧
+
 ### 设计理念
 
 **内置集成**: 所有扩展功能内置到 ObjectModel，无需显式配置
 **Mixin 组合**: 通过 Mixin 组合避免复杂继承，提高可维护性
-**统一状态**: StateManager 统一实例状态管理，支持多种状态类型
+**统一状态**: _StateManager 统一实例状态管理，支持多种状态类型
 **智能代理**: 通过 __getattribute__ 集成代理系统，提供透明的延迟加载
 **方法名称发现**: 信号处理器通过方法名称约定使用 getattr() 发现
 **操作检测**: _determine_save_operation() 检查 _has_primary_key_values() 以检测 CREATE/UPDATE
@@ -237,7 +254,22 @@ deferred_fields = field_cache.get("deferred_fields", set())
 .bulk_delete(ids, batch_size=1000)
 
 # 性能分析
+# QueryExecutor.explain(query, analyze=False, verbose=False) -> str
+# 以字符串形式返回查询计划（ExplainResult）；没有 output= 参数。
 await queryset.explain(analyze=True)
+```
+
+### SQL 日志
+
+```python
+from sqlobjects.sql_logging import ObjectLogger, get_caller_frame
+
+# ObjectLogger 安装为 "sqlobjects.sql" 日志器；用以下方式启用：
+import logging
+logging.getLogger("sqlobjects.sql").setLevel(logging.DEBUG)
+
+# get_caller_frame 返回第一个（或多个）用户代码帧，跳过库帧。
+get_caller_frame(extra_skip_packages=None, max_frames=1)  # -> str | list[str]
 ```
 
 ### 工具函数
@@ -355,11 +387,12 @@ users = await User.objects.prefetch_related(
 ).all()
 
 # 查询性能分析
+# explain() 以字符串形式返回计划（仅接受 analyze 和 verbose 标志）。
 plan = await User.objects.filter(User.is_active == True).explain(
-    analyze=True, 
-    output="json"
+    analyze=True,
+    verbose=True,
 )
-print(f"Query cost: {plan['query_plan'][0].get('Total Cost', 'N/A')}")
+print(plan)
 
 # 自定义工具函数
 def format_model_name(name: str) -> str:

@@ -219,7 +219,7 @@ username: Column[str] = column(type="string")
 created_at: Column[datetime] = column(
     type="datetime",
     default_factory=datetime.now,  # 动态默认值
-    validators=[validate_datetime()]  # 字段级验证
+    validators=[validate_datetime_range()]  # 字段级验证
 )
 
 # 仅插入默认值
@@ -328,7 +328,7 @@ class User(ObjectModel):
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, StringColumn, NumericColumn
-from sqlobjects.config import index, constraint, unique
+from sqlobjects.metadata import index, constraint, unique
 from decimal import Decimal
 
 class Product(ObjectModel):
@@ -344,6 +344,32 @@ class Product(ObjectModel):
         constraints = [
             constraint("price > 0", "chk_positive_price"),
             unique("name", "sku", name="uq_name_sku")
+        ]
+```
+
+#### 复合与命名外键约束
+
+对于简单的单列外键，优先使用 `foreign_key()` 字段描述符（参见[外键字段](#外键字段)）。当你需要**复合**外键或显式**命名**的约束时，使用 `sqlobjects.metadata` 中的 `foreignkey()` 约束构建器，并将其放入 `Config.constraints`。`references` 参数既接受模型类名（如 `"User.id"`），也接受表名（如 `"users.id"`）：
+
+```python
+from sqlobjects.metadata import foreignkey
+
+class OrderItem(ObjectModel):
+    order_id: Column[int] = column(type="integer")
+    product_sku: Column[str] = StringColumn(length=50)
+    warehouse_code: Column[str] = StringColumn(length=20)
+
+    class Config:
+        constraints = [
+            # 带引用动作的命名单列外键
+            foreignkey("order_id", "Order.id", name="fk_items_order", ondelete="CASCADE"),
+
+            # 引用两列的复合外键
+            foreignkey(
+                ["product_sku", "warehouse_code"],
+                ["Inventory.sku", "Inventory.warehouse_code"],
+                name="fk_items_inventory",
+            ),
         ]
 ```
 

@@ -80,26 +80,17 @@ collector.raise_if_errors()
 Performance enhancement through batch operation optimization and FieldCacheMixin proxy system:
 
 ```python
-# QueryCache FIFO cache - automatically manages cache size
-users = await User.objects.filter(User.is_active == True).all()  # cache miss
-users = await User.objects.filter(User.is_active == True).all()  # cache hit
-
-# Cache statistics and control
-stats = QuerySet.get_cache_stats()
-print(f"Hit rate: {stats['hit_rate']:.2%}")
-QuerySet.clear_query_cache()
-
 # Batch operation optimization - uses bindparam and batch processing
 await User.objects.bulk_create(users_data)  # automatic batching
 affected = await User.objects.bulk_update(update_data, batch_size=500)
 
 # FieldCacheMixin proxy system - automatically handles deferred fields
 user = await User.objects.only("name").first()  # bio field deferred
-# user.bio returns DeferredFieldProxy
+# user.bio returns DeferredObject
 # await user.bio.fetch() actually loads the data
 
-# Relationship proxy - RelationFieldProxy
-# user.posts returns RelationFieldProxy
+# Relationship proxy - RelatedObject / RelatedCollection
+# user.posts returns RelatedCollection
 # await user.posts.fetch() loads relationship data
 ```
 
@@ -121,6 +112,39 @@ field_stats = User._get_field_cache()
 print(f"Field categories: {list(field_stats.keys())}")
 ```
 
+### 5. SQL Logging
+
+SQLObjects ships a zero-configuration SQL logger (`sqlobjects/sql_logging.py`) that attributes each logged
+statement to the user's own code rather than to a frame inside the library:
+
+```python
+import logging
+
+# Enabling DEBUG on the "sqlobjects.sql" logger turns on SQL logging.
+logging.getLogger("sqlobjects.sql").setLevel(logging.DEBUG)
+logging.basicConfig()
+
+users = await User.objects.filter(User.is_active == True).all()
+# The emitted record's filename/lineno/funcName point at the caller in user code,
+# not at executor.py or a SQLAlchemy internal frame.
+```
+
+- **ObjectLogger** (a `logging.Logger` subclass): overrides `makeRecord()` to rewrite the standard caller
+  fields (`pathname`, `filename`, `module`, `funcName`, `lineno`) to the first user-code frame. Because the
+  rewrite happens on the record, any attached handler — including loguru `InterceptHandler` — shows the real
+  call site with no extra `Filter` configuration.
+- **Frame-skipping** (`_find_user_frame` / `_should_skip_frame`): walks `inspect.stack()` and skips frames
+  from `site-packages`, synthetic `<...>` filenames, modules named exactly `sqlobjects`/`sqlalchemy`/`logging`
+  or prefixed with `sqlobjects.`/`sqlalchemy.` (covers editable installs), the `sql_logging.py` file itself,
+  and any `extra_skip_packages` prefixes supplied by the caller.
+- **Installation**: the module installs itself as the logger named `sqlobjects.sql` via
+  `_install_object_logger()`, which writes the `ObjectLogger` directly into `logging.root.manager.loggerDict`
+  (under the logging lock), migrating any pre-existing handlers/level/propagate. The `QueryExecutor` emits SQL
+  through this logger, compiling SQL for logging only when the logger is enabled for `DEBUG` (avoiding overhead
+  when logging is off).
+- **Public API**: `ObjectLogger` and `get_caller_frame(extra_skip_packages=None, max_frames=1) -> str | list[str]`,
+  which returns the first user-code frame(s) as `"path:lineno in func"` strings for custom scenarios.
+
 ## Module Architecture
 
 ### Core Components
@@ -128,7 +152,7 @@ print(f"Field categories: {list(field_stats.keys())}")
 **Model Integration Layer**
 
 - **ObjectModel**: Complete model base class combining all Mixins with built-in extension functionality
-- **ModelMixin**: Combines FieldCacheMixin + SignalMixin
+- **ModelMixin**: Defined as `ModelMixin(DataConversionMixin, SignalMixin)` — the DataConversionMixin chain (which includes FieldCacheMixin) plus SignalMixin
 
 **Signal System Layer**
 
@@ -148,19 +172,24 @@ print(f"Field categories: {list(field_stats.keys())}")
 
 **State Management Layer**
 
-- **StateManager**: Unified instance state management supporting multiple state types
-- **HistoryTrackingMixin**: History tracking and dirty field detection
+- **_StateManager**: Internal unified instance state management supporting multiple state types
+- **Dirty-field tracking**: Change detection is handled by `_StateManager` (tracked dirty fields), which is the basis for change history — there is no separate history mixin
 
 **Performance Tools Layer**
 
 - **FieldCache**: Field metadata caching mechanism integrated into model classes
 - **ValidationError**: Layered exception system supporting single-field and multi-field errors
 
+**SQL Logging Layer (`sql_logging.py`)**
+
+- **ObjectLogger**: `logging.Logger` subclass that rewrites LogRecord caller fields to the user-code call site; installed as the `sqlobjects.sql` logger and used by `QueryExecutor`
+- **get_caller_frame() / _find_user_frame() / _should_skip_frame()**: user-frame discovery skipping library and internal frames
+
 ### Design Philosophy
 
 **Built-in Integration**: All extension functionality is built into ObjectModel without explicit configuration
 **Mixin Composition**: Avoids complex inheritance through Mixin composition, improving maintainability
-**Unified State**: StateManager unifies instance state management supporting multiple state types
+**Unified State**: _StateManager unifies instance state management supporting multiple state types
 **Intelligent Proxy**: Integrates proxy system through __getattribute__ providing transparent lazy loading
 **Method Name Discovery**: Signal handlers discovered by method name convention using getattr()
 **Operation Detection**: _determine_save_operation() checks _has_primary_key_values() to detect CREATE/UPDATE
@@ -239,7 +268,22 @@ deferred_fields = field_cache.get("deferred_fields", set())
 .bulk_delete(ids, batch_size=1000)
 
 # Performance analysis
+# QueryExecutor.explain(query, analyze=False, verbose=False) -> str
+# Returns the query plan as a string (ExplainResult); there is no output= parameter.
 await queryset.explain(analyze=True)
+```
+
+### SQL Logging
+
+```python
+from sqlobjects.sql_logging import ObjectLogger, get_caller_frame
+
+# ObjectLogger is installed as the "sqlobjects.sql" logger; enable it with:
+import logging
+logging.getLogger("sqlobjects.sql").setLevel(logging.DEBUG)
+
+# get_caller_frame returns the first user-code frame(s), skipping library frames.
+get_caller_frame(extra_skip_packages=None, max_frames=1)  # -> str | list[str]
 ```
 
 ### Utility Functions
@@ -357,11 +401,12 @@ users = await User.objects.prefetch_related(
 ).all()
 
 # Query performance analysis
+# explain() returns the plan as a string (accepts analyze and verbose flags only).
 plan = await User.objects.filter(User.is_active == True).explain(
-    analyze=True, 
-    output="json"
+    analyze=True,
+    verbose=True,
 )
-print(f"Query cost: {plan['query_plan'][0].get('Total Cost', 'N/A')}")
+print(plan)
 
 # Custom utility functions
 def format_model_name(name: str) -> str:

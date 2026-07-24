@@ -104,7 +104,7 @@ async with ctx_session() as session:
 
 # Good: Connection pool configuration
 await init_db(
-    "postgresql://localhost/db",
+    "postgresql+asyncpg://localhost/db",
     pool_size=20,
     max_overflow=30,
     pool_timeout=30,
@@ -141,7 +141,7 @@ await Post.objects.create(title="Post", author_id=user.id)
 ```python
 # Production configuration
 await init_db(
-    "postgresql://localhost/db",
+    "postgresql+asyncpg://localhost/db",
     pool_size=20,           # Base connections
     max_overflow=30,        # Burst capacity
     pool_timeout=30,        # Wait time for connection
@@ -249,7 +249,7 @@ except OperationalError:
 ## Complete Example
 
 ```python
-from sqlobjects.database import init_dbs, create_tables, close_all_dbs
+from sqlobjects.database import init_dbs, create_tables, close_dbs
 from sqlobjects.session import ctx_session, ctx_sessions
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, StringColumn
@@ -264,8 +264,8 @@ class Log(ObjectModel):
 async def main():
     # Setup
     await init_dbs({
-        "main": {"url": "postgresql://localhost/main", "pool_size": 20},
-        "analytics": {"url": "sqlite:///analytics.db"}
+        "main": {"url": "postgresql+asyncpg://localhost/main", "pool_size": 20},
+        "analytics": {"url": "sqlite+aiosqlite:///analytics.db"}
     }, default="main")
 
     await create_tables(ObjectModel, "main")
@@ -286,7 +286,7 @@ async def main():
         )
 
     # Cleanup
-    await close_all_dbs()
+    await close_dbs()
 
 # Run
 import asyncio
@@ -330,3 +330,58 @@ async def get_user(user_id: int, session: AsyncSession = Depends(get_db_session)
     user = await User.objects.using(session).get(User.id == user_id)
     return {"username": user.username}
 ```
+
+## SQL Logging
+
+SQLObjects ships zero-config SQL logging through the standard library `logging`
+module. Every executed statement is logged at `DEBUG` level to the logger named
+**`sqlobjects.sql`**. This logger is an `ObjectLogger` (installed automatically
+on import) that rewrites each record's caller fields — `pathname`, `filename`,
+`funcName`, `lineno` — to the first user-code frame, skipping internal
+`sqlobjects.*` and `sqlalchemy.*` frames. Your log output therefore points at
+the line in your application that issued the query, not at ORM internals.
+
+### Enabling
+
+```python
+import logging
+
+# Show SQL (and everything else) at DEBUG
+logging.basicConfig(level=logging.DEBUG)
+logging.getLogger("sqlobjects.sql").setLevel(logging.DEBUG)
+
+# Now queries emit DEBUG log records
+users = await User.objects.filter(User.is_active == True).all()
+```
+
+To capture SQL only, without lowering the level of the rest of your app, attach
+a dedicated handler to the `sqlobjects.sql` logger:
+
+```python
+import logging
+
+sql_logger = logging.getLogger("sqlobjects.sql")
+sql_logger.setLevel(logging.DEBUG)
+
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter("%(pathname)s:%(lineno)d - %(message)s"))
+sql_logger.addHandler(handler)
+```
+
+Statement compilation only happens when the logger is actually enabled for
+`DEBUG`, so leaving logging off has no runtime cost. Each record carries the
+compiled SQL as the message plus an `extra` dict with `sql`, `params`, and
+`duration_ms`.
+
+### Public API
+
+```python
+from sqlobjects import ObjectLogger, get_caller_frame
+```
+
+- **`ObjectLogger`** — the `logging.Logger` subclass used for `sqlobjects.sql`.
+  It accepts an `extra_skip_packages` list to skip additional module prefixes
+  (e.g. your own middleware) when resolving the user-code frame.
+- **`get_caller_frame(extra_skip_packages=None, max_frames=1)`** — returns the
+  first user-code frame as a `"path:lineno in func"` string (or a list when
+  `max_frames > 1`), applying the same skip rules. Useful for custom logging.

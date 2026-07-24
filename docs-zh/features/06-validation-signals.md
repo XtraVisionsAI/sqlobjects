@@ -57,9 +57,10 @@ class User(ObjectModel):  # 内置信号支持
 ```python
 from sqlobjects.validators import (
     validate_email, validate_url, validate_length, validate_range,
-    validate_regex, validate_choices, validate_date, validate_time,
-    validate_decimal, validate_json
+    validate_regex, validate_choice, validate_not_empty, validate_positive,
+    validate_datetime_range
 )
+from datetime import datetime
 
 class User(ObjectModel):
     # 邮箱验证
@@ -74,27 +75,28 @@ class User(ObjectModel):
     # 正则表达式验证
     phone: Column[str] = StringColumn(validators=[validate_regex(r"^\d{3}-\d{3}-\d{4}$")])
   
-    # 选择值验证
-    status: Column[str] = StringColumn(validators=[validate_choices(["active", "inactive", "pending"])])
+    # 选择值验证（值必须是允许的选项之一）
+    status: Column[str] = StringColumn(validators=[validate_choice(["active", "inactive", "pending"])])
   
     # URL验证
     website: Column[str] = StringColumn(validators=[validate_url()])
   
-    # 日期/时间验证
-    birth_date: Column[str] = StringColumn(validators=[validate_date("%Y-%m-%d")])
-    work_time: Column[str] = StringColumn(validators=[validate_time("%H:%M")])
+    # 非空验证
+    display_name: Column[str] = StringColumn(validators=[validate_not_empty()])
   
-    # 小数验证
-    price: Column[str] = StringColumn(validators=[validate_decimal(10, 2)])
+    # 正数验证
+    credits: Column[int] = IntegerColumn(validators=[validate_positive()])
   
-    # JSON验证
-    metadata: Column[str] = StringColumn(validators=[validate_json()])
+    # 日期时间范围验证
+    signup_at: Column[datetime] = DateTimeColumn(
+        validators=[validate_datetime_range(min_date=datetime(2020, 1, 1))]
+    )
 ```
 
 ### 高级验证器
 
 ```python
-from sqlobjects.validators import validate_regex, validate_choices
+from sqlobjects.validators import validate_regex, validate_choice
 
 class Document(ObjectModel):
     title: Column[str] = StringColumn(length=200)
@@ -109,7 +111,7 @@ class Document(ObjectModel):
   
     # 文档类型验证
     doc_type: Column[str] = StringColumn(validators=[
-        validate_choices(["report", "manual", "specification", "other"])
+        validate_choice(["report", "manual", "specification", "other"])
     ])
   
     # 文件大小验证（字符串表示）
@@ -163,20 +165,20 @@ class User(ObjectModel):
 
 ### 组合验证器
 
+`validators` 参数是一个列表，其中的每个验证器都会按顺序应用到字段值（参见 `sqlobjects/validators.py` 中的 `validate_field_value`）。要组合多个验证器，直接列出即可 —— 没有单独的组合器辅助函数：
+
 ```python
-from sqlobjects.validators import combine_validators
+from sqlobjects.validators import validate_length, validate_regex, validate_email
 
 class User(ObjectModel):
-    # 组合多个验证器
+    # 多个验证器按顺序运行：先长度，再模式，最后自定义
     username: Column[str] = StringColumn(validators=[
-        combine_validators(
-            validate_length(3, 50),
-            validate_regex(r"^[a-zA-Z0-9_]+$"),
-            validate_username  # 自定义验证器
-        )
+        validate_length(3, 50),
+        validate_regex(r"^[a-zA-Z0-9_]+$"),
+        validate_username,  # 自定义验证器函数
     ])
   
-    # 多个独立验证器
+    # 内置验证器与长度验证器一起使用
     email: Column[str] = StringColumn(validators=[
         validate_email(),
         validate_length(5, 100)
@@ -233,9 +235,10 @@ system_user = await User.objects.create(
 
 # 手动验证
 user = User(username="alice", email="alice@example.com")
-user.validate_all()  # 验证所有字段和模型
-user.validate_fields(["username", "email"])  # 验证特定字段
-user.validate()  # 仅模型级验证
+user.validate_all_fields()  # 验证所有字段
+user.validate_all_fields(["username", "email"])  # 验证特定字段
+user.validate_field("username")  # 验证单个字段
+user.validate()  # 仅模型级验证（如果在模型上定义）
 
 # 保存时验证
 user = User(username="bob", email="bob@example.com")
@@ -251,7 +254,7 @@ from sqlobjects.exceptions import ValidationError, ValidationErrorCollector
 # 单个验证错误
 try:
     user = User(username="ab", email="invalid-email")
-    user.validate_all()
+    user.validate_all_fields()
 except ValidationError as e:
     print(f"验证失败：{e.message}")
     print(f"字段：{e.field}")
@@ -260,7 +263,7 @@ except ValidationError as e:
 # 多个验证错误
 try:
     user = User(username="a", email="bad", age=-5)
-    user.validate_all()
+    user.validate_all_fields()
 except ValidationError as e:
     if hasattr(e, 'errors') and e.errors:
         for field, errors in e.errors.items():

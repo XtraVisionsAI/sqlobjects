@@ -2,7 +2,7 @@
 
 ## 概述
 
-SQLObjects 关系处理模块通过统一的 relationship() 函数和 Column 描述符集成，提供完整的模型关系支持。通过 RelationFieldProxy 延迟加载、QuerySet 集成的 select_related/prefetch_related 和自定义 QuerySet 配置，实现高性能的关系数据访问。
+SQLObjects 关系处理模块通过统一的 relationship() 函数和 Column 描述符集成，提供完整的模型关系支持。通过 RelatedObject/RelatedCollection 延迟加载、QuerySet 集成的 select_related/prefetch_related 和自定义 QuerySet 配置，实现高性能的关系数据访问。
 
 ## 核心功能
 
@@ -65,7 +65,7 @@ posts = await Post.objects.select_related(
 
 ### 3. 高级预取加载策略
 
-QuerySet 集成的 prefetch_related，支持自定义 QuerySet 配置和 RelationFieldProxy 延迟加载：
+QuerySet 集成的 prefetch_related，支持自定义 QuerySet 配置和 RelatedObject/RelatedCollection 延迟加载：
 
 ```python
 # 简单预取 - 使用默认 QuerySet
@@ -128,6 +128,23 @@ user = await User.objects.get(User.id == 1)
 roles = await user.roles.fetch()  # 获取用户角色
 ```
 
+### 5. 级联策略
+
+SQLObjects 在两个协作层面统一级联行为（`sqlobjects/cascade.py`）：
+
+**数据库层 —— `ondelete` / `onupdate`。** 由数据库引擎强制执行的外键约束行为。通过 `foreign_key(..., ondelete="CASCADE")`（或 `OnDelete` / `OnUpdate` 枚举，其取值为 `CASCADE`、`SET NULL`、`RESTRICT`、`NO ACTION`）在外键本身上配置。这些行为无需 ORM 往返：数据库自行删除或置空依赖行。
+
+**ORM 层 —— `cascade`。** 应用层级联，在 `relationship(cascade=...)` 上配置。选项由 `CascadeOption` 建模（`save-update`、`merge`、`delete`、`delete-orphan`、`refresh-expire`、`all`），并在 `CascadePresets` 中提供便捷组合（如 `ALL_DELETE_ORPHAN = "all, delete-orphan"`）。ORM 级联通过 ORM 运行，因此会发射生命周期信号，且能遍历数据库没有约束的关系。
+
+**自动检测与分派。** `Model.delete(cascade=None)` 通过调用 `_has_on_delete_relations()`（`model.py`）自动检测是否需要级联处理，该方法检查模型关系中是否有包含 `delete`/`all` 的 `cascade` 字符串，或非 `NO ACTION` 的 `on_delete`。当需要级联（或用 `cascade=True` 强制）时，删除会分派到 `CascadeExecutor.execute_delete_operation()`；否则执行直接的 `_delete_internal()`。`cascade=False` 始终跳过级联。
+
+**组件。**
+
+- **OnDelete / OnUpdate**: 数据库层外键约束行为的枚举。
+- **CascadeOption / CascadePresets**: ORM 层级联选项及预设组合；`CascadeType` 和 `normalize_*` 辅助函数将枚举/字符串/集合输入强制转换为 SQLAlchemy 级联字符串。
+- **DependencyResolver**: 通过拓扑排序为级联保存排序实例，并进行 DFS 环检测（循环依赖时抛出 `CyclicDependencyError`）。
+- **CascadeExecutor**: 执行保存/删除/更新级联，包含会话管理与信号兼容。对于 QuerySet 删除，它自动选择策略（存在删除信号时用 `full`，存在级联删除关系时用 `fast`，否则用 `none`）。
+
 ## 模块架构
 
 ### 核心组件
@@ -151,6 +168,13 @@ roles = await user.roles.fetch()  # 获取用户角色
 - **QuerySet.prefetch_related()**: 分离查询预取，支持自定义 QuerySet 配置
 - **QueryExecutor**: 统一处理预取查询执行和结果关联
 
+**级联层 (`cascade.py`)**
+
+- **OnDelete / OnUpdate**: 数据库层外键约束行为
+- **CascadeOption / CascadePresets**: ORM 层级联选项及预设
+- **DependencyResolver**: 级联保存的拓扑排序与环检测
+- **CascadeExecutor**: 执行级联保存/删除/更新；为 QuerySet 自动选择删除策略
+
 ### 设计理念
 
 **统一集成**: relationship() 函数返回 Related 容器，ModelProcessor 提取描述符
@@ -171,14 +195,40 @@ roles = await user.roles.fetch()  # 获取用户角色
 ### 关系定义
 
 ```python
-# 外键关系
-relationship(target_model, foreign_keys=None, back_populates=None)
+# 完整签名（sqlobjects/fields/relations/utils.py）
+relationship(
+    argument,                  # 目标模型类或其字符串名称
+    *,
+    foreign_keys=None,         # 本模型上的外键字段名（多对一侧）
+    remote_fields=None,        # 关联模型上的外键字段名（一对多/一对一侧）
+    back_populates=None,       # 反向关系属性的名称
+    backref=None,              # 自动创建反向关系（与 back_populates 互斥）
+    lazy="select",             # 加载策略
+    uselist=None,              # 关系是否返回集合
+    secondary=None,            # 多对多关联表名或 M2MTable 实例
+    primaryjoin=None,
+    secondaryjoin=None,
+    order_by=None,             # 集合的默认排序
+    cascade=None,              # ORM 层级联行为（参见级联策略）
+    passive_deletes=False,
+    **kwargs
+)
+
+# 多对一 / 外键关系
+author: Related[User] = relationship("User", foreign_keys="author_id", back_populates="posts")
+
+# 一对多（反向）关系
+posts: Related[list[Post]] = relationship("Post", back_populates="author")
 
 # 多对多关系
-relationship(target_model, secondary=None, back_populates=None)
+tags: Related[list[Tag]] = relationship("Tag", secondary="post_tags", back_populates="posts")
 
 # 一对一关系
-relationship(target_model, foreign_keys=None, unique=True)
+# relationship() 没有 `unique=` 参数。一对一通过父侧的
+# uselist=False 加上子侧的 UNIQUE 外键来表达。
+#   User 侧:    profile: Related[Profile] = relationship("Profile", back_populates="user", uselist=False)
+#   Profile 侧: user_id: Column[int] = foreign_key("User.id", unique=True)
+#              user = relationship("User", back_populates="profile")
 ```
 
 ### 关系加载

@@ -4,7 +4,7 @@
 
 The SQLObjects relationship processing module provides comprehensive model relationship support through a unified
 relationship() function and Column descriptor integration. It achieves high-performance relational data access through
-RelationFieldProxy lazy loading, QuerySet-integrated select_related/prefetch_related, and custom QuerySet configuration.
+RelatedObject/RelatedCollection lazy loading, QuerySet-integrated select_related/prefetch_related, and custom QuerySet configuration.
 
 ## Core Features
 
@@ -67,7 +67,7 @@ posts = await Post.objects.select_related(
 
 ### 3. Advanced Prefetch Loading Strategy
 
-QuerySet-integrated prefetch_related with support for custom QuerySet configuration and RelationFieldProxy lazy loading:
+QuerySet-integrated prefetch_related with support for custom QuerySet configuration and RelatedObject/RelatedCollection lazy loading:
 
 ```python
 # Simple prefetch - using default QuerySet
@@ -130,6 +130,37 @@ user = await User.objects.get(User.id == 1)
 roles = await user.roles.fetch()  # Get user roles
 ```
 
+### 5. Cascade Strategy
+
+SQLObjects unifies cascade behavior across two cooperating levels (`sqlobjects/cascade.py`):
+
+**Database level — `ondelete` / `onupdate`.** Foreign-key constraint behaviors enforced by the database
+engine. Configured on the FK itself via `foreign_key(..., ondelete="CASCADE")` (or the `OnDelete` /
+`OnUpdate` enums, whose values are `CASCADE`, `SET NULL`, `RESTRICT`, `NO ACTION`). These require no ORM
+round-trips: the database removes or nulls dependent rows on its own.
+
+**ORM level — `cascade`.** Application-layer cascade configured on `relationship(cascade=...)`. Options are
+modeled by `CascadeOption` (`save-update`, `merge`, `delete`, `delete-orphan`, `refresh-expire`, `all`) with
+convenient bundles in `CascadePresets` (e.g. `ALL_DELETE_ORPHAN = "all, delete-orphan"`). ORM cascades run
+through the ORM so they emit lifecycle signals and can traverse relationships the database has no constraint for.
+
+**Automatic detection and dispatch.** `Model.delete(cascade=None)` auto-detects whether cascade handling is
+needed by calling `_has_on_delete_relations()` (`model.py`), which inspects the model's relationships for a
+`cascade` string containing `delete`/`all` or an `on_delete` other than `NO ACTION`. When cascade is needed
+(or forced with `cascade=True`), the delete is dispatched to `CascadeExecutor.execute_delete_operation()`;
+otherwise a direct `_delete_internal()` runs. `cascade=False` always skips cascade.
+
+**Components.**
+
+- **OnDelete / OnUpdate**: Enums for database-level FK constraint behaviors.
+- **CascadeOption / CascadePresets**: ORM-level cascade options and preset combinations; `CascadeType` and
+  the `normalize_*` helpers coerce enum/str/set inputs into SQLAlchemy cascade strings.
+- **DependencyResolver**: Orders instances for cascade save via topological sort, with DFS cycle detection
+  (`CyclicDependencyError` on circular dependencies).
+- **CascadeExecutor**: Executes save/delete/update cascades with session management and signal compatibility.
+  For QuerySet deletes it picks a strategy automatically (`full` when delete signals are present, `fast` when
+  cascade-delete relations exist, `none` otherwise).
+
 ## Module Architecture
 
 ### Core Components
@@ -153,6 +184,13 @@ roles = await user.roles.fetch()  # Get user roles
 - **QuerySet.prefetch_related()**: Separate query prefetch, supports custom QuerySet configuration
 - **QueryExecutor**: Unified handling of prefetch query execution and result association
 
+**Cascade Layer (`cascade.py`)**
+
+- **OnDelete / OnUpdate**: Database-level FK constraint behaviors
+- **CascadeOption / CascadePresets**: ORM-level cascade options and presets
+- **DependencyResolver**: Topological ordering and cycle detection for cascade save
+- **CascadeExecutor**: Executes cascade save/delete/update; auto-selects the delete strategy for QuerySets
+
 ### Design Philosophy
 
 **Unified Integration**: relationship() function returns Related container, ModelProcessor extracts descriptor
@@ -173,14 +211,40 @@ roles = await user.roles.fetch()  # Get user roles
 ### Relationship Definition
 
 ```python
-# Foreign key relationship
-relationship(target_model, foreign_keys=None, back_populates=None)
+# Full signature (sqlobjects/fields/relations/utils.py)
+relationship(
+    argument,                  # target model class or its string name
+    *,
+    foreign_keys=None,         # FK field name(s) on this model (many-to-one side)
+    remote_fields=None,        # FK field name(s) on the related model (one-to-many/one-to-one side)
+    back_populates=None,       # name of the reverse relationship attribute
+    backref=None,              # auto-create the reverse relationship (mutually exclusive with back_populates)
+    lazy="select",             # loading strategy
+    uselist=None,              # whether the relationship returns a collection
+    secondary=None,            # M2M association table name or M2MTable instance
+    primaryjoin=None,
+    secondaryjoin=None,
+    order_by=None,             # default ordering for collections
+    cascade=None,              # ORM-level cascade behavior (see Cascade Strategy)
+    passive_deletes=False,
+    **kwargs
+)
+
+# Many-to-one / foreign key relationship
+author: Related[User] = relationship("User", foreign_keys="author_id", back_populates="posts")
+
+# One-to-many (reverse) relationship
+posts: Related[list[Post]] = relationship("Post", back_populates="author")
 
 # Many-to-many relationship
-relationship(target_model, secondary=None, back_populates=None)
+tags: Related[list[Tag]] = relationship("Tag", secondary="post_tags", back_populates="posts")
 
 # One-to-one relationship
-relationship(target_model, foreign_keys=None, unique=True)
+# There is no `unique=` parameter on relationship(). A one-to-one is expressed with
+# uselist=False on the parent side plus a UNIQUE foreign key on the child side.
+#   User side:    profile: Related[Profile] = relationship("Profile", back_populates="user", uselist=False)
+#   Profile side: user_id: Column[int] = foreign_key("User.id", unique=True)
+#                 user = relationship("User", back_populates="profile")
 ```
 
 ### Relationship Loading

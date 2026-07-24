@@ -69,7 +69,8 @@ class User(ObjectModel):
 
 ```python
 from sqlobjects.model import ObjectModel
-from sqlobjects.fields import Column, StringColumn, index, constraint
+from sqlobjects.fields import Column, StringColumn, IntegerColumn
+from sqlobjects.metadata import index, constraint
 
 class User(ObjectModel):
     username: Column[str] = StringColumn(length=50)
@@ -87,6 +88,38 @@ class User(ObjectModel):
             constraint("age >= 0", "chk_positive_age")
         ]
 ```
+
+### Named & Composite Foreign Keys
+
+For composite foreign keys, custom constraint names, or explicit referential
+actions defined at the table level, use the `foreignkey()` constraint builder
+in `Config.constraints`. For simple single-column foreign keys, prefer the
+`foreign_key()` field descriptor (see the Relationships guide) instead.
+
+```python
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, StringColumn, IntegerColumn
+from sqlobjects.metadata import foreignkey
+
+class OrderItem(ObjectModel):
+    order_id: Column[int] = IntegerColumn()
+    product_id: Column[int] = IntegerColumn()
+    quantity: Column[int] = IntegerColumn()
+
+    class Config:
+        constraints = [
+            # Named single-column foreign key with explicit referential action
+            foreignkey("order_id", "Order.id", name="fk_items_order", ondelete="CASCADE"),
+            # Composite foreign key
+            foreignkey(["product_id", "order_id"], ["Product.id", "Order.id"]),
+        ]
+```
+
+`foreignkey(fields, references, *, name=None, ondelete=None, onupdate=None,
+deferrable=False, initially="IMMEDIATE")` accepts a single field/reference or a
+list for composite keys. References may be given as class names (e.g.
+`"Order.id"`) or table names (e.g. `"orders.id"`); class names are resolved
+automatically.
 
 ### Field Parameters
 
@@ -333,8 +366,8 @@ from sqlobjects.model import ObjectModel
 from sqlobjects.fields import (
     Column, column, StringColumn, IntegerColumn,
     BooleanColumn, DateTimeColumn, JsonColumn,
-    index, constraint
 )
+from sqlobjects.metadata import index, constraint
 from datetime import datetime
 
 class User(ObjectModel):

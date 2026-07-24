@@ -14,7 +14,7 @@
 
 ```python
 from sqlobjects.model import ObjectModel
-from sqlobjects.fields import Column, StringColumn, foreign_key, relationship, Related
+from sqlobjects.fields import Column, StringColumn, column, foreign_key, relationship, Related
 
 # One-to-Many (Foreign Key)
 class Post(ObjectModel):
@@ -227,6 +227,96 @@ class Category(ObjectModel):
 category = await Category.objects.select_related("parent").prefetch_related("children").get(Category.id == 1)
 ```
 
+## Cascade Operations
+
+SQLObjects offers cascade behavior at two independent layers. Choose the one
+that matches how you want related rows handled when a parent is updated or
+deleted.
+
+### Database-Level (`ondelete` / `onupdate`)
+
+Declared on the `foreign_key()` field descriptor, these translate directly into
+the SQL `ON DELETE` / `ON UPDATE` referential actions enforced by the database
+engine. Use the `OnDelete` enum (or the equivalent string) for clarity.
+
+```python
+from sqlobjects.model import ObjectModel
+from sqlobjects.fields import Column, StringColumn, foreign_key, relationship, Related
+from sqlobjects import OnDelete
+
+class Post(ObjectModel):
+    title: Column[str] = StringColumn(length=200)
+    # DB deletes child rows automatically when the parent User is deleted
+    author_id: Column[int] = foreign_key("User.id", ondelete=OnDelete.CASCADE, nullable=False)
+    author: Related["User"] = relationship("User", back_populates="posts")
+```
+
+Available `OnDelete` values: `CASCADE`, `SET_NULL`, `RESTRICT`, `NO_ACTION`.
+`onupdate` accepts the same set. Strings such as `ondelete="CASCADE"` are also
+accepted.
+
+### ORM-Level (`relationship(cascade=...)`)
+
+Declared on `relationship()`, these are applied by the ORM when it saves or
+deletes an instance — independent of what the database constraint does. Use the
+`CascadePresets` constants for common combinations.
+
+```python
+from sqlobjects import CascadePresets
+
+class User(ObjectModel):
+    username: Column[str] = StringColumn(length=50)
+    # Saving a User cascades to its posts; deleting a User deletes them,
+    # and posts removed from the collection are deleted as orphans
+    posts: Related[list["Post"]] = relationship(
+        "Post",
+        back_populates="author",
+        cascade=CascadePresets.ALL_DELETE_ORPHAN,
+    )
+```
+
+`CascadePresets` combinations:
+
+- `NONE` — no cascade
+- `SAVE_UPDATE` — cascade save/update only
+- `DELETE` — cascade delete only
+- `SAVE_DELETE` — `"save-update, delete"`
+- `ALL` — `"save-update, merge, refresh-expire"`
+- `ALL_DELETE_ORPHAN` — `ALL` plus orphan deletion
+
+The `cascade` argument also accepts a raw string (e.g. `cascade="save-update, delete"`),
+a `CascadeOption`, or a set of `CascadeOption` values.
+
+### Automatic Detection on `delete()`
+
+`Model.delete()` inspects the model's relationships and applies cascade handling
+automatically:
+
+```python
+user = await User.objects.get(User.id == 1)
+await user.delete()               # auto-detects on-delete cascade relations
+await user.delete(cascade=True)   # force ORM cascade handling
+await user.delete(cascade=False)  # skip cascade, direct delete
+```
+
+For bulk deletes, `QuerySet.delete(cascade="auto")` chooses a strategy
+(`"full"`, `"fast"`, or `"none"`) based on the model's relationships and delete
+signals. See the CRUD guide for details.
+
+### ✅ Do
+
+- **Use `ondelete`** when you want the database to enforce referential integrity
+- **Use `relationship(cascade=...)`** when related objects must go through the
+  ORM (e.g. to fire delete signals or handle orphans)
+- **Combine both layers** when appropriate — they are independent
+
+### ❌ Don't
+
+- **Don't assume ORM cascade removes rows the DB constraint handles** (or vice
+  versa) — they are configured separately
+- **Don't rely on `ondelete=CASCADE`** to fire `before_delete` / `after_delete`
+  signals; database-level cascades bypass the ORM
+
 ## Performance Tips
 
 ### N+1 Query Prevention
@@ -348,7 +438,7 @@ class Post(ObjectModel):
 
 ```python
 from sqlobjects.model import ObjectModel
-from sqlobjects.fields import Column, StringColumn, foreign_key, relationship, Related
+from sqlobjects.fields import Column, StringColumn, column, foreign_key, relationship, Related
 from datetime import datetime, timedelta
 
 class User(ObjectModel):

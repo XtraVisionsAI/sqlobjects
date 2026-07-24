@@ -33,7 +33,7 @@ class CTEExpression:
             >>> base = Employee.objects.filter(Employee.manager_id.is_(None)).cte("hierarchy", recursive=True)
             >>> recursive = Employee.objects.join(base, Employee.manager_id == base.c.id)
             >>> hierarchy = base.union_all(recursive)
-            >>> all_employees = await Employee.objects.with_cte(hierarchy).select_from(hierarchy).all()
+            >>> all_employees = await Employee.objects.with_cte(hierarchy).all()
     """
 
     def __init__(self, queryset: QuerySet, name: str, recursive: bool = False):

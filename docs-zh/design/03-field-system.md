@@ -47,7 +47,7 @@ username: Column[str] = column(
     init=True, repr=True, compare=False, hash=None, kw_only=False
 )
 
-# 外键字段
+# 外键字段（底层写法；建议使用 foreign_key() 描述符 —— 参见 API 参考）
 author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
 ```
 
@@ -230,7 +230,24 @@ field.case(*conditions, else_=None) / field.greatest(*args) / field.least(*args)
 identity(start=1, increment=1, minvalue=None, maxvalue=None, cycle=False, cache=None, **kwargs)
 computed(sqltext, persisted=None, column_type="auto", **kwargs)
 
-# 外键字段（使用 SQLAlchemy ForeignKey）
+# 外键字段
+#
+# 推荐：foreign_key() 字段描述符（sqlobjects.fields）。
+# 接受 "Class.column" 引用（自动解析为表）或原始的 "table.column"，
+# 并支持 ondelete/onupdate 约束行为。
+from sqlobjects.fields import foreign_key
+author_id: Column[int] = foreign_key("User.id", ondelete="CASCADE")
+
+# 复合 / 显式命名外键约束的推荐写法：foreignkey() 约束构建器
+# （sqlobjects.metadata），在 Config.constraints 中使用。
+from sqlobjects.metadata import foreignkey
+# class Config:
+#     constraints = [
+#         foreignkey("author_id", "User.id", name="fk_posts_author", ondelete="CASCADE"),
+#         foreignkey(["a_id", "b_id"], ["A.id", "B.id"]),  # 复合外键
+#     ]
+
+# 底层备选：向 column(foreign_key=...) 传入 SQLAlchemy ForeignKey
 from sqlalchemy import ForeignKey
 author_id: Column[int] = column(type="integer", foreign_key=ForeignKey("users.id"))
 
@@ -249,6 +266,39 @@ get_column_from_field(field_def)
 # 验证和元数据
 get_field_validators(model_class, field_name)
 get_model_metadata(model_class)
+```
+
+### 外键 API
+
+在底层的 `column(foreign_key=ForeignKey(...))` 写法之上，有两个推荐入口：
+
+```python
+# foreign_key() 字段描述符 —— sqlobjects/fields/functions.py
+foreign_key(
+    reference,                 # "Class.column"（自动解析）或 "table.column"
+    *,
+    type="auto",
+    nullable=True,
+    ondelete=None,             # OnDelete 枚举或 "CASCADE"/"SET NULL"/"RESTRICT"/"NO ACTION"
+    onupdate=None,
+    deferrable=False,
+    initially="IMMEDIATE",
+    **kwargs
+) -> Column
+
+# foreignkey() 约束构建器 —— sqlobjects/metadata.py
+# 用于复合和/或显式命名的外键约束；在 Config.constraints 中使用。
+foreignkey(
+    fields,                    # 本地字段名：str 或 list[str]
+    references,                # "Class.column"/"table.column" 或其列表
+    *,
+    name=None,
+    ondelete=None,
+    onupdate=None,
+    deferrable=False,
+    initially="IMMEDIATE",
+    **kwargs
+) -> ForeignKeyConstraint
 ```
 
 ### 类型注册系统

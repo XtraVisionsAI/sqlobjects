@@ -130,10 +130,6 @@ active_users = await User.objects.filter(User.is_active == True).all()
 
 # 分页
 users_page = await User.objects.offset(20).limit(10).all()
-
-# 随机采样
-random_users = await User.objects.random(5)
-sample_users = await User.objects.sample(10)
 ```
 
 ### 批量检索
@@ -175,16 +171,16 @@ await user.save()  # 自动检测 UPDATE 操作
 # 使用相同值更新多条记录
 affected = await User.objects.filter(
     User.is_active == False
-).update(values={
-    "status": "inactive",
-    "updated_at": datetime.now()
-})
+).update(
+    status="inactive",
+    updated_at=datetime.now()
+)
 
 # 使用 Q 对象的条件更新
 affected = await User.objects.filter(
     Q(User.last_login < datetime.now() - timedelta(days=30)) |
     Q(User.login_count == 0)
-).update(values={"is_active": False})
+).update(is_active=False)
 
 # 带冲突解决的批量更新
 mappings = [
@@ -200,9 +196,11 @@ affected = await User.objects.bulk_update(
 )
 
 # 带冲突处理
+from sqlobjects import ConflictResolution
+
 affected = await User.objects.bulk_create(
     users_data,
-    on_conflict="ignore",  # 跳过重复项
+    on_conflict=ConflictResolution.IGNORE,  # 跳过重复项
     batch_size=1000
 )
 ```
@@ -239,6 +237,8 @@ await user.delete()
 user = User(id=1)
 await user.delete()  # 自动附加到会话
 ```
+
+`Model.delete(cascade=None)` 根据模型的关系自动检测是否需要级联处理。传入 `cascade=True` 可强制级联处理，传入 `cascade=False` 则执行不带级联的直接删除。数据库层外键动作（`OnDelete.CASCADE` 等）与 ORM 层 `relationship(cascade=...)` 在模型本身上配置；详见[级联操作](05-relationships.md#级联操作)一节。
 
 ### 批量删除
 
@@ -374,7 +374,7 @@ async with ctx_session() as session:
         user = await User.objects.using(session).create(username="manual_tx")
         await User.objects.using(session).filter(
             User.is_active == False
-        ).update(values={"status": "archived"})
+        ).update(status="archived")
       
         # 手动提交
         await session.commit()
@@ -471,7 +471,7 @@ except Exception as e:
     for mapping in mappings:
         try:
             await User.objects.filter(User.id == mapping["id"]).update(
-                values={k: v for k, v in mapping.items() if k != "id"}
+                **{k: v for k, v in mapping.items() if k != "id"}
             )
         except Exception as individual_error:
             logger.error(f"ID {mapping['id']} 的个别更新失败：{individual_error}")
@@ -504,7 +504,7 @@ if len(user_updates) > 100:
 else:
     # 个别更新（更好的错误处理）
     for update in user_updates:
-        await User.objects.filter(User.id == update["id"]).update(values=update)
+        await User.objects.filter(User.id == update["id"]).update(**update)
 ```
 
 ### 会话使用

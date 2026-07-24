@@ -43,7 +43,6 @@ QuerySet uses composite pattern, implemented through QueryBuilder and QueryExecu
 class QuerySet:
     def __init__(self, table, model_class, db_or_session=None):
         self._builder = QueryBuilder(model_class)      # Query building
-        self._executor = QueryExecutor(db_or_session)   # Query executor
         self._executor = QueryExecutor(db_or_session)   # Unified execution
 
 # Chained building - each method returns new QuerySet instance
@@ -135,6 +134,19 @@ deleted_rows = await User.objects.bulk_delete([1, 2, 3], batch_size=1000)
 
 - **QueryExecutor**: Unified query execution engine, supports multiple query types, iterators and lazy loading
 
+**Expressions Subsystem (`expressions/`)**
+
+The `expressions/` package supplies the composable SQL expression objects that the query pipeline builds on. Each module contributes one family of expressions:
+
+- **window.py**: Window functions (`WindowFunction` base with `RowNumberFunction`, `RankFunction`, `DenseRankFunction`, `PercentRankFunction`, `NtileFunction`, `LagFunction`, `LeadFunction`, `FirstValueFunction`, `LastValueFunction`, `NthValueFunction`) plus `WindowSpec`. A window function is created via `func.row_number()`, `func.rank()`, etc., configured with `.over(partition_by=..., order_by=..., rows=..., range_=...)`, and used as an annotation: `User.objects.annotate(rank=func.rank().over(order_by=[User.age])).all()`. Window functions cannot be executed directly.
+- **cte.py**: `CTEExpression` for Common Table Expressions. The entry points are `QuerySet.cte(name, recursive=False)` (turns the current QuerySet into a CTE) and `QuerySet.with_cte(*ctes)` (uses one or more CTEs in a query); recursive CTEs are supported via `recursive=True` and `union_all`.
+- **subquery.py**: `SubqueryExpression` for correlated and standalone subqueries.
+- **scalar.py**: Scalar-returning expressions (`ScalarSubquery`, `CountExpression`, `ExistsExpression`).
+- **aggregate.py**: `AggregateExpression` for aggregate functions used in `annotate()`/`aggregate()`.
+- **function.py**: The `func` factory (`FunctionExpression`), a type-safe wrapper over SQLAlchemy functions that also exposes the window-function constructors; `func.raw(name, *args)` builds arbitrary SQL functions.
+- **explain.py**: `ExplainResult`, the string-valued result of query plan inspection (see document 05).
+- **terminal.py**: Terminal expression helpers backing execution methods such as `all`, `first`, `last`, `earliest`, `latest`, `values`, `values_list`, `dates`, `datetimes`, and `get_item`.
+
 ### Design Philosophy
 
 **Descriptor Pattern**: Provides independent manager instances for each model class through ObjectsDescriptor
@@ -147,7 +159,7 @@ deleted_rows = await User.objects.bulk_delete([1, 2, 3], batch_size=1000)
 
 ### Integration with Other Modules
 
-**Core Architecture Module**: Obtains database sessions through SessionContextManager
+**Core Architecture Module**: Obtains database sessions through the module-level session context (`ctx_session`/`get_session`)
 **Field System Module**: Supports field expressions and function calls
 **Relationship Processing Module**: Integrates select_related and prefetch_related
 
@@ -178,7 +190,8 @@ await User.objects.bulk_delete(ids, id_field)
 ```python
 # Query building methods (return QuerySet)
 .filter(*conditions) / .exclude(*conditions)
-.order_by(*fields) / .limit(count) / .offset(count)
+.order_by(*fields)  # replaces any existing ordering (not appended); see QueryBuilder.add_ordering
+.limit(count) / .offset(count)
 .only(*fields) / .defer(*fields)
 .select_related(*fields) / .prefetch_related(*fields)
 .distinct(*fields) / .annotate(**kwargs)

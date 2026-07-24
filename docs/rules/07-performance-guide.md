@@ -93,7 +93,7 @@ class User(ObjectModel):
 ```python
 # Production configuration
 await init_db(
-    "postgresql://localhost/db",
+    "postgresql+asyncpg://localhost/db",
     pool_size=20,           # Base connections
     max_overflow=30,        # Burst capacity
     pool_timeout=30,        # Wait time for connection
@@ -243,7 +243,7 @@ await User.objects.bulk_create(data, batch_size=2000)
 
 # Connection pool configuration
 await init_db(
-    "postgresql://localhost/db",
+    "postgresql+asyncpg://localhost/db",
     pool_size=20,
     max_overflow=40,
     pool_pre_ping=True
@@ -258,7 +258,7 @@ await User.objects.bulk_create(data, batch_size=1000)
 
 # Connection pool configuration
 await init_db(
-    "mysql://localhost/db",
+    "mysql+aiomysql://localhost/db",
     pool_size=15,
     max_overflow=25,
     pool_recycle=3600  # Important for MySQL
@@ -273,7 +273,7 @@ await User.objects.bulk_create(data, batch_size=100)
 
 # Single connection for SQLite
 await init_db(
-    "sqlite:///app.db",
+    "sqlite+aiosqlite:///app.db",
     pool_size=1,  # SQLite doesn't support concurrent writes
     max_overflow=0
 )
@@ -431,7 +431,8 @@ users = await User.objects.prefetch_related("posts").all()
 
 ```python
 from sqlobjects.model import ObjectModel
-from sqlobjects.fields import Column, StringColumn, foreign_key, relationship, Related
+from sqlobjects.fields import Column, StringColumn, column, foreign_key, relationship, Related
+from sqlobjects.metadata import index
 from sqlobjects.session import ctx_session
 from sqlobjects.database import init_db
 import time
@@ -456,7 +457,7 @@ class Post(ObjectModel):
 async def main():
     # Configure connection pool
     await init_db(
-        "postgresql://localhost/db",
+        "postgresql+asyncpg://localhost/db",
         pool_size=20,
         max_overflow=30,
         pool_recycle=3600,

@@ -41,7 +41,7 @@ users = await User.objects.filter(User.username.like("admin%")).all()
 ### Complex Filtering with Q Objects
 
 ```python
-from sqlobjects.queries import Q
+from sqlobjects import Q
 
 # OR conditions
 users = await User.objects.filter(
@@ -242,7 +242,7 @@ result = await User.objects.with_cte(adults).filter(adults.c.age < 30).all()
 base = Employee.objects.filter(Employee.manager_id.is_(None)).cte("hierarchy", recursive=True)
 recursive_part = Employee.objects.join(base, Employee.manager_id == base.c.id)
 hierarchy = base.union_all(recursive_part)
-all_employees = await Employee.objects.with_cte(hierarchy).select_from(hierarchy).all()
+all_employees = await Employee.objects.with_cte(hierarchy).all()
 ```
 
 ### Manual Joins
@@ -406,7 +406,7 @@ users = await User.objects.filter(
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, StringColumn, IntegerColumn, BooleanColumn
-from sqlobjects.queries import Q
+from sqlobjects import Q
 from sqlobjects.expressions import func
 from datetime import datetime, timedelta
 

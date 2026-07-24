@@ -8,7 +8,7 @@ SQLObjects 核心架构基于 SQLAlchemy Core 构建，采用组合模式设计�
 
 ### 1. 全局数据库管理
 
-DatabaseManager 作为全局单例管理多数据库连接，Database 类提供事件处理能力：
+内部数据库管理器（`_DatabaseManager`）作为全局单例管理多数据库连接，Database 类提供事件处理能力：
 
 ```python
 # 数据库初始化 - 返回 Database 实例
@@ -23,13 +23,13 @@ main_db, analytics_db = await init_dbs({
 def on_connect(conn, record):
     print("Database connected")
 
-# DatabaseManager 管理所有数据库实例
+# 内部的 _DatabaseManager 管理所有数据库实例
 # 支持默认数据库和命名数据库访问
 ```
 
 ### 2. 基于 ContextVar 的上下文级会话管理
 
-AsyncSession 类提供智能连接管理，SessionContextManager 基于 `contextvars.ContextVar` 提供上下文级会话管理：
+AsyncSession 类提供智能连接管理，内部会话上下文管理器（`_SessionContextManager`）基于 `contextvars.ContextVar` 提供上下文级会话管理：
 
 ```python
 # 自动会话管理 - 使用默认数据库
@@ -70,11 +70,11 @@ class User(ObjectModel):  # 继承 ModelMixin + ModelProcessor 元类
 
 # ObjectModel 内置功能：
 # - SignalMixin: 信号系统
-# - HistoryTrackingMixin: 历史跟踪
 # - FieldCacheMixin: 字段缓存和代理
 # - ValidationMixin: 验证系统
 # - DeferredLoadingMixin: 延迟加载
 # - SessionMixin: 会话管理
+# - _StateManager: 脏字段跟踪与实例状态（变更历史）
 
 # 实例操作 - 智能检测和信号发射
 user = User(name="John", email="john@example.com")
@@ -117,18 +117,18 @@ class Product(ObjectModel):
 
 **全局管理层**
 
-- **DatabaseManager**: 全局数据库管理器，管理多个数据库实例
+- **_DatabaseManager**: 内部全局数据库管理器（`database/manager.py`），管理多个数据库实例。不直接访问；公开入口是模块级函数 `init_db`/`init_dbs`/`close_db`/`close_dbs`。
 - **Database**: 数据库实例，提供事件处理和连接管理
 - **AsyncSession**: 智能会话类，提供连接管理和事务控制
-- **SessionContextManager**: 全局会话上下文管理器，基于 ContextVar 的上下文级会话管理
+- **_SessionContextManager**: 内部全局会话上下文管理器（`session.py`），基于 ContextVar 的上下文级会话管理。不直接访问；公开入口是模块级函数 `ctx_session`/`get_session`/`has_session`。
 
 **模型层**
 
 - **ObjectModel**: 组合模式模型基类，集成 ModelMixin + ModelProcessor 元类
 - **ModelProcessor**: 元类处理器，自动生成 SQLAlchemy 表和 objects 管理器
-- **ModelMixin**: 通过继承链组合所有功能 Mixins：
+- **ModelMixin**: 定义为 `class ModelMixin(DataConversionMixin, SignalMixin)`（`model.py`）。其功能来自一条以 `DataConversionMixin` 为根的线性继承链，外加作为直接基类的 `SignalMixin`：
+  - DataConversionMixin（数据转换功能）—— 直接基类
   - FieldCacheMixin（字段缓存和属性访问优化）
-  - DataConversionMixin（数据转换功能）
   - DeferredLoadingMixin（延迟加载功能）
   - ValidationMixin（验证逻辑）
   - PrimaryKeyMixin（主键操作）
@@ -138,35 +138,39 @@ class Product(ObjectModel):
 **功能 Mixin 层**
 
 - **FieldCacheMixin**: 字段缓存和智能属性访问，集成代理系统
-- **SignalMixin**: 信号系统，通过单独继承内置到 ObjectModel
-- **HistoryTrackingMixin**: 历史跟踪和脏字段检测
+- **SignalMixin**: 信号系统，是 ModelMixin 的直接基类（与 DataConversionMixin 链并列组合）
 - **ValidationMixin**: 验证系统集成
 - **DeferredLoadingMixin**: 延迟加载功能
 - **SessionMixin**: 会话管理和 using() 方法
 
 **状态管理层**
 
-- **StateManager**: 统一实例状态管理，支持脏字段、延迟字段、代理缓存
-- **DeferredFieldProxy**: 延迟字段代理，支持懒加载和缓存
-- **RelationFieldProxy**: 关系字段代理，支持关系懒加载
+- **_StateManager**: 内部统一实例状态管理（`mixins.py`），支持脏字段跟踪（变更历史的基础）、延迟字段以及代理/对象缓存
+- **DeferredObject**: 延迟字段代理，支持懒加载和缓存
+- **RelatedObject** / **RelatedCollection**: 关系字段代理，支持关系懒加载（单对象 vs 集合；参见 `fields/proxies.py`）
 
 **Web 框架集成层 (`contrib/`)**
 
 - **SessionMiddleware** (`contrib/asgi.py`): ASGI 中间件，提供请求级会话管理，自动提交/回滚
 - **get_db_session** (`contrib/fastapi.py`): FastAPI 依赖项，通过 `ctx_session()` 提供事务性会话
 
+**横切子系统**
+
+- **SQL 日志** (`sql_logging.py`): `ObjectLogger` 将日志记录的调用者字段重写为真实的用户代码调用位置；安装为 `sqlobjects.sql` 日志器，供查询执行器使用。参见文档 05。
+- **级联** (`cascade.py`): 统一的级联策略，协调数据库层的 `ondelete`/`onupdate` 与 ORM 层的 `cascade`，包含依赖解析与级联执行。参见文档 04。
+
 ### 设计理念
 
 **组合模式**: 使用 Mixin 组合而非复杂继承，提高可维护性
-**全局管理**: 全局 DatabaseManager 和 SessionContextManager 实例，简化使用
+**全局管理**: 全局内部 _DatabaseManager 和 _SessionContextManager 实例（由模块级函数封装），简化使用
 **事件驱动**: Database 类通过事件系统提供扩展点
 **智能检测**: 自动检测 CREATE/UPDATE 操作、脏字段跟踪、延迟加载
 **元类驱动**: ModelProcessor 元类自动处理模型定义和表生成
-**统一状态**: StateManager 统一实例状态管理，支持多种状态类型
+**统一状态**: _StateManager 统一实例状态管理，支持多种状态类型
 
 ### 与其他模块的集成
 
-**数据操作模块**: 通过 SessionContextManager 获取会话
+**数据操作模块**: 通过模块级会话上下文（`ctx_session`/`get_session`，底层由内部 `_SessionContextManager` 支撑）获取会话
 **字段系统模块**: 通过 ModelProcessor 处理字段定义
 **关系处理模块**: 通过 ObjectModel 提供关系支持
 
@@ -185,7 +189,7 @@ await drop_tables(base_class, db_name=None)
 
 # 连接管理
 await close_db(db_name=None)
-await close_all_dbs()
+await close_dbs(db_names=None)
 ```
 
 ### 会话管理
@@ -199,7 +203,7 @@ async with ctx_sessions(*db_names) as sessions:
     pass
 
 # 推荐使用上下文管理器而非直接获取会话
-# SessionContextManager.get_session() 主要用于内部实现
+# 模块级 get_session()（底层由内部 _SessionContextManager 支撑）主要用于内部实现
 ```
 
 ### 模型定义
