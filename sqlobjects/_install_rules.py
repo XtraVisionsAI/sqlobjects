@@ -5,6 +5,16 @@ import sys
 from pathlib import Path
 
 
+def _get_package_version() -> str:
+    """Get the installed sqlobjects version."""
+    try:
+        from . import __version__
+
+        return __version__
+    except Exception:
+        return "unknown"
+
+
 def find_project_root() -> Path:
     """Find project root by looking for common markers."""
     current = Path.cwd()
@@ -73,13 +83,19 @@ def install_rules(target_name: str, target_dir: Path | None = None) -> bool:
         print(f"Error: Rules directory not found at {rules_dir}", file=sys.stderr)
         return False
 
-    # Create target directory and copy files
+    # Create target directory and copy files, stamping the package version so
+    # AI assistants reading the rules know which behaviors they document
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
 
+        version = _get_package_version()
+        stamp = f"<!-- Generated for SQLObjects {version} — behaviors documented here match this version -->\n\n"
+
         copied_count = 0
         for file in rules_dir.glob("*.md"):
-            shutil.copy2(file, target_dir / file.name)
+            content = file.read_text(encoding="utf-8")
+            (target_dir / file.name).write_text(stamp + content, encoding="utf-8")
+            shutil.copystat(file, target_dir / file.name)
             copied_count += 1
 
         if copied_count > 0:
