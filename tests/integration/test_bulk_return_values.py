@@ -381,3 +381,56 @@ class TestBulkOperationDatabaseCompatibility:
 
         # Verify all have IDs
         assert all(user.id is not None for user in result.objects if isinstance(user, User))
+
+
+class TestBulkResultSequenceProtocol:
+    """Test BulkResult behaves as a sequence over .objects."""
+
+    async def test_iteration(self, session):
+        """BulkResult must be directly iterable over returned objects."""
+        users_data = [{"username": f"iter_user_{i}", "email": f"iter{i}@example.com", "age": 20 + i} for i in range(4)]
+
+        result = await User.objects.using(session).bulk_create(users_data, return_objects=True)
+
+        iterated = list(result)
+        assert iterated == result.objects
+        assert len(iterated) == 4
+
+    async def test_len_matches_objects(self, session):
+        """len(result) must equal len(result.objects), not total_count."""
+        users_data = [{"username": f"len_user_{i}", "email": f"len{i}@example.com", "age": 30} for i in range(3)]
+
+        result = await User.objects.using(session).bulk_create(users_data, return_objects=True)
+
+        assert len(result) == len(list(result)) == len(result.objects)
+
+    async def test_getitem(self, session):
+        """BulkResult must support indexing and slicing."""
+        users_data = [{"username": f"idx_user_{i}", "email": f"idx{i}@example.com", "age": 30} for i in range(3)]
+
+        result = await User.objects.using(session).bulk_create(users_data, return_objects=True)
+
+        assert result[0] is result.objects[0]
+        assert result[-1] is result.objects[-1]
+        assert result[:2] == result.objects[:2]
+
+    async def test_objects_order_matches_input(self, session):
+        """RETURNING order must match input row order (sort_by_parameter_order)."""
+        users_data = [
+            {"username": f"order_user_{i:03d}", "email": f"order{i}@example.com", "age": 18 + (i * 7) % 50}
+            for i in range(50)
+        ]
+
+        result = await User.objects.using(session).bulk_create(users_data, return_objects=True)
+
+        assert len(result) == 50
+        for i, user in enumerate(result):
+            assert isinstance(user, User)
+            assert user.username == f"order_user_{i:03d}"
+
+    def test_len_differs_from_total_count_on_partial_failure(self):
+        """On partial failure len() counts objects while total_count counts input rows."""
+        partial = BulkResult(success_count=2, error_count=1, total_count=3, objects=["a", "b"])
+        assert len(partial) == 2
+        assert partial.total_count == 3
+        assert list(partial) == ["a", "b"]

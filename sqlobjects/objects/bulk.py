@@ -4,6 +4,7 @@ This module provides bulk operations functionality and transaction control,
 merged from the original bulk_transaction.py module.
 """
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Generic, TypeVar
@@ -82,7 +83,16 @@ class FailedRecord:
 
 @dataclass
 class BulkResult(Generic[T]):
-    """Result object for bulk operations with detailed information."""
+    """Result object for bulk operations with detailed information.
+
+    Acts as a sequence over ``objects``: iteration, indexing and ``len()``
+    all operate on the successfully returned objects. Use ``total_count`` /
+    ``success_count`` / ``error_count`` for operation statistics — on partial
+    failure ``len(result)`` and ``total_count`` differ.
+
+    For insert operations the order of ``objects`` matches the order of the
+    input rows (RETURNING is sorted by parameter order).
+    """
 
     success_count: int
     error_count: int
@@ -111,8 +121,16 @@ class BulkResult(Generic[T]):
         return 0 < self.success_count < self.total_count
 
     def __len__(self) -> int:
-        """Return total count for len() support."""
-        return self.total_count
+        """Return the number of returned objects (see ``total_count`` for input size)."""
+        return len(self.objects)
+
+    def __iter__(self) -> Iterator[T | dict[str, Any]]:
+        """Iterate over the returned objects."""
+        return iter(self.objects)
+
+    def __getitem__(self, index):
+        """Index into the returned objects."""
+        return self.objects[index]
 
 
 class BulkTransactionManager:
@@ -269,7 +287,11 @@ class BulkOperationHandler:
         exec_session = session or self.session
 
         if return_columns and self.supports_returning(operation):
-            stmt_with_returning = stmt.returning(*return_columns)
+            if operation == "insert":
+                # Guarantee RETURNING row order matches input row order for executemany
+                stmt_with_returning = stmt.returning(*return_columns, sort_by_parameter_order=True)
+            else:
+                stmt_with_returning = stmt.returning(*return_columns)
             # For INSERT operations, use the data directly as parameters
             if operation == "insert" and isinstance(parameters, list):
                 result = await exec_session.execute(stmt_with_returning, parameters)
