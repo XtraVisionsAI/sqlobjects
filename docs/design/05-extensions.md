@@ -16,7 +16,7 @@ ObjectModel includes SignalMixin by default, providing complete model lifecycle 
 from sqlobjects.model import ObjectModel  # SignalMixin already built-in
 from sqlobjects.fields import Column, StringColumn
 from sqlobjects.signals import SignalContext, Operation
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):  # Automatically has signal functionality
     name: Column[str] = StringColumn(length=50)
@@ -24,10 +24,10 @@ class User(ObjectModel):  # Automatically has signal functionality
     # Instance-level signals - discovered by method name convention
     async def before_save(self, context: SignalContext):
         # context.actual_operation shows detected operation (CREATE or UPDATE)
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
   
     async def before_create(self, context: SignalContext):
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(timezone.utc)
   
     async def after_create(self, context: SignalContext):
         await self.send_welcome_email()
@@ -309,7 +309,7 @@ get_model_metadata(model_class)
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, StringColumn
 from sqlobjects.signals import SignalContext
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):  # Signal functionality already built-in
     name: Column[str] = StringColumn(length=50)
@@ -317,7 +317,7 @@ class User(ObjectModel):  # Signal functionality already built-in
   
     async def before_save(self, context: SignalContext):
         # Pre-save processing
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
   
     async def after_create(self, context: SignalContext):
         # Post-create processing
@@ -345,15 +345,15 @@ model_name = to_camel_case(table_name)     # "UserProfile"
 # Complex signal handling
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext, Operation
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):
     async def before_save(self, context: SignalContext):
         # Common save logic
         # context.actual_operation set by _determine_save_operation()
         if context.actual_operation == Operation.CREATE:
-            self.created_at = datetime.now()
-        self.updated_at = datetime.now()
+            self.created_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(timezone.utc)
   
     async def after_create(self, context: SignalContext):
         # Post-create async tasks

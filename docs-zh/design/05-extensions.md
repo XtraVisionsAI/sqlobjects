@@ -14,7 +14,7 @@ ObjectModel 默认包含 SignalMixin，通过方法名称约定发现提供完�
 from sqlobjects.model import ObjectModel  # SignalMixin 已内置
 from sqlobjects.fields import Column, StringColumn
 from sqlobjects.signals import SignalContext, Operation
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):  # 自动具有信号功能
     name: Column[str] = StringColumn(length=50)
@@ -22,10 +22,10 @@ class User(ObjectModel):  # 自动具有信号功能
     # 实例级信号 - 通过方法名称约定发现
     async def before_save(self, context: SignalContext):
         # context.actual_operation 显示检测到的操作（CREATE 或 UPDATE）
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
   
     async def before_create(self, context: SignalContext):
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(timezone.utc)
   
     async def after_create(self, context: SignalContext):
         await self.send_welcome_email()
@@ -295,7 +295,7 @@ get_model_metadata(model_class)
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, StringColumn
 from sqlobjects.signals import SignalContext
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):  # 信号功能已内置
     name: Column[str] = StringColumn(length=50)
@@ -303,7 +303,7 @@ class User(ObjectModel):  # 信号功能已内置
   
     async def before_save(self, context: SignalContext):
         # 保存前处理
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
   
     async def after_create(self, context: SignalContext):
         # 创建后处理
@@ -331,15 +331,15 @@ model_name = to_camel_case(table_name)     # "UserProfile"
 # 复杂信号处理
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext, Operation
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):
     async def before_save(self, context: SignalContext):
         # 通用保存逻辑
         # context.actual_operation 由 _determine_save_operation() 设置
         if context.actual_operation == Operation.CREATE:
-            self.created_at = datetime.now()
-        self.updated_at = datetime.now()
+            self.created_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(timezone.utc)
   
     async def after_create(self, context: SignalContext):
         # 创建后异步任务

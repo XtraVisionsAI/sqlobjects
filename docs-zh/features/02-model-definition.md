@@ -70,7 +70,7 @@ percentage: Column[float] = FloatColumn()
 ### 日期和时间
 
 ```python
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timezone
 
 # DateTime 自动时间戳
 created_at: Column[datetime] = DateTimeColumn(default_factory=datetime.now)
@@ -159,14 +159,14 @@ class User(ObjectModel):
     version: Column[int] = column(type="integer", compare=True)  # 包含在比较中
 
 # from_dict 方法自动处理 init 参数
-user_data = {"id": 1, "username": "alice", "created_at": datetime.now()}
+user_data = {"id": 1, "username": "alice", "created_at": datetime.now(timezone.utc)}
 user = User.from_dict(user_data)  # 自动分离 init=True/False 字段
 
 # ObjectsManager 创建方法使用 from_dict 保持一致性
 user = await User.objects.create(
     id=1,  # init=False 字段通过 setattr 处理
     username="bob",  # init=True 字段通过构造函数处理
-    created_at=datetime.now()  # init=False 字段通过 setattr 处理
+    created_at=datetime.now(timezone.utc)  # init=False 字段通过 setattr 处理
 )
 ```
 
@@ -269,7 +269,7 @@ class Post(ObjectModel):
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, StringColumn, IdentityColumn, column
 from sqlalchemy import ForeignKey
-from datetime import datetime
+from datetime import datetime, timezone
 
 class Post(ObjectModel):
     id: Column[int] = IdentityColumn()  # 自增主键
@@ -498,12 +498,12 @@ user = User.from_dict(user_data, validate=True)
 user = await User.objects.create(
     id=1,  # init=False 字段自动处理
     username="alice",  # init=True 字段
-    created_at=datetime.now()  # init=False 字段自动处理
+    created_at=datetime.now(timezone.utc)  # init=False 字段自动处理
 )
 
 user, created = await User.objects.get_or_create(
     username="bob",
-    defaults={"id": 2, "created_at": datetime.now()}  # 混合字段类型自动处理
+    defaults={"id": 2, "created_at": datetime.now(timezone.utc)}  # 混合字段类型自动处理
 )
 
 user, created = await User.objects.update_or_create(

@@ -58,7 +58,7 @@ class User(ObjectModel):
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):
     username: Column[str] = StringColumn(length=50)
@@ -69,7 +69,7 @@ class User(ObjectModel):
     # Universal save signals (always triggered)
     async def before_save(self, context: SignalContext):
         """Called before any save operation"""
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
     
     async def after_save(self, context: SignalContext):
         """Called after any save operation"""
@@ -78,7 +78,7 @@ class User(ObjectModel):
     # Operation-specific signals (triggered based on detected operation)
     async def before_create(self, context: SignalContext):
         """Only triggered for CREATE operations"""
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(timezone.utc)
     
     async def before_update(self, context: SignalContext):
         """Only triggered for UPDATE operations"""
@@ -162,7 +162,7 @@ class User(ObjectModel):
     
     # Good: Fast signal operations
     async def before_save(self, context: SignalContext):
-        self.updated_at = datetime.now()  # Fast
+        self.updated_at = datetime.now(timezone.utc)  # Fast
     
     # Good: Non-critical operations with error handling
     async def after_create(self, context: SignalContext):
@@ -198,7 +198,7 @@ async def before_save(self, context: SignalContext):
 
 # Good: Keep before_save fast, use after_save for heavy operations
 async def before_save(self, context: SignalContext):
-    self.updated_at = datetime.now()  # Fast
+    self.updated_at = datetime.now(timezone.utc)  # Fast
 
 async def after_save(self, context: SignalContext):
     asyncio.create_task(self.process_large_file())  # Background task
@@ -302,7 +302,7 @@ async def after_create(self, context: SignalContext):
 # Background tasks for non-critical operations
 async def after_save(self, context: SignalContext):
     # Critical operations (blocking)
-    self.updated_at = datetime.now()
+    self.updated_at = datetime.now(timezone.utc)
     
     # Non-critical operations (background)
     if not context.is_bulk:
@@ -390,7 +390,7 @@ from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, column, StringColumn, IntegerColumn, BooleanColumn
 from sqlobjects.signals import SignalContext
 from sqlobjects.exceptions import ValidationError
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncio
 
 # Custom validators
@@ -420,10 +420,10 @@ class User(ObjectModel):
     
     # Instance signals
     async def before_save(self, context: SignalContext):
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
     
     async def before_create(self, context: SignalContext):
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(timezone.utc)
     
     async def after_create(self, context: SignalContext):
         try:

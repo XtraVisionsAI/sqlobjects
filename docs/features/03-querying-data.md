@@ -45,7 +45,7 @@ users = await User.objects.filter(User.username == "john").all()
 
 # Comparison operators
 adults = await User.objects.filter(User.age >= 18).all()
-recent = await User.objects.filter(User.created_at > datetime.now() - timedelta(days=7)).all()
+recent = await User.objects.filter(User.created_at > datetime.now(timezone.utc) - timedelta(days=7)).all()
 
 # String operations
 users = await User.objects.filter(User.username.like("%admin%")).all()
@@ -202,13 +202,13 @@ users = await User.objects.annotate(
     post_count=func.count(User.posts)
 ).all()
 
-# Group aggregation
-dept_stats = await User.objects.group_by("department").having(
-    func.count() > 5
-).aggregate(
+# Group aggregation — per-group rows come from values mode, not aggregate()
+dept_stats = await User.objects.annotate(
     dept_count=func.count(),
     avg_salary=func.avg(User.salary)
-)
+).group_by("department").having(
+    func.count() > 5
+).values("department", "dept_count", "avg_salary")
 
 # Manual joins for complex queries (using Model class - recommended)
 posts = await Post.objects.join(
@@ -261,23 +261,32 @@ active_users = User.objects.filter(
 
 ### Grouping and Aggregation
 
+Per-group aggregation uses **values mode**: declare the aggregates with
+`annotate()`, group with `group_by()`, then list the grouping columns and
+aggregate aliases in `values()` — each group becomes one dict. `aggregate()`
+is single-row only and raises `QueryError` when combined with `group_by()`.
+
 ```python
 # Grouping with having clause
-dept_stats = await User.objects.group_by("department").having(
-    func.count() > 5
-).aggregate(
+dept_stats = await User.objects.annotate(
     dept_count=func.count(),
     avg_salary=func.avg(User.salary)
-)
+).group_by("department").having(
+    func.count() > 5
+).values("department", "dept_count", "avg_salary")
+# [{"department": "sales", "dept_count": 12, "avg_salary": 52000.0}, ...]
 
-# Complex grouping
-monthly_stats = await Sale.objects.group_by(
-    func.extract("year", Sale.created_at),
-    func.extract("month", Sale.created_at)
-).aggregate(
+# Complex grouping by expressions: annotate the expression with an alias so
+# values() can select it alongside the aggregates
+monthly_stats = await Sale.objects.annotate(
+    year=func.extract("year", Sale.created_at),
+    month=func.extract("month", Sale.created_at),
     total_sales=func.sum(Sale.amount),
     avg_sale=func.avg(Sale.amount)
-)
+).group_by(
+    func.extract("year", Sale.created_at),
+    func.extract("month", Sale.created_at)
+).values("year", "month", "total_sales", "avg_sale")
 ```
 
 ### Manual Joins and Locking
@@ -464,7 +473,7 @@ authors = await User.objects.filter(has_posts).all()
 # Complex EXISTS conditions
 has_recent_posts = Post.objects.filter(
     Post.author_id == User.id,
-    Post.created_at >= datetime.now() - timedelta(days=30)
+    Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
 ).subquery(query_type="exists")
 
 active_authors = await User.objects.filter(has_recent_posts).all()
@@ -495,12 +504,12 @@ popular_posts = await Post.objects.join(
 ### Complex Aggregations
 
 ```python
-# Department statistics
-dept_stats = await User.objects.group_by("department").aggregate(
+# Department statistics (per-group rows → values mode)
+dept_stats = await User.objects.annotate(
     user_count=func.count(),
     avg_salary=func.avg(User.salary),
     max_salary=func.max(User.salary)
-)
+).group_by("department").values("department", "user_count", "avg_salary", "max_salary")
 
 # Conditional aggregations
 stats = await User.objects.aggregate(
@@ -516,7 +525,7 @@ stats = await User.objects.aggregate(
 # Raw SQL queries - raw() is an async method that returns a list of instances
 users = await User.objects.raw(
     "SELECT * FROM users WHERE age > :min_age AND created_at > :date",
-    {"min_age": 18, "date": datetime.now() - timedelta(days=30)}
+    {"min_age": 18, "date": datetime.now(timezone.utc) - timedelta(days=30)}
 )
 
 # Raw expressions
@@ -643,7 +652,7 @@ result = await User.objects.with_cte(adults).filter(
 # Multiple CTEs
 active = User.objects.filter(User.is_active == True).cte("active")
 recent = User.objects.filter(
-    User.created_at >= datetime.now() - timedelta(days=30)
+    User.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
 ).cte("recent")
 result = await User.objects.with_cte(active, recent).all()
 
@@ -709,7 +718,7 @@ users = await User.objects.prefetch_related("posts").all()
 # Advanced prefetch with custom queryset
 users = await User.objects.prefetch_related(
     recent_posts=Post.objects.filter(
-        Post.created_at >= datetime.now() - timedelta(days=30)
+        Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by("-created_at").limit(5)
 ).all()
 ```
@@ -737,17 +746,17 @@ second_logins = await User.objects.datetimes("last_login", "second")
 ### Date Filtering
 
 ```python
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Recent records
 recent_users = await User.objects.filter(
-    User.created_at >= datetime.now() - timedelta(days=7)
+    User.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
 ).all()
 
 # Date ranges
 this_month_users = await User.objects.filter(
-    User.created_at >= datetime.now().replace(day=1),
-    User.created_at < datetime.now().replace(day=1) + timedelta(days=32)
+    User.created_at >= datetime.now(timezone.utc).replace(day=1),
+    User.created_at < datetime.now(timezone.utc).replace(day=1) + timedelta(days=32)
 ).all()
 
 # Extract date parts in filtering

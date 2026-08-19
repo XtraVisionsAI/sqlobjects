@@ -187,7 +187,7 @@ users = await User.objects.prefetch_related(
 # 多个高级配置
 users = await User.objects.prefetch_related(
     recent_posts=Post.objects.filter(
-        Post.created_at >= datetime.now() - timedelta(days=30)
+        Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by('-created_at'),
     popular_posts=Post.objects.filter(Post.view_count > 1000)
                              .order_by('-view_count')
@@ -198,7 +198,7 @@ users = await User.objects.prefetch_related(
 users = await User.objects.prefetch_related(
     'profile',  # 简单预取
     recent_comments=Comment.objects.filter(
-        Comment.created_at >= datetime.now() - timedelta(days=7)
+        Comment.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
     ).order_by('-created_at')
 ).all()
 
@@ -280,7 +280,7 @@ latest_post_date = Post.objects.filter(
 active_authors = await User.objects.annotate(
     latest_post_date=latest_post_date
 ).filter(
-    User.latest_post_date >= datetime.now() - timedelta(days=30)
+    User.latest_post_date >= datetime.now(timezone.utc) - timedelta(days=30)
 ).all()
 ```
 

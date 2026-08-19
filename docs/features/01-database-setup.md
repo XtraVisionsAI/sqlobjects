@@ -103,6 +103,14 @@ async with ctx_sessions("main", "analytics") as sessions:
 # Session with specific database
 async with ctx_session("analytics") as session:
     users = await User.objects.using(session).all()
+
+# Inside a possibly-active transaction: join the ambient session instead of
+# opening a second physical connection (whose writes could block forever on
+# rows locked by the outer transaction, invisible to deadlock detection)
+async with ctx_session(join_ambient=True) as session:
+    # Reuses the outer session if one exists; creates one only at top level.
+    # Commit/rollback/close belong to the outermost owner.
+    await User.objects.using(session).create(username="carol")
 ```
 
 ### Checking Session Availability

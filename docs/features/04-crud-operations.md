@@ -158,7 +158,7 @@ user_dict = await User.objects.in_bulk([1, 2, 3])  # field_name="pk" is default
 # Method 1: Load, modify, save
 user = await User.objects.get(User.id == 1)
 user.email = "new.email@example.com"
-user.last_login = datetime.now()
+user.last_login = datetime.now(timezone.utc)
 await user.save()
 
 # Method 2: Detached instance smart save
@@ -174,12 +174,12 @@ affected = await User.objects.filter(
     User.is_active == False
 ).update(
     status="inactive",
-    updated_at=datetime.now()
+    updated_at=func.now()  # database clock, not app clock (avoids timezone mismatch)
 )
 
 # Conditional update using Q objects
 affected = await User.objects.filter(
-    Q(User.last_login < datetime.now() - timedelta(days=30)) |
+    Q(User.last_login < datetime.now(timezone.utc) - timedelta(days=30)) |
     Q(User.login_count == 0)
 ).update(is_active=False)
 
@@ -214,7 +214,7 @@ user, created = await User.objects.update_or_create(
     username="frank",  # Lookup field
     defaults={
         "email": "frank@example.com",
-        "last_login": datetime.now(),
+        "last_login": datetime.now(timezone.utc),
         "login_count": 1
     }
 )
@@ -252,7 +252,7 @@ are configured on the model itself; see the
 # Conditional delete
 deleted = await User.objects.filter(
     User.is_active == False,
-    User.last_login < datetime.now() - timedelta(days=365)
+    User.last_login < datetime.now(timezone.utc) - timedelta(days=365)
 ).delete()
 
 # Delete using Q objects
@@ -281,7 +281,7 @@ deleted = await User.objects.bulk_delete(
 # Update all records with same values
 affected = await User.objects.update_all(
     status="migrated",
-    updated_at=datetime.now()
+    updated_at=func.now()
 )
 ```
 

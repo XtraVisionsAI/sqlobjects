@@ -120,13 +120,26 @@ await init_db(
 - **Don't create sessions manually** (use context managers)
 
 ```python
-# Caution: Nested sessions use separate transactions
+# DANGER: Nested ctx_session opens a SECOND physical connection
 async with ctx_session() as session1:
     user = await User.objects.using(session1).create(username="alice")
     async with ctx_session() as session2:
-        # Nesting is safe (Token-based restore), but uses a separate transaction
-        # — session1 won't see session2's uncommitted changes and vice versa
+        # ContextVar restore is safe, but session2 is a separate physical
+        # connection with its own transaction:
+        # - session1 won't see session2's uncommitted changes and vice versa
+        # - if session2 writes a row that session1 holds a lock on, session2
+        #   blocks forever while session1 sits idle-in-transaction waiting for
+        #   this coroutine to return. The database deadlock detector CANNOT
+        #   see this cycle — it manifests as request timeouts, and session1's
+        #   locks block unrelated requests until then.
         await Post.objects.using(session2).create(author_id=user.id)
+
+# Good: join the ambient session when running inside a possibly-active transaction
+async with ctx_session(join_ambient=True) as session:
+    # Reuses the outer session if one exists (no second connection);
+    # creates a new one only at the top level. Lifecycle (commit/rollback/close)
+    # belongs to the outermost owner.
+    await Post.objects.using(session).create(author_id=user.id)
 
 # Bad: No transaction control
 user = await User.objects.create(username="alice")

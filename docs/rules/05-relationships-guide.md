@@ -132,7 +132,7 @@ posts = await Post.objects.select_related(Post.author).all()
 # Good: Filtered prefetch
 users = await User.objects.prefetch_related(
     recent_posts=Post.objects.filter(
-        Post.created_at >= datetime.now() - timedelta(days=7)
+        Post.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
     ).order_by('-created_at')
 ).all()
 ```
@@ -350,7 +350,7 @@ posts = await Post.objects.select_related("author").defer(
 # Filter prefetched relationships
 users = await User.objects.prefetch_related(
     recent_posts=Post.objects.filter(
-        Post.created_at >= datetime.now() - timedelta(days=7)
+        Post.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
     ).order_by('-created_at').limit(10)
 ).all()
 ```
@@ -439,7 +439,7 @@ class Post(ObjectModel):
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, StringColumn, column, foreign_key, relationship, Related
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 class User(ObjectModel):
     username: Column[str] = StringColumn(length=50)
@@ -478,7 +478,7 @@ posts = await Post.objects.select_related("author").prefetch_related("comments",
 # Advanced prefetch with filtering
 users = await User.objects.prefetch_related(
     recent_posts=Post.objects.filter(
-        Post.created_at >= datetime.now() - timedelta(days=7)
+        Post.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
     ).order_by('-created_at').limit(5)
 ).all()
 

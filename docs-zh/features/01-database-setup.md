@@ -102,6 +102,13 @@ async with ctx_sessions("main", "analytics") as sessions:
 # 使用特定数据库的会话
 async with ctx_session("analytics") as session:
     users = await User.objects.using(session).all()
+
+# 在可能已持有事务的调用链内：复用外层会话，而不是新开第二条物理连接
+# （第二条连接对外层事务锁定行的写入会永久阻塞，且数据库死锁检测器发现不了）
+async with ctx_session(join_ambient=True) as session:
+    # 存在外层会话时直接复用；只有最外层才会新建会话。
+    # 提交/回滚/关闭由最外层所有者负责。
+    await User.objects.using(session).create(username="carol")
 ```
 
 ### 检查会话可用性

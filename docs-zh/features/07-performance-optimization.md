@@ -64,8 +64,8 @@ affected = await User.objects.filter(
 
 # 真正的批量更新（对大型数据集快 10-100 倍）
 mappings = [
-    {"id": 1, "status": "active", "last_seen": datetime.now()},
-    {"id": 2, "status": "inactive", "last_seen": datetime.now()},
+    {"id": 1, "status": "active", "last_seen": datetime.now(timezone.utc)},
+    {"id": 2, "status": "inactive", "last_seen": datetime.now(timezone.utc)},
     # ... 数千条记录
 ]
 
@@ -93,7 +93,7 @@ affected = await User.objects.bulk_update(
 # 基于条件的标准删除
 deleted = await User.objects.filter(
     User.is_active == False,
-    User.last_login < datetime.now() - timedelta(days=365)
+    User.last_login < datetime.now(timezone.utc) - timedelta(days=365)
 ).delete()
 
 # 真正的批量删除（对大型 ID 列表快 10-100 倍）
@@ -174,7 +174,7 @@ users = await User.objects.prefetch_related("posts", "comments").all()
 # 使用自定义 QuerySets 的高级预获取（并发执行）
 users = await User.objects.prefetch_related(
     recent_posts=Post.objects.filter(
-        Post.created_at >= datetime.now() - timedelta(days=30)
+        Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by('-created_at').limit(10),
     popular_posts=Post.objects.filter(Post.view_count > 1000)
                              .order_by('-view_count')
@@ -237,7 +237,7 @@ async for user in User.objects.iterator(
 
 # 带过滤和排序的迭代器
 async for post in Post.objects.filter(
-    Post.created_at >= datetime.now() - timedelta(days=30)
+    Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
 ).order_by("-created_at").iterator():
     await process_post(post)
 
@@ -523,7 +523,7 @@ posts = await Post.objects.select_related("author").prefetch_related("tags").all
 # ✅ 使用高级预获取进行过滤关系
 users = await User.objects.prefetch_related(
     recent_posts=Post.objects.filter(
-        Post.created_at >= datetime.now() - timedelta(days=30)
+        Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by('-created_at')
 ).all()
 

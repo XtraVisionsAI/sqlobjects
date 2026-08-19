@@ -84,7 +84,7 @@ users = await User.objects.prefetch_related(
 users = await User.objects.prefetch_related(
     "profile",  # Simple prefetch
     recent_posts=Post.objects.filter(
-        Post.created_at >= datetime.now() - timedelta(days=30)
+        Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by("-created_at")
 ).all()
 
@@ -109,7 +109,7 @@ from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, StringColumn, column
 from sqlobjects.fields.relations import relationship, Related
 from sqlalchemy import ForeignKey
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):
     name: Column[str] = StringColumn(length=50)
@@ -352,7 +352,7 @@ users = await User.objects.prefetch_related(
   
     # Nested prefetch
     recent_comments=Comment.objects.filter(
-        Comment.created_at >= datetime.now() - timedelta(days=7)
+        Comment.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
     ).select_related("post").order_by("-created_at")
 ).all()
 
@@ -398,10 +398,10 @@ admin_users = await User.objects.filter(
 
 # Find recently active users and their posts
 active_users = await User.objects.filter(
-    User.posts__created_at >= datetime.now() - timedelta(days=30)
+    User.posts__created_at >= datetime.now(timezone.utc) - timedelta(days=30)
 ).prefetch_related(
     recent_posts=Post.objects.filter(
-        Post.created_at >= datetime.now() - timedelta(days=30)
+        Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by("-created_at")
 ).distinct().all()
 ```

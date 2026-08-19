@@ -37,18 +37,18 @@ class User(ObjectModel):
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):  # Built-in signal support
     # ... field definitions ...
 
     async def before_save(self, context: SignalContext):
         """Called before any save operation"""
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
 
     async def before_create(self, context: SignalContext):
         """Called only before creating new records"""
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(timezone.utc)
 ```
 
 ## Field Validation
@@ -61,7 +61,7 @@ from sqlobjects.validators import (
     validate_regex, validate_choice, validate_not_empty, validate_positive,
     validate_datetime_range
 )
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):
     # Email validation
@@ -289,18 +289,18 @@ collector.raise_if_errors()  # Raise ValidationError if any errors exist
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext, Operation
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 class User(ObjectModel):  # Built-in signal functionality
     # Instance-level signals (single record operations)
     async def before_save(self, context: SignalContext):
         """Generic save logic - always fired"""
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
 
     async def before_create(self, context: SignalContext):
         """Only fired on CREATE operations"""
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(timezone.utc)
         self.uuid = str(uuid.uuid4())
 
     async def before_update(self, context: SignalContext):
@@ -400,16 +400,16 @@ async def before_save(self, context: SignalContext):
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):
     async def before_save(self, context: SignalContext):
         """Always called for save() operations"""
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
 
     async def before_create(self, context: SignalContext):
         """Called for new instances"""
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(timezone.utc)
 
     async def before_update(self, context: SignalContext):
         """Called for existing instances"""
@@ -440,7 +440,7 @@ user, created = await User.objects.get_or_create(
 
 user, created = await User.objects.update_or_create(
     username="signal_user",
-    defaults={"last_login": datetime.now()}
+    defaults={"last_login": datetime.now(timezone.utc)}
 )
 # If updated: before_save → before_update → after_save → after_update
 # If created: before_save → before_create → after_save → after_create
@@ -548,17 +548,17 @@ class User(ObjectModel):
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):
     # Group related signal handlers
 
     # === Timestamp management ===
     async def before_save(self, context: SignalContext):
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
 
     async def before_create(self, context: SignalContext):
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(timezone.utc)
 
     # === Audit logging ===
     async def after_save(self, context: SignalContext):

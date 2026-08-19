@@ -210,6 +210,11 @@ await close_dbs(db_names=None)
 async with ctx_session(db_name=None) as session:
     pass
 
+# Reuse the ambient session when one exists (avoids a second physical
+# connection inside an active transaction); lifecycle stays with the owner
+async with ctx_session(join_ambient=True) as session:
+    pass
+
 async with ctx_sessions(*db_names) as sessions:
     pass
 

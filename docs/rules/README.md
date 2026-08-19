@@ -12,6 +12,31 @@ Best practices and usage patterns for SQLObjects, optimized for AI coding assist
 - **[06. Validation & Signals Guide](06-validation-signals-guide.md)** - Data validation and lifecycle hooks
 - **[07. Performance Guide](07-performance-guide.md)** - Optimization techniques and best practices
 
+## Method Ownership Matrix
+
+The single most common mistake is calling a manager-only method on a QuerySet
+(or vice versa). `Model.objects` is the **manager**; `filter()` returns a
+**QuerySet**. They own different methods:
+
+| Operation | Manager (`Model.objects`) | QuerySet (`.filter(...)`) |
+|---|---|---|
+| Create | `create()`, `get_or_create()`, `update_or_create()` | — |
+| Bulk write | `bulk_create()`, `bulk_update()`, `bulk_delete()` | — |
+| Whole-table write | `delete_all()`, `update_all(**values)` | — |
+| Filtered write | — | `update(**values)`, `delete()` |
+| Read | `get()`, `all()`, `first()`, `last()`, `in_bulk()` | `get()`, `all()`, `first()`, `last()` |
+| Refine | `filter()`, `exclude()` (returns QuerySet) | `filter()`, `exclude()`, `order_by()`, `limit()`, `offset()` |
+| Projection | `values()`, `values_list()`, `only()`, `defer()` | `values()`, `values_list()`, `only()`, `defer()` |
+| Aggregate | `count()`, `aggregate()`, `annotate()`, `group_by()`, `having()` | `count()`, `aggregate()`, `annotate()`, `group_by()`, `having()` |
+
+Rules of thumb:
+
+- `filter(...).delete_all()` / `filter(...).update_all()` **do not exist** — a
+  filtered write is `filter(...).delete()` / `filter(...).update(**values)`.
+- `bulk_*` operate on explicit row data, so they live on the manager only.
+- Calling a manager-only method on a QuerySet raises `AttributeError` with a
+  hint pointing to the correct method.
+
 ## Purpose
 
 These rules provide concise, actionable guidance for using SQLObjects effectively. Each guide includes:
@@ -57,4 +82,10 @@ sqlobjects-install-rules kiro     # For Kiro
 
 ## Version
 
-These rules are for SQLObjects 1.0+
+`sqlobjects-install-rules` stamps each installed file with the exact package
+version it was generated from — trust that stamp over this line. Version-
+sensitive behaviors to watch: grouped aggregation (`annotate` + `group_by`)
+raises `QueryError` on out-of-group column selection and returns rows via
+`.values()` since 1.11, and `aggregate()` combined with `group_by()` also
+raises `QueryError` since 1.11; earlier versions silently expanded GROUP BY
+(or dropped it entirely for `aggregate()`) and returned wrong results.

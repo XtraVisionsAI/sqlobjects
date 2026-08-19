@@ -24,7 +24,7 @@ users = await User.objects.filter(
 
 # Comparison operators
 adults = await User.objects.filter(User.age >= 18).all()
-recent = await User.objects.filter(User.created_at > datetime.now() - timedelta(days=7)).all()
+recent = await User.objects.filter(User.created_at > datetime.now(timezone.utc) - timedelta(days=7)).all()
 ```
 
 ### String Operations
@@ -113,17 +113,32 @@ users = await User.objects.annotate(
 
 ### Grouping
 
+Grouped aggregation returns **one row per group**, not model instances — use
+values-mode: list the grouping columns and aggregate aliases in `.values()`.
+
 ```python
-# Group by with aggregation
+# Group by with aggregation → list[dict], one dict per group
 dept_stats = await User.objects.annotate(
     user_count=func.count()
-).group_by("department").all()
+).group_by("department").values("department", "user_count")
+# [{"department": "sales", "user_count": 10}, ...]
 
 # Having clause (filter groups)
 large_depts = await User.objects.annotate(
     user_count=func.count()
-).group_by("department").having(func.count() > 10).all()
+).group_by("department").having(func.count() > 10).values("department", "user_count")
+
+# Grouping by the primary key is the one case where .all() stays valid:
+# each group is exactly one model row (e.g. counting related rows per user)
+users = await User.objects.annotate(post_count=Post.id.count()) \
+    .join(Post.__table__, User.id == Post.author_id, join_type="left") \
+    .group_by(User.id).all()
 ```
+
+**Do not** call `.all()` on a query grouped by a non-primary-key column — the
+selected model columns would fall outside GROUP BY, so SQLObjects raises
+`QueryError` instead of silently corrupting the aggregation (each group would
+collapse to a single row).
 
 ### Distinct
 
@@ -408,7 +423,7 @@ from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, StringColumn, IntegerColumn, BooleanColumn
 from sqlobjects import Q
 from sqlobjects.expressions import func
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 class User(ObjectModel):
     username: Column[str] = StringColumn(length=50)
@@ -426,10 +441,10 @@ admins_or_staff = await User.objects.filter(
     Q(User.department == "admin") | Q(User.department == "staff")
 ).all()
 
-# Aggregation
+# Aggregation (one row per group — see "Grouping" section)
 dept_stats = await User.objects.annotate(
     user_count=func.count()
-).group_by("department").all()
+).group_by("department").values("department", "user_count")
 
 # Pagination with field selection
 users = await User.objects.only(

@@ -199,6 +199,11 @@ await close_dbs(db_names=None)
 async with ctx_session(db_name=None) as session:
     pass
 
+# 存在外层会话时复用它（避免在活动事务内开出第二条物理连接）；
+# 生命周期（提交/回滚/关闭）归外层所有者
+async with ctx_session(join_ambient=True) as session:
+    pass
+
 async with ctx_sessions(*db_names) as sessions:
     pass
 

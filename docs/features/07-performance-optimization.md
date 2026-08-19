@@ -65,8 +65,8 @@ affected = await User.objects.filter(
 
 # True bulk update (10-100x faster for large datasets)
 mappings = [
-    {"id": 1, "status": "active", "last_seen": datetime.now()},
-    {"id": 2, "status": "inactive", "last_seen": datetime.now()},
+    {"id": 1, "status": "active", "last_seen": datetime.now(timezone.utc)},
+    {"id": 2, "status": "inactive", "last_seen": datetime.now(timezone.utc)},
     # ... thousands of records
 ]
 
@@ -94,7 +94,7 @@ affected = await User.objects.bulk_update(
 # Standard condition-based delete
 deleted = await User.objects.filter(
     User.is_active == False,
-    User.last_login < datetime.now() - timedelta(days=365)
+    User.last_login < datetime.now(timezone.utc) - timedelta(days=365)
 ).delete()
 
 # True bulk delete (10-100x faster for large ID lists)
@@ -175,7 +175,7 @@ users = await User.objects.prefetch_related("posts", "comments").all()
 # Advanced prefetching with custom QuerySets (concurrent execution)
 users = await User.objects.prefetch_related(
     recent_posts=Post.objects.filter(
-        Post.created_at >= datetime.now() - timedelta(days=30)
+        Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by('-created_at').limit(10),
     popular_posts=Post.objects.filter(Post.view_count > 1000)
                              .order_by('-view_count')
@@ -238,7 +238,7 @@ async for user in User.objects.iterator(
 
 # Iterator with filtering and ordering
 async for post in Post.objects.filter(
-    Post.created_at >= datetime.now() - timedelta(days=30)
+    Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
 ).order_by("-created_at").iterator():
     await process_post(post)
 
@@ -524,7 +524,7 @@ posts = await Post.objects.select_related("author").prefetch_related("tags").all
 # ✅ Use advanced prefetching for filtered relationships
 users = await User.objects.prefetch_related(
     recent_posts=Post.objects.filter(
-        Post.created_at >= datetime.now() - timedelta(days=30)
+        Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by('-created_at')
 ).all()
 

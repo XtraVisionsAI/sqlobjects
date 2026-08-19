@@ -71,7 +71,7 @@ percentage: Column[float] = FloatColumn()
 ### Date and Time
 
 ```python
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timezone
 
 # DateTime with automatic timestamps
 created_at: Column[datetime] = DateTimeColumn(default_factory=datetime.now)
@@ -160,14 +160,14 @@ class User(ObjectModel):
     version: Column[int] = column(type="integer", compare=True)  # Include in comparison
 
 # from_dict method automatically handles init parameters
-user_data = {"id": 1, "username": "alice", "created_at": datetime.now()}
+user_data = {"id": 1, "username": "alice", "created_at": datetime.now(timezone.utc)}
 user = User.from_dict(user_data)  # Auto-separate init=True/False fields
 
 # ObjectsManager creation methods use from_dict for consistency
 user = await User.objects.create(
     id=1,  # init=False fields handled via setattr
     username="bob",  # init=True fields handled via constructor
-    created_at=datetime.now()  # init=False fields handled via setattr
+    created_at=datetime.now(timezone.utc)  # init=False fields handled via setattr
 )
 ```
 
@@ -270,7 +270,7 @@ class Post(ObjectModel):
 from sqlobjects.model import ObjectModel
 from sqlobjects.fields import Column, StringColumn, IdentityColumn, column
 from sqlalchemy import ForeignKey
-from datetime import datetime
+from datetime import datetime, timezone
 
 class Post(ObjectModel):
     id: Column[int] = IdentityColumn()  # Auto-increment primary key
@@ -504,12 +504,12 @@ user = User.from_dict(user_data, validate=True)
 user = await User.objects.create(
     id=1,  # init=False fields automatically handled
     username="alice",  # init=True fields
-    created_at=datetime.now()  # init=False fields automatically handled
+    created_at=datetime.now(timezone.utc)  # init=False fields automatically handled
 )
 
 user, created = await User.objects.get_or_create(
     username="bob",
-    defaults={"id": 2, "created_at": datetime.now()}  # Mixed field types automatically handled
+    defaults={"id": 2, "created_at": datetime.now(timezone.utc)}  # Mixed field types automatically handled
 )
 
 user, created = await User.objects.update_or_create(

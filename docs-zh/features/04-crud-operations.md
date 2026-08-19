@@ -157,7 +157,7 @@ user_dict = await User.objects.in_bulk([1, 2, 3])  # field_name="pk" 为默认�
 # 方法 1：加载、修改、保存
 user = await User.objects.get(User.id == 1)
 user.email = "new.email@example.com"
-user.last_login = datetime.now()
+user.last_login = datetime.now(timezone.utc)
 await user.save()
 
 # 方法 2：分离实例的智能保存
@@ -173,12 +173,12 @@ affected = await User.objects.filter(
     User.is_active == False
 ).update(
     status="inactive",
-    updated_at=datetime.now()
+    updated_at=func.now()  # 数据库时钟而非应用时钟（避免时区错位）
 )
 
 # 使用 Q 对象的条件更新
 affected = await User.objects.filter(
-    Q(User.last_login < datetime.now() - timedelta(days=30)) |
+    Q(User.last_login < datetime.now(timezone.utc) - timedelta(days=30)) |
     Q(User.login_count == 0)
 ).update(is_active=False)
 
@@ -213,7 +213,7 @@ user, created = await User.objects.update_or_create(
     username="frank",  # 查找字段
     defaults={
         "email": "frank@example.com",
-        "last_login": datetime.now(),
+        "last_login": datetime.now(timezone.utc),
         "login_count": 1
     }
 )
@@ -246,7 +246,7 @@ await user.delete()  # 自动附加到会话
 # 带条件删除
 deleted = await User.objects.filter(
     User.is_active == False,
-    User.last_login < datetime.now() - timedelta(days=365)
+    User.last_login < datetime.now(timezone.utc) - timedelta(days=365)
 ).delete()
 
 # 使用 Q 对象删除
@@ -275,7 +275,7 @@ deleted = await User.objects.bulk_delete(
 # 使用相同值更新所有记录
 affected = await User.objects.update_all(
     status="migrated",
-    updated_at=datetime.now()
+    updated_at=func.now()
 )
 ```
 

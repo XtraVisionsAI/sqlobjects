@@ -36,18 +36,18 @@ class User(ObjectModel):
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):  # 内置信号支持
     # ... 字段定义 ...
   
     async def before_save(self, context: SignalContext):
         """在任何保存操作前调用"""
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
   
     async def before_create(self, context: SignalContext):
         """仅在创建新记录前调用"""
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(timezone.utc)
 ```
 
 ## 字段验证
@@ -60,7 +60,7 @@ from sqlobjects.validators import (
     validate_regex, validate_choice, validate_not_empty, validate_positive,
     validate_datetime_range
 )
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):
     # 邮箱验证
@@ -285,18 +285,18 @@ collector.raise_if_errors()  # 如有错误则抛出ValidationError
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext, Operation
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 class User(ObjectModel):  # 已内置信号功能
     # 实例级信号（单记录操作）
     async def before_save(self, context: SignalContext):
         """通用保存逻辑 - 总是触发"""
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
   
     async def before_create(self, context: SignalContext):
         """仅在CREATE操作时触发"""
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(timezone.utc)
         self.uuid = str(uuid.uuid4())
   
     async def before_update(self, context: SignalContext):
@@ -396,16 +396,16 @@ async def before_save(self, context: SignalContext):
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):
     async def before_save(self, context: SignalContext):
         """总是为save()操作调用"""
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
   
     async def before_create(self, context: SignalContext):
         """为新实例调用"""
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(timezone.utc)
   
     async def before_update(self, context: SignalContext):
         """为现有实例调用"""
@@ -436,7 +436,7 @@ user, created = await User.objects.get_or_create(
 
 user, created = await User.objects.update_or_create(
     username="signal_user",
-    defaults={"last_login": datetime.now()}
+    defaults={"last_login": datetime.now(timezone.utc)}
 )
 # 如果更新：before_save → before_update → after_save → after_update
 # 如果创建：before_save → before_create → after_save → after_create
@@ -544,17 +544,17 @@ class User(ObjectModel):
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext
-from datetime import datetime
+from datetime import datetime, timezone
 
 class User(ObjectModel):
     # 分组相关信号处理器
   
     # === 时间戳管理 ===
     async def before_save(self, context: SignalContext):
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
   
     async def before_create(self, context: SignalContext):
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(timezone.utc)
   
     # === 审计日志 ===
     async def after_save(self, context: SignalContext):

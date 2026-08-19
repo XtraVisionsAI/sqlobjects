@@ -44,7 +44,7 @@ users = await User.objects.filter(User.username == "john").all()
 
 # 比较操作符
 adults = await User.objects.filter(User.age >= 18).all()
-recent = await User.objects.filter(User.created_at > datetime.now() - timedelta(days=7)).all()
+recent = await User.objects.filter(User.created_at > datetime.now(timezone.utc) - timedelta(days=7)).all()
 
 # 字符串操作
 users = await User.objects.filter(User.username.like("%admin%")).all()
@@ -201,13 +201,13 @@ users = await User.objects.annotate(
     post_count=func.count(User.posts)
 ).all()
 
-# 分组聚合
-dept_stats = await User.objects.group_by("department").having(
-    func.count() > 5
-).aggregate(
+# 分组聚合 —— 每组一行的结果来自 values 模式，而不是 aggregate()
+dept_stats = await User.objects.annotate(
     dept_count=func.count(),
     avg_salary=func.avg(User.salary)
-)
+).group_by("department").having(
+    func.count() > 5
+).values("department", "dept_count", "avg_salary")
 
 # 复杂查询的手动连接（使用 Model 类 - 推荐）
 posts = await Post.objects.join(
@@ -260,23 +260,30 @@ active_users = User.objects.filter(
 
 ### 分组和聚合
 
+按组聚合使用 **values 模式**：用 `annotate()` 声明聚合表达式，用 `group_by()`
+分组，再在 `values()` 中列出分组列和聚合别名——每组返回一个 dict。
+`aggregate()` 只做单行聚合，与 `group_by()` 组合会抛出 `QueryError`。
+
 ```python
 # 带有 having 子句的分组
-dept_stats = await User.objects.group_by("department").having(
-    func.count() > 5
-).aggregate(
+dept_stats = await User.objects.annotate(
     dept_count=func.count(),
     avg_salary=func.avg(User.salary)
-)
+).group_by("department").having(
+    func.count() > 5
+).values("department", "dept_count", "avg_salary")
+# [{"department": "sales", "dept_count": 12, "avg_salary": 52000.0}, ...]
 
-# 复杂分组
-monthly_stats = await Sale.objects.group_by(
-    func.extract("year", Sale.created_at),
-    func.extract("month", Sale.created_at)
-).aggregate(
+# 按表达式复杂分组：先用 annotate 给表达式起别名，values() 才能与聚合值一起选取
+monthly_stats = await Sale.objects.annotate(
+    year=func.extract("year", Sale.created_at),
+    month=func.extract("month", Sale.created_at),
     total_sales=func.sum(Sale.amount),
     avg_sale=func.avg(Sale.amount)
-)
+).group_by(
+    func.extract("year", Sale.created_at),
+    func.extract("month", Sale.created_at)
+).values("year", "month", "total_sales", "avg_sale")
 ```
 
 ### 手动连接和锁定
@@ -462,7 +469,7 @@ authors = await User.objects.filter(has_posts).all()
 # 复杂 EXISTS 条件
 has_recent_posts = Post.objects.filter(
     Post.author_id == User.id,
-    Post.created_at >= datetime.now() - timedelta(days=30)
+    Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
 ).subquery(query_type="exists")
 
 active_authors = await User.objects.filter(has_recent_posts).all()
@@ -493,12 +500,12 @@ popular_posts = await Post.objects.join(
 ### 复杂聚合
 
 ```python
-# 部门统计
-dept_stats = await User.objects.group_by("department").aggregate(
+# 部门统计（每组一行 → values 模式）
+dept_stats = await User.objects.annotate(
     user_count=func.count(),
     avg_salary=func.avg(User.salary),
     max_salary=func.max(User.salary)
-)
+).group_by("department").values("department", "user_count", "avg_salary", "max_salary")
 
 # 条件聚合
 stats = await User.objects.aggregate(
@@ -514,7 +521,7 @@ stats = await User.objects.aggregate(
 # 原生 SQL 查询 - raw() 是异步方法，返回实例列表
 users = await User.objects.raw(
     "SELECT * FROM users WHERE age > :min_age AND created_at > :date",
-    {"min_age": 18, "date": datetime.now() - timedelta(days=30)}
+    {"min_age": 18, "date": datetime.now(timezone.utc) - timedelta(days=30)}
 )
 
 # 原生表达式
@@ -641,7 +648,7 @@ result = await User.objects.with_cte(adults).filter(
 # 多个 CTE
 active = User.objects.filter(User.is_active == True).cte("active")
 recent = User.objects.filter(
-    User.created_at >= datetime.now() - timedelta(days=30)
+    User.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
 ).cte("recent")
 result = await User.objects.with_cte(active, recent).all()
 
@@ -705,7 +712,7 @@ users = await User.objects.prefetch_related("posts").all()
 # 使用自定义查询集的高级预取
 users = await User.objects.prefetch_related(
     recent_posts=Post.objects.filter(
-        Post.created_at >= datetime.now() - timedelta(days=30)
+        Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by("-created_at").limit(5)
 ).all()
 ```
@@ -733,17 +740,17 @@ second_logins = await User.objects.datetimes("last_login", "second")
 ### 日期过滤
 
 ```python
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # 最近记录
 recent_users = await User.objects.filter(
-    User.created_at >= datetime.now() - timedelta(days=7)
+    User.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
 ).all()
 
 # 日期范围
 this_month_users = await User.objects.filter(
-    User.created_at >= datetime.now().replace(day=1),
-    User.created_at < datetime.now().replace(day=1) + timedelta(days=32)
+    User.created_at >= datetime.now(timezone.utc).replace(day=1),
+    User.created_at < datetime.now(timezone.utc).replace(day=1) + timedelta(days=32)
 ).all()
 
 # 在过滤中提取日期部分

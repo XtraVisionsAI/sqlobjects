@@ -205,7 +205,7 @@ await .count() / await .exists()
 await .last() / await .earliest() / await .latest()
 await .values(*fields) / await .values_list(*fields)
 await .aggregate(**kwargs) / await .raw(sql)
-await .iterator() / await .create() / await .update() / await .delete()
+await .iterator() / await .update() / await .delete()
 
 # Date/time query methods
 await .dates(field, precision, order) / await .datetimes(field, precision, order)
@@ -261,13 +261,17 @@ admin_or_staff = await User.objects.filter(
     User.is_active == True
 ).select_related("profile").all()
 
-# Advanced query methods
-users = await User.objects.distinct("department").annotate(
-    full_name=func.concat(User.first_name, " ", User.last_name),
-    post_count=func.count(User.posts)
+# Advanced query methods: per-row computed columns (no grouping)
+users = await User.objects.annotate(
+    full_name=func.concat(User.first_name, " ", User.last_name)
+).all()
+
+# Grouped aggregation returns one row per group via values mode
+dept_stats = await User.objects.annotate(
+    user_count=func.count()
 ).group_by("department").having(
     func.count() > 5
-).all()
+).values("department", "user_count")
 
 # Aggregate queries
 stats = await User.objects.aggregate(
@@ -314,5 +318,5 @@ async with ctx_session() as session:
     for user in users:
         await User.objects.using(session).filter(
             User.id == user.id
-        ).update(last_seen=datetime.now())
+        ).update(last_seen=func.now())
 ```
