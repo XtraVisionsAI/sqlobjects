@@ -1,3 +1,21 @@
+## 2.0.0 (2026-08-19)
+
+### BREAKING CHANGE
+
+- annotate().group_by().all() with non-primary-key
+grouping and group_by().aggregate() now raise QueryError; both
+previously returned silently wrong results. QuerySet.create() removed
+(never wrote to the database) — use Model.objects.create().
+
+### Feat
+
+- **rules**: stamp installed rule files with the package version
+- **query**: strict GROUP BY semantics, values-mode aggregation, manager-only hints
+- **orm**: support SQLAlchemy expressions as write values
+- **bulk**: make BulkResult a sequence and guarantee insert RETURNING order
+- **session**: add join_ambient option to ctx_session and warn on nested sessions
+- **build**: ship py.typed marker so type checkers see the package as typed
+
 ## 1.10.0 (2026-07-24)
 
 ### Feat
