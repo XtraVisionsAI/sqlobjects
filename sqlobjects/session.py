@@ -1,4 +1,5 @@
 import contextvars
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -12,6 +13,8 @@ from .exceptions import convert_sqlalchemy_error
 
 
 __all__ = ["AsyncSession", "ctx_session", "ctx_sessions", "get_session", "has_session"]
+
+logger = logging.getLogger("sqlobjects.session")
 
 # Explicit session management (highest priority)
 _explicit_sessions: contextvars.ContextVar[dict[str, "AsyncSession"]] = contextvars.ContextVar("explicit_sessions")
@@ -298,7 +301,7 @@ class _SessionContextManager:
 
 
 @asynccontextmanager
-async def ctx_session(db_name: str | None = None) -> AsyncGenerator[AsyncSession, None]:
+async def ctx_session(db_name: str | None = None, *, join_ambient: bool = False) -> AsyncGenerator[AsyncSession, None]:
     """Get async context manager for single database transactional session.
 
     Creates a transactional session with manual commit control (auto_commit=False).
@@ -306,11 +309,31 @@ async def ctx_session(db_name: str | None = None) -> AsyncGenerator[AsyncSession
 
     Args:
         db_name: Database name (uses default database if None)
+        join_ambient: If True and an explicit session already exists in the current
+            context, reuse it instead of creating a new one. The ambient session's
+            lifecycle (commit/rollback/close) stays with its outer owner; exceptions
+            propagate to the owner for rollback. This avoids a second physical
+            connection whose row locks would deadlock against the outer transaction
+            in a way the database deadlock detector cannot see.
 
     Yields:
         AsyncSession: Transactional session with manual commit control
     """
     name = db_name or get_default()
+
+    if join_ambient and has_session(name):
+        yield get_session(name, readonly=False)
+        return
+
+    if has_session(name):
+        logger.warning(
+            "ctx_session(%r) is creating a new session while an ambient session already exists "
+            "in this context. The two sessions use separate physical connections; writes to rows "
+            "locked by the outer transaction will block undetectably. "
+            "Pass join_ambient=True to reuse the ambient session.",
+            name,
+        )
+
     session = AsyncSession(name, readonly=False, auto_commit=False)
 
     # Set as explicit session in context, save token for nested restore

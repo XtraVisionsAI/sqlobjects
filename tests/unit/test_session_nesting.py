@@ -9,6 +9,7 @@ from sqlobjects.session import (
     AsyncSession,
     _explicit_sessions,
     _SessionContextManager,
+    ctx_session,
     has_session,
 )
 
@@ -204,3 +205,95 @@ class TestCtxSessionsWithToken:
 
             _SessionContextManager.reset_session(t1)
             assert not has_session("default")
+
+
+class TestJoinAmbient:
+    """Test ctx_session(join_ambient=True) reuse of the ambient session."""
+
+    @pytest.mark.asyncio
+    async def test_join_ambient_reuses_outer_session(self):
+        """join_ambient=True must yield the ambient session, not create a new one."""
+        with patch("sqlobjects.session.get_default", return_value="default"), patch("sqlobjects.session.get_database"):
+            outer = _make_session_stub()
+            token = _SessionContextManager.set_session(outer, "default")
+            try:
+                async with ctx_session(join_ambient=True) as session:
+                    assert session is outer
+            finally:
+                _SessionContextManager.reset_session(token)
+
+    @pytest.mark.asyncio
+    async def test_join_ambient_does_not_manage_lifecycle(self):
+        """Joining must not commit/rollback/close the ambient session."""
+        with patch("sqlobjects.session.get_default", return_value="default"), patch("sqlobjects.session.get_database"):
+            outer = _make_session_stub()
+            token = _SessionContextManager.set_session(outer, "default")
+            try:
+                async with ctx_session(join_ambient=True):
+                    pass
+                assert not outer.commit.called  # type: ignore[union-attr]
+                assert not outer.rollback.called  # type: ignore[union-attr]
+                assert not outer.close.called  # type: ignore[union-attr]
+            finally:
+                _SessionContextManager.reset_session(token)
+
+    @pytest.mark.asyncio
+    async def test_join_ambient_propagates_exception_without_rollback(self):
+        """Exceptions must propagate to the owner; the join must not roll back."""
+        with patch("sqlobjects.session.get_default", return_value="default"), patch("sqlobjects.session.get_database"):
+            outer = _make_session_stub()
+            token = _SessionContextManager.set_session(outer, "default")
+            try:
+                with pytest.raises(ValueError, match="boom"):
+                    async with ctx_session(join_ambient=True):
+                        raise ValueError("boom")
+                assert not outer.rollback.called  # type: ignore[union-attr]
+                assert not outer.close.called  # type: ignore[union-attr]
+            finally:
+                _SessionContextManager.reset_session(token)
+
+    @pytest.mark.asyncio
+    async def test_join_ambient_without_ambient_creates_new(self):
+        """join_ambient=True with no ambient session falls back to creating one."""
+        with patch("sqlobjects.session.get_default", return_value="default"), patch("sqlobjects.session.get_database"):
+            created = _make_session_stub()
+            with patch("sqlobjects.session.AsyncSession", return_value=created):
+                async with ctx_session(join_ambient=True) as session:
+                    assert session is created
+                assert created.commit.called  # type: ignore[union-attr]
+                assert created.close.called  # type: ignore[union-attr]
+
+    @pytest.mark.asyncio
+    async def test_default_nesting_warns(self, caplog):
+        """Nesting without join_ambient must emit a WARNING log."""
+        import logging
+
+        with patch("sqlobjects.session.get_default", return_value="default"), patch("sqlobjects.session.get_database"):
+            outer = _make_session_stub()
+            token = _SessionContextManager.set_session(outer, "default")
+            try:
+                created = _make_session_stub()
+                with (
+                    patch("sqlobjects.session.AsyncSession", return_value=created),
+                    caplog.at_level(logging.WARNING, logger="sqlobjects.session"),
+                ):
+                    async with ctx_session() as session:
+                        assert session is created
+                assert any("join_ambient" in r.message for r in caplog.records)
+            finally:
+                _SessionContextManager.reset_session(token)
+
+    @pytest.mark.asyncio
+    async def test_no_warning_without_ambient(self, caplog):
+        """Top-level ctx_session must not warn."""
+        import logging
+
+        with patch("sqlobjects.session.get_default", return_value="default"), patch("sqlobjects.session.get_database"):
+            created = _make_session_stub()
+            with (
+                patch("sqlobjects.session.AsyncSession", return_value=created),
+                caplog.at_level(logging.WARNING, logger="sqlobjects.session"),
+            ):
+                async with ctx_session():
+                    pass
+            assert not caplog.records
