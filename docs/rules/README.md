@@ -86,6 +86,6 @@ sqlobjects-install-rules kiro     # For Kiro
 version it was generated from — trust that stamp over this line. Version-
 sensitive behaviors to watch: grouped aggregation (`annotate` + `group_by`)
 raises `QueryError` on out-of-group column selection and returns rows via
-`.values()` since 1.11, and `aggregate()` combined with `group_by()` also
-raises `QueryError` since 1.11; earlier versions silently expanded GROUP BY
+`.values()` since 2.0, and `aggregate()` combined with `group_by()` also
+raises `QueryError` since 2.0; earlier versions silently expanded GROUP BY
 (or dropped it entirely for `aggregate()`) and returned wrong results.
