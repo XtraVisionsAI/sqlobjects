@@ -266,6 +266,12 @@ class ValidationMixin(PrimaryKeyMixin):
             )
             if validators:
                 value = getattr(self, field_name, None)
+                # SQL expressions (func.now(), text(...), column arithmetic) are
+                # evaluated by the database — Python-side validators don't apply
+                from sqlalchemy.sql import ClauseElement
+
+                if isinstance(value, ClauseElement):
+                    return
                 try:
                     from .validators import validate_field_value
 

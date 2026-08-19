@@ -356,3 +356,55 @@ class TestQueryOptimization:
 
         # Results should be the same
         assert count_with_ordering == count_without_ordering == 3
+
+
+class TestSQLExpressionValues:
+    """Test SQLAlchemy expressions as write values (update/create)."""
+
+    async def test_update_with_func_expression(self, session):
+        """update() must pass func expressions through to the database."""
+        from sqlalchemy import func
+
+        await User.objects.using(session).create(username="expr_user", email="expr@example.com", age=30)
+
+        updated = await User.objects.using(session).filter(User.username == "expr_user").update(created_at=func.now())
+        assert updated == 1
+
+        user = await User.objects.using(session).get(User.username == "expr_user")
+        assert user.created_at is not None  # DB clock value, not a stringified expression
+
+    async def test_update_with_column_arithmetic(self, session):
+        """update() must support column arithmetic (relative updates)."""
+        await User.objects.using(session).create(username="arith_user", email="arith@example.com", age=30)
+
+        await User.objects.using(session).filter(User.username == "arith_user").update(age=User.age + 5)
+
+        user = await User.objects.using(session).get(User.username == "arith_user")
+        assert user.age == 35
+
+    async def test_update_with_text_expression(self, session):
+        """update() must support text() SQL fragments."""
+        from sqlalchemy import text
+
+        await User.objects.using(session).create(username="text_user", email="text@example.com", age=40)
+
+        await User.objects.using(session).filter(User.username == "text_user").update(age=text("age * 2"))
+
+        user = await User.objects.using(session).get(User.username == "text_user")
+        assert user.age == 80
+
+    async def test_create_with_sql_expression(self, session):
+        """create() must accept SQL expressions without validator interference."""
+        from sqlalchemy import func
+
+        user = await User.objects.using(session).create(
+            username="create_expr", email="create_expr@example.com", age=25, created_at=func.now()
+        )
+        assert user.id is not None
+
+        # The database stored the DB clock value, not a stringified expression
+        from sqlalchemy.sql import ClauseElement
+
+        stored = await User.objects.using(session).get(User.username == "create_expr")
+        assert stored.created_at is not None
+        assert not isinstance(stored.created_at, ClauseElement)
