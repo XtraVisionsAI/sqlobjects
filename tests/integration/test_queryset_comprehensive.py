@@ -120,15 +120,39 @@ class TestQuerySetAdvancedOperations:
     @pytest.mark.usefixtures("sample_posts")
     async def test_grouping_and_having(self, session):
         """Test GROUP BY and HAVING clauses"""
-        # Group by author with count
-        grouped = Post.objects.group_by("author_id").annotate(post_count=func.count())
-        results = await grouped.using(session).all()
-        assert len(results) > 0
+        from sqlobjects.exceptions import QueryError
 
-        # Having clause
-        prolific_authors = Post.objects.group_by("author_id").annotate(post_count=func.count()).having(func.count() > 2)
-        _ = await prolific_authors.using(session).all()
-        # Results depend on sample data distribution
+        # Legacy pattern: grouped aggregation while selecting full model rows
+        # must raise instead of silently collapsing each group to one row
+        grouped = Post.objects.group_by("author_id").annotate(post_count=func.count())
+        with pytest.raises(QueryError, match="not in GROUP BY"):
+            await grouped.using(session).all()
+
+        # Correct pattern: values-mode aggregation returns one row per group
+        rows = (
+            await Post.objects.using(session)
+            .annotate(post_count=func.count())
+            .group_by("author_id")
+            .values("author_id", "post_count")
+        )
+        assert len(rows) == 3  # 10 posts across 3 authors
+        assert sorted(r["post_count"] for r in rows) == [3, 3, 4]
+        assert sum(r["post_count"] for r in rows) == 10
+
+        # Grouping by the primary key stays allowed (one group == one model row)
+        results = await Post.objects.using(session).group_by("id").annotate(cnt=func.count()).all()
+        assert len(results) == 10
+
+        # Having clause in values mode
+        prolific = (
+            await Post.objects.using(session)
+            .annotate(post_count=func.count())
+            .group_by("author_id")
+            .having(func.count() > 3)
+            .values("author_id", "post_count")
+        )
+        assert len(prolific) == 1
+        assert prolific[0]["post_count"] == 4
 
     @pytest.mark.usefixtures("sample_users")
     async def test_values_and_values_list(self, session):

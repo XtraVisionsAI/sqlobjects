@@ -3,8 +3,6 @@
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from sqlalchemy import and_, select
-
 from .base import QueryExpression
 
 
@@ -173,23 +171,19 @@ class ValuesExpression(QueryExpression[list[dict[str, Any]]]):
 
     def get_query(self):
         """Return SQLAlchemy query object."""
-        return self._builder.build(self._builder.model_class.get_table())
+        return self._builder.build(self._builder.model_class.get_table(), values_fields=self._fields)
 
     async def execute(self) -> list[dict[str, Any]]:
         if not self._executor:
             raise RuntimeError("No executor available for values execution")
-        query = self._builder.build(self._builder.model_class.get_table())
-        result = await self._executor.execute(query, "values", fields=self._fields)
+        query = self.get_query()
+        result = await self._executor.execute(query, "values", fields=self._fields, prebuilt=True)
         if isinstance(result, list):
             return [dict(zip(self._fields, row, strict=False)) for row in result]
         return []
 
     def get_sql(self) -> str:
-        table = self._builder.model_class.get_table()
-        columns = [table.c[field] for field in self._fields if field in table.c]
-        query = select(*columns).select_from(table)
-        if hasattr(self._builder, "conditions") and self._builder.conditions:
-            query = query.where(and_(*self._builder.conditions))
+        query = self.get_query()
         return str(query.compile(compile_kwargs={"literal_binds": True}))
 
 
@@ -204,13 +198,13 @@ class ValuesListExpression(QueryExpression[list[Any] | list[tuple[Any, ...]]]):
 
     def get_query(self):
         """Return SQLAlchemy query object."""
-        return self._builder.build(self._builder.model_class.get_table())
+        return self._builder.build(self._builder.model_class.get_table(), values_fields=self._fields)
 
     async def execute(self) -> list[Any] | list[tuple[Any, ...]]:
         if not self._executor:
             raise RuntimeError("No executor available for values_list execution")
-        query = self._builder.build(self._builder.model_class.get_table())
-        result = await self._executor.execute(query, "values_list", fields=list(self._fields))
+        query = self.get_query()
+        result = await self._executor.execute(query, "values_list", fields=list(self._fields), prebuilt=True)
         if isinstance(result, list):
             if self._flat and len(self._fields) == 1:
                 return [row[0] for row in result]
@@ -218,7 +212,7 @@ class ValuesListExpression(QueryExpression[list[Any] | list[tuple[Any, ...]]]):
         return []
 
     def get_sql(self) -> str:
-        query = self._builder.build(self._builder.model_class.get_table())
+        query = self.get_query()
         return str(query.compile(compile_kwargs={"literal_binds": True}))
 
 

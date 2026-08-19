@@ -1,7 +1,7 @@
 import re
 from collections.abc import AsyncGenerator
 from datetime import date, datetime
-from typing import Any, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar, Union
 
 from sqlalchemy import (
     BinaryExpression,
@@ -236,6 +236,30 @@ class QuerySet(Generic[T]):
         if default_ordering and self._has_default_ordering():
             ordering = getattr(self._model_class, "_default_ordering", [])
             self._builder = self._builder.add_ordering(*ordering)
+
+    # Manager-only method names mapped to their QuerySet equivalent (None if no equivalent)
+    _MANAGER_ONLY_METHODS: ClassVar[dict[str, str | None]] = {
+        "delete_all": "delete()",
+        "update_all": "update(**values)",
+        "bulk_create": None,
+        "bulk_update": None,
+        "bulk_delete": None,
+        "create": None,
+        "get_or_create": None,
+        "update_or_create": None,
+        "in_bulk": None,
+    }
+
+    if not TYPE_CHECKING:
+        # Hidden from type checkers so unknown attributes still fail static
+        # analysis; at runtime it turns bare AttributeErrors on manager-only
+        # methods into a hint pointing at the correct API
+        def __getattr__(self, name: str):
+            if name in self._MANAGER_ONLY_METHODS:
+                equivalent = self._MANAGER_ONLY_METHODS[name]
+                hint = f"; for a filtered queryset use .{equivalent}" if equivalent else ""
+                raise AttributeError(f"'{name}' is defined on Model.objects (manager), not on QuerySet{hint}")
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 
     @staticmethod
     def _get_field_name(field) -> str:
@@ -799,20 +823,35 @@ class QuerySet(Generic[T]):
     def aggregate(self, **kwargs) -> AggregateExpression:
         """Create aggregation expression that can be executed or used as subquery.
 
+        Returns a single row aggregated over all matching rows. Incompatible
+        with group_by() — for per-group aggregation use
+        ``annotate(...).group_by(...).values(*group_fields, *aliases)``.
+
         Args:
             **kwargs: Aggregation expressions with aliases
 
         Returns:
             AggregateExpression that can be awaited or used in comparisons
 
+        Raises:
+            QueryError: If the queryset has GROUP BY clauses
+
         Examples:
             # Direct execution
             stats = await User.objects.aggregate(avg_age=User.age.avg())
 
             # Use as subquery condition
-            avg_age = User.objects.aggregate(User.age.avg())
+            avg_age = User.objects.aggregate(avg_age=User.age.avg())
             older_users = await User.objects.filter(User.age > avg_age).all()
         """
+        if self._builder.group_clauses:
+            from .exceptions import QueryError
+
+            raise QueryError(
+                "aggregate() returns a single row and ignores GROUP BY. "
+                "Use .annotate(...).group_by(...).values(*group_fields, *aggregate_aliases) "
+                "for per-group aggregation."
+            )
         return AggregateExpression(self._builder, kwargs, self._executor)
 
     def count(self) -> CountExpression:
@@ -1198,19 +1237,6 @@ class QuerySet(Generic[T]):
     # ========================================
     # Data Operations Methods - Create, update, and delete data
     # ========================================
-
-    async def create(self, validate: bool = True, **kwargs) -> T:
-        """Create new object with given field values."""
-        # Create instance for validation
-        instance = self._model_class.from_dict(kwargs, validate=validate)  # type: ignore[reportAttributeAccessIssue]
-        if validate and hasattr(instance, "validate_all"):
-            validate_method = getattr(instance, "validate_all", None)
-            if validate_method:
-                validate_method()
-
-        # Actual insertion would be implemented here
-        # For now, return the created instance (simplified)
-        return instance
 
     @emit_signals(Operation.UPDATE, is_bulk=True)
     async def update(self, **values) -> int:

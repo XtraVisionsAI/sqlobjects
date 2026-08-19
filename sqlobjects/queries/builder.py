@@ -11,6 +11,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.sql.selectable import Subquery
 
+from ..exceptions import QueryError
+
 
 # Export classes for use in other modules
 __all__ = ["QueryBuilder"]
@@ -447,11 +449,14 @@ class QueryBuilder:
 
         return related_columns
 
-    def build(self, table):
+    def build(self, table, values_fields: tuple[str, ...] | None = None):
         """Build final SQLAlchemy query object from accumulated clauses.
 
         Args:
             table: SQLAlchemy Table object to query
+            values_fields: When given (values()/values_list() mode), select exactly
+                these fields in order. Each name must resolve to a table column,
+                an annotation alias, or an extra column alias.
 
         Returns:
             SQLAlchemy Select object ready for execution
@@ -479,8 +484,34 @@ class QueryBuilder:
         # Collect all columns to select (base table + related tables)
         columns_to_select = []
 
+        if values_fields is not None:
+            # values()/values_list() mode: select exactly the requested fields in
+            # order so result rows align with the field names positionally
+            unknown = [
+                f
+                for f in values_fields
+                if f not in table.c and f not in self.annotations and f not in self.extra_columns
+            ]
+            if unknown:
+                raise QueryError(
+                    f"Unknown field(s) in values()/values_list(): {unknown}. "
+                    "Each field must be a model column, an annotation alias, or an extra() column alias."
+                )
+            for field_name in values_fields:
+                if field_name in table.c:
+                    columns_to_select.append(table.c[field_name])
+                elif field_name in self.annotations:
+                    expr = self.annotations[field_name]
+                    resolved = expr.resolve(table) if hasattr(expr, "resolve") else expr
+                    columns_to_select.append(resolved.label(field_name))
+                else:
+                    sql = self.extra_columns[field_name]
+                    if self.extra_params:
+                        columns_to_select.append(text(sql).bindparams(**self.extra_params).label(field_name))
+                    else:
+                        columns_to_select.append(text(sql).label(field_name))
         # Handle field selection (only() method)
-        if self.selected_fields:
+        elif self.selected_fields:
             columns_to_select.extend([table.c[field] for field in self.selected_fields if field in table.c])
         elif self.deferred_fields or auto_deferred_fields:
             # For defer() or auto-deferred fields, select all fields except deferred ones
@@ -492,7 +523,7 @@ class QueryBuilder:
             columns_to_select.extend(table.c)
 
         # Add related table columns for select_related (only for select_related, not prefetch_related)
-        if self.relationships:
+        if self.relationships and values_fields is None:
             related_columns = self._get_select_related_columns(table)
             columns_to_select.extend(related_columns)
 
@@ -554,8 +585,8 @@ class QueryBuilder:
             else:
                 query = query.distinct()
 
-        # Apply annotations
-        if self.annotations:
+        # Apply annotations (values mode already selected the requested ones)
+        if self.annotations and values_fields is None:
             annotation_columns = []
             for alias, expr in self.annotations.items():
                 if hasattr(expr, "resolve"):
@@ -564,8 +595,8 @@ class QueryBuilder:
                     annotation_columns.append(expr.label(alias))
             query = query.add_columns(*annotation_columns)
 
-        # Apply extra columns
-        if self.extra_columns:
+        # Apply extra columns (values mode already selected the requested ones)
+        if self.extra_columns and values_fields is None:
             extra_cols = []
             for alias, sql in self.extra_columns.items():
                 if self.extra_params:
@@ -577,34 +608,48 @@ class QueryBuilder:
         # Apply group by
         if self.group_clauses:
             group_columns = []
+            group_names = set()
             for field in self.group_clauses:
                 if isinstance(field, str) and field in table.c:
                     group_columns.append(table.c[field])
+                    group_names.add(field)
                 elif hasattr(field, "resolve") and not isinstance(field, str):
-                    group_columns.append(field.resolve(table))
+                    resolved = field.resolve(table)
+                    group_columns.append(resolved)
+                    if getattr(resolved, "name", None):
+                        group_names.add(resolved.name)
                 else:
                     group_columns.append(field)
+                    field_name = getattr(field, "name", None)
+                    if field_name:
+                        group_names.add(field_name)
 
-            # For PostgreSQL compatibility, include all non-aggregated columns in GROUP BY
+            # Grouped aggregation must not select columns outside GROUP BY.
+            # Previous versions silently added the selected columns to GROUP BY
+            # "for PostgreSQL compatibility", which degenerated every group to a
+            # single row and produced wrong aggregate values. Grouping by the
+            # full primary key is exempt: every column of the table is
+            # functionally dependent on it, so one group == one model row.
             if self.annotations:
-                # Add all base table columns that are being selected
-                if self.selected_fields:
-                    for field in self.selected_fields:
-                        if field in table.c and table.c[field] not in group_columns:
-                            group_columns.append(table.c[field])
-                elif not self.deferred_fields:
-                    # If no specific fields selected and no deferred fields, add all columns
-                    for column in table.c:
-                        if column not in group_columns:
-                            group_columns.append(column)
+                pk_names = {col.name for col in table.primary_key.columns}
+                if values_fields is not None:
+                    selected_names = {f for f in values_fields if f in table.c}
+                elif self.selected_fields:
+                    selected_names = {f for f in self.selected_fields if f in table.c}
                 else:
-                    # Add non-deferred columns
-                    all_fields = set(table.columns.keys())
-                    combined_deferred = self.deferred_fields | auto_deferred_fields
-                    selected_fields = all_fields - combined_deferred
-                    for field in selected_fields:
-                        if field in table.c and table.c[field] not in group_columns:
-                            group_columns.append(table.c[field])
+                    selected_names = set(table.columns.keys()) - self.deferred_fields - auto_deferred_fields
+
+                grouped_by_pk = bool(pk_names) and pk_names <= group_names
+                extra_selected = selected_names - group_names
+                if not grouped_by_pk and extra_selected:
+                    raise QueryError(
+                        f"column(s) {sorted(extra_selected)} are selected but not in GROUP BY. "
+                        "SQLObjects no longer adds selected columns to GROUP BY silently — "
+                        "that would collapse each group to a single row and corrupt aggregates. "
+                        "Use .values(*group_fields, *aggregate_aliases) for aggregation rows, "
+                        ".only(*group_fields) to hydrate partial instances, "
+                        "or group by the primary key to aggregate per model row."
+                    )
 
             query = query.group_by(*group_columns)
 

@@ -191,6 +191,10 @@ class QueryExecutor:
                 delete_query = delete_query.where(query.whereclause)
             return delete_query
         elif query_type in ("values", "values_list"):
+            if kwargs.get("prebuilt"):
+                # Query was already built with the exact requested fields
+                # (including annotations and GROUP BY) — execute as-is
+                return query
             fields = kwargs.get("fields", [])
             if fields:
                 table = from_table

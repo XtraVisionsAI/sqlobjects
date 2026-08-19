@@ -20,6 +20,7 @@ __all__ = [
     "ConfigurationError",
     "DeferredFieldError",
     "PrimaryKeyError",
+    "QueryError",
     "SQLError",
     "OperationalError",
     "DataError",
@@ -398,6 +399,23 @@ class PrimaryKeyError(SQLObjectsError):
     def __init__(self, message: str, operation: str | None = None):
         self.operation = operation
         super().__init__(message)
+
+
+class QueryError(SQLObjectsError):
+    """Raised when a query is constructed in a way that cannot be executed safely.
+
+    SQLObjects raises this instead of silently rewriting the query semantics —
+    for example when annotated GROUP BY queries select columns outside the
+    grouping columns, which would degenerate every group to a single row.
+
+    Examples:
+        >>> try:
+        ...     await User.objects.annotate(cnt=func.count()).group_by("department").all()
+        ... except QueryError:
+        ...     print("Use .values()/.only() with the grouping columns instead")
+    """
+
+    pass
 
 
 class SQLError(SQLObjectsError):

@@ -394,3 +394,132 @@ class TestQuerySetCopy:
         assert qs1 is not qs2
         assert qs1 is not base_qs
         assert qs2 is not base_qs
+
+
+class TestQuerySetManagerOnlyHints:
+    """Test __getattr__ hints for manager-only methods accessed on QuerySet"""
+
+    def test_delete_all_hint(self):
+        """delete_all on QuerySet should point to manager and suggest delete()"""
+        qs = QueryTestUser.objects.filter(QueryTestUser.is_active == True)
+        with pytest.raises(AttributeError, match=r"defined on Model\.objects \(manager\).*use \.delete\(\)"):
+            getattr(qs, "delete_all")  # noqa: B009 — deliberate dynamic access, hidden from type checkers
+
+    def test_update_all_hint(self):
+        """update_all on QuerySet should point to manager and suggest update()"""
+        qs = QueryTestUser.objects.filter()
+        with pytest.raises(AttributeError, match=r"defined on Model\.objects \(manager\).*use \.update\(\*\*values\)"):
+            getattr(qs, "update_all")  # noqa: B009
+
+    def test_bulk_methods_hint(self):
+        """bulk_* on QuerySet should point to manager without equivalent suggestion"""
+        qs = QueryTestUser.objects.filter()
+        for name in ("bulk_create", "bulk_update", "bulk_delete", "create", "get_or_create"):
+            with pytest.raises(AttributeError, match=r"defined on Model\.objects \(manager\)"):
+                getattr(qs, name)
+
+    def test_unknown_attribute_plain_error(self):
+        """Unknown attributes still raise a plain AttributeError"""
+        qs = QueryTestUser.objects.filter()
+        with pytest.raises(AttributeError, match="'QuerySet' object has no attribute 'nonexistent'"):
+            getattr(qs, "nonexistent")  # noqa: B009
+
+    def test_existing_methods_unaffected(self):
+        """Existing QuerySet methods still resolve normally"""
+        qs = QueryTestUser.objects.filter()
+        assert callable(qs.update)
+        assert callable(qs.delete)
+        assert callable(qs.filter)
+
+
+class TestGroupByAnnotateSemantics:
+    """Test GROUP BY + annotate validation and values-mode aggregation SQL."""
+
+    def test_legacy_full_row_grouping_raises(self):
+        """Selecting all model columns with non-pk GROUP BY must raise QueryError."""
+        from sqlobjects.exceptions import QueryError
+
+        qs = QueryTestUser.objects.annotate(cnt=func.count()).group_by("username")
+        with pytest.raises(QueryError, match=r"not in GROUP BY"):
+            qs._builder.build(QueryTestUser.get_table())
+
+    def test_only_subset_of_group_columns_allowed(self):
+        """only() columns within GROUP BY columns must build successfully."""
+        qs = QueryTestUser.objects.filter().only("username").annotate(cnt=func.count()).group_by("username")
+        query = qs._builder.build(QueryTestUser.get_table())
+        sql = str(query)
+        assert "GROUP BY" in sql
+
+    def test_group_by_primary_key_allowed(self):
+        """Grouping by the primary key keeps full-row selection valid."""
+        qs = QueryTestUser.objects.annotate(cnt=func.count()).group_by("id")
+        query = qs._builder.build(QueryTestUser.get_table())
+        sql = str(query)
+        # GROUP BY must contain exactly the pk, not every selected column
+        group_clause = sql.split("GROUP BY")[1]
+        assert "id" in group_clause
+        assert "username" not in group_clause
+
+    def test_values_mode_groups_exactly_by_group_fields(self):
+        """values() aggregation must GROUP BY exactly the grouping columns."""
+        expr = QueryTestUser.objects.filter().annotate(cnt=func.count()).group_by("username").values("username", "cnt")
+        sql = expr.get_sql()
+        select_part, group_part = sql.split("GROUP BY")
+        assert "count" in select_part.lower()
+        assert "username" in group_part
+        assert "id" not in group_part
+        assert "email" not in group_part
+
+    def test_values_unknown_field_raises(self):
+        """values() with a field that is neither column nor annotation must raise."""
+        from sqlobjects.exceptions import QueryError
+
+        expr = QueryTestUser.objects.filter().values("username", "nonexistent_field")
+        with pytest.raises(QueryError, match="Unknown field"):
+            expr.get_sql()
+
+    def test_annotate_without_group_by_unaffected(self):
+        """annotate() without group_by (e.g. computed columns) must not raise."""
+        qs = QueryTestUser.objects.annotate(double_age=QueryTestUser.age.max())
+        query = qs._builder.build(QueryTestUser.get_table())
+        assert "GROUP BY" not in str(query)
+
+
+class TestAggregateGroupByGuard:
+    """Test aggregate() rejects GROUP BY querysets."""
+
+    def test_aggregate_with_group_by_raises(self):
+        """aggregate() after group_by() must raise instead of ignoring groups."""
+        from sqlobjects.exceptions import QueryError
+
+        qs = QueryTestUser.objects.group_by("username")
+        with pytest.raises(QueryError, match=r"ignores GROUP BY.*values"):
+            qs.aggregate(cnt=func.count())
+
+    def test_manager_aggregate_with_group_by_raises(self):
+        """Manager chain group_by().aggregate() must raise the same error."""
+        from sqlobjects.exceptions import QueryError
+
+        with pytest.raises(QueryError, match="ignores GROUP BY"):
+            QueryTestUser.objects.group_by("username").aggregate(cnt=func.count())
+
+    def test_aggregate_without_group_by_unaffected(self):
+        """Plain aggregate() still returns an awaitable expression."""
+        from sqlobjects.expressions import AggregateExpression
+
+        expr = QueryTestUser.objects.filter(QueryTestUser.age > 18).aggregate(cnt=func.count())
+        assert isinstance(expr, AggregateExpression)
+
+    def test_aggregate_preserves_joins_in_sql(self):
+        """join().aggregate() must keep the JOIN in the rebuilt query."""
+        from sqlalchemy import select
+
+        class AggJoinPost(ObjectModel):
+            id: Column[int] = identity()
+            author_id: Column[int] = IntegerColumn()
+
+        qs = QueryTestUser.objects.filter().join(AggJoinPost.get_table(), QueryTestUser.id == AggJoinPost.author_id)
+        query = qs.aggregate(cnt=func.count()).get_query()
+        froms = query.get_final_froms()
+        rebuilt = select(func.count().label("cnt")).select_from(froms[0])
+        assert "JOIN" in str(rebuilt)
