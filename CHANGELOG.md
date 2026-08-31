@@ -1,3 +1,9 @@
+## 2.0.1 (2026-08-31)
+
+### Fix
+
+- **metadata**: include dialect kwargs in index dedup signature
+
 ## 2.0.0 (2026-08-19)
 
 ### BREAKING CHANGE

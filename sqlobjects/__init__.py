@@ -19,7 +19,7 @@ from .queryset import Q, QuerySet
 from .sql_logging import ObjectLogger, get_caller_frame
 
 
-__version__ = "2.0.0"
+__version__ = "2.0.1"
 
 __all__ = [
     # Core classes
