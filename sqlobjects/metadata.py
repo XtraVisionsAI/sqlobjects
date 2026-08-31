@@ -595,29 +595,48 @@ class ModelProcessor(type):
         def col_sig(idx):
             return tuple(sorted(col.name for col in idx.columns)) if idx.columns else None
 
-        full_sig_map: dict[tuple, list] = {}  # (cols, unique) -> indexes
+        def dialect_sig(idx):
+            # Dialect kwargs (postgresql_where / postgresql_using / mysql_using, etc.)
+            # are part of an index's identity: same columns with different partial
+            # predicates or access methods are distinct indexes, not duplicates.
+            # Values may be str or SQLAlchemy expressions, so compare via str().
+            # dialect_kwargs only holds explicitly passed args, not dialect defaults.
+            kwargs = getattr(idx, "dialect_kwargs", None) or {}
+            return tuple(sorted((k, str(v)) for k, v in kwargs.items() if v is not None))
+
+        def is_partial(idx):
+            return any(k.endswith("_where") for k, _ in dialect_sig(idx))
+
+        full_sig_map: dict[tuple, list] = {}  # (cols, unique, dialect_sig) -> indexes
         col_map: dict[tuple, list] = {}  # cols -> indexes
 
         for idx in list(table.indexes):
             cs = col_sig(idx)
             if cs is None:
                 continue
-            full_sig_map.setdefault((cs, getattr(idx, "unique", False)), []).append(idx)
+            full_sig_map.setdefault((cs, getattr(idx, "unique", False), dialect_sig(idx)), []).append(idx)
             col_map.setdefault(cs, []).append(idx)
 
         to_remove: set = set()
 
-        # Remove exact duplicates: prefer explicit names over SQLAlchemy auto-generated "ix_*"
+        # Remove exact duplicates (same columns, unique flag, and dialect kwargs):
+        # prefer explicit names over SQLAlchemy auto-generated "ix_*". Sort by name
+        # so the kept index is deterministic regardless of set iteration order.
         for indexes in full_sig_map.values():
             if len(indexes) > 1:
-                explicit = [i for i in indexes if not (i.name and i.name.startswith("ix_"))]
-                keep = explicit[0] if explicit else indexes[0]
+                explicit = sorted(
+                    (i for i in indexes if not (i.name and i.name.startswith("ix_"))),
+                    key=lambda i: i.name or "",
+                )
+                keep = explicit[0] if explicit else sorted(indexes, key=lambda i: i.name or "")[0]
                 to_remove.update(i for i in indexes if i is not keep)
 
-        # Remove non-unique when unique exists on same columns
+        # Remove full-table non-unique when a full-table unique exists on same columns.
+        # Partial indexes (unique or not) never participate: a partial unique index
+        # only covers rows matching its predicate and cannot replace a full index.
         for indexes in col_map.values():
-            if any(getattr(i, "unique", False) for i in indexes):
-                to_remove.update(i for i in indexes if not getattr(i, "unique", False))
+            if any(getattr(i, "unique", False) and not is_partial(i) for i in indexes):
+                to_remove.update(i for i in indexes if not getattr(i, "unique", False) and not is_partial(i))
 
         for idx in to_remove:
             table.indexes.discard(idx)
