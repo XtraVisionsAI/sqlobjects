@@ -44,7 +44,17 @@ author = await post.author.fetch()  # Lazy loading via RelatedObject proxy
 # Reverse relationship
 user = await User.objects.get(User.id == 1)
 user_posts = await user.posts.fetch()  # Fetch via RelatedCollection proxy
+
+# Recommended: load_relation() works in both cases
+author = await post.load_relation("author")
+user_posts = await user.load_relation("posts")
 ```
+
+Relationship attributes are lazy proxies only until the relationship is eagerly
+loaded. After `select_related()` or `prefetch_related()` the attribute holds the
+entity object (or list of objects) directly and has no `.fetch()`.
+`load_relation()` returns the loaded value in that case and queries otherwise, so
+prefer it in code that may run with or without eager loading.
 
 ## Relationship Types
 
@@ -171,8 +181,9 @@ rows = await user.posts.fetch()  # New query every time, like .all()
 The proxy delegates to the regular async QuerySet, retaining the relationship
 condition through filters, projections, ordering, slices, counts and streaming.
 Relationship `order_by` supplies the initial ordering; a query's `order_by()`
-replaces it. `fetch()` and `load_relation()` return fresh lists without replacing
-the proxy or caching its results. Use `count()` and `exists()` explicitly;
+replaces it. For `lazy="dynamic"` collections only, `fetch()` and `load_relation()`
+return fresh lists without replacing the proxy or caching its results; dynamic
+relationships cannot be eagerly loaded. Use `count()` and `exists()` explicitly;
 synchronous iteration, `len()` and `bool()` raise `TypeError`.
 
 Queries inherit the parent's database alias or explicitly bound session. A new

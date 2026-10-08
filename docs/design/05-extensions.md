@@ -91,7 +91,9 @@ user = await User.objects.only("name").first()  # bio field deferred
 
 # Relationship proxy - RelatedObject / RelatedCollection
 # user.posts returns RelatedCollection
-# await user.posts.fetch() loads relationship data
+# await user.load_relation("posts") loads relationship data
+# After select_related()/prefetch_related() the attribute is no longer a proxy:
+# it holds the hydrated entity object or list, and load_relation() returns it as is
 ```
 
 ### 4. Utility Functions
@@ -401,11 +403,10 @@ users_data = [{"name": f"User{i}", "email": f"user{i}@example.com"}
               for i in range(1000)]
 await User.objects.bulk_create(users_data, batch_size=100)
 
-# Intelligent prefetch optimization
+# Prefetch with a custom QuerySet (key = declared relationship name; no slicing)
 users = await User.objects.prefetch_related(
-    active_posts=Post.objects.filter(Post.is_active == True)
-                             .order_by("-created_at")
-                             .limit(5)
+    posts=Post.objects.filter(Post.is_active == True)
+                      .order_by("-created_at")
 ).all()
 
 # Query performance analysis

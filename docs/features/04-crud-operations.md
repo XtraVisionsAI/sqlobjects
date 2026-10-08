@@ -70,6 +70,34 @@ users_data = [
 created_count = await User.objects.bulk_create(users_data, batch_size=1000)
 ```
 
+#### Transaction Modes
+
+```python
+from sqlobjects import TransactionMode
+
+# INHERIT (default): join the caller's explicit transaction, or own one
+# transaction for the entire call when none is active
+await User.objects.bulk_create(users_data, transaction_mode=TransactionMode.INHERIT)
+
+# INDEPENDENT: one separate transaction spanning all batches
+await User.objects.bulk_create(users_data, transaction_mode=TransactionMode.INDEPENDENT)
+
+# BATCH: one independent transaction per batch; batches committed before a
+# later failure are kept
+await User.objects.bulk_create(users_data, batch_size=500,
+                               transaction_mode=TransactionMode.BATCH)
+
+# SAVEPOINT: a savepoint per batch inside the caller's (or one owned) transaction
+async with ctx_session():
+    await User.objects.bulk_create(users_data, transaction_mode=TransactionMode.SAVEPOINT)
+```
+
+The same `transaction_mode` parameter applies to `bulk_update()`, `bulk_delete()`
+and `bulk_upsert()`. Bulk signal hooks run once per batch inside that batch's
+transaction or savepoint. UPSERT processes every input row and returns results in
+input order. See
+[Writes and transaction boundaries](../design/06-orm-correctness.md#writes-and-transaction-boundaries).
+
 ### Get or Create Pattern
 
 ```python
@@ -309,19 +337,30 @@ await user.save()  # INSERT operation
 user.email = "updated@example.com"
 await user.save()  # UPDATE operation
 
-# Detached instance (has primary key) → UPDATE via merge()
+# Persisted instance → UPDATE of dirty (assigned) fields only
+user.email = "updated@example.com"
+await user.save()  # UPDATE users SET email=... ; unchanged fields are not written
+# Saving a persisted object with no dirty fields issues no SQL
+
+# Newly constructed instance with a primary key → SELECT, then UPDATE or INSERT
 detached_user = User(id=1, username="detached", email="detached@example.com")
-await user.save()  # UPDATE operation via merge() strategy
+await detached_user.save()
+# If a row with id=1 exists: UPDATE of the assigned fields only
+# Otherwise: INSERT with the supplied primary key
 
-# from_dict creates instance with proper dirty field tracking
+# Newly constructed instance without a primary key → always INSERT
+user = User(username="manual", email="manual@example.com")
+await user.save()  # INSERT; generated primary key is read back
+
+# from_dict behaves the same way as manual construction
 user_data = {"username": "new_user", "email": "new@example.com"}
-user = User.from_dict(user_data)  # No dirty fields marked
-await user.save()  # Clean INSERT operation
-
-# Manual construction marks all fields as dirty
-user = User(username="manual", email="manual@example.com")  # All fields marked dirty
-await user.save()  # UPDATE operation with all fields
+user = User.from_dict(user_data)
+await user.save()  # INSERT
 ```
+
+There is no `merge()`; save detection relies on persistence state, primary key
+presence and dirty-field tracking. See
+[Persisted and partial objects](../design/06-orm-correctness.md#persisted-and-partial-objects).
 
 ### Refresh Operations
 
@@ -482,6 +521,28 @@ except Exception as e:
         except Exception as individual_error:
             logger.error(f"Individual update failed for ID {mapping['id']}: {individual_error}")
 ```
+
+#### Per-Record Error Policies
+
+```python
+from sqlobjects import ErrorHandling, TransactionMode
+
+# FAIL_FAST (default): the first error aborts the operation
+# IGNORE: skip failing records; COLLECT: skip them and report their input indexes
+# Both isolate each attempted record with a savepoint, so a failing row does
+# not poison the surrounding transaction
+result = await User.objects.bulk_create(
+    users_data,
+    on_error=ErrorHandling.COLLECT,
+    transaction_mode=TransactionMode.BATCH,
+)
+```
+
+With `TransactionMode.BATCH`, batches that committed before a later failure
+remain in the database. With `INHERIT`, `INDEPENDENT` or `SAVEPOINT` a hook or
+SQL error rolls back the owned transaction or savepoint; when joining an explicit
+session the caller controls rollback. Details are in
+[Writes and transaction boundaries](../design/06-orm-correctness.md#writes-and-transaction-boundaries).
 
 ## Best Practices
 

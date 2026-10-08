@@ -240,16 +240,17 @@ posts = await Post.objects.outerjoin(
     Tag.post_id == Post.id
 ).all()
 
-# 行级锁定
-users = await User.objects.select_for_update(
-    nowait=True, 
-    skip_locked=False
-).filter(User.balance > 0).all()
+# 行级锁定（PostgreSQL / MySQL 需要显式事务，否则抛出 TransactionError）
+async with ctx_session():
+    users = await User.objects.select_for_update(
+        nowait=True, 
+        skip_locked=False
+    ).filter(User.balance > 0).all()
 
-users = await User.objects.select_for_share(
-    nowait=False, 
-    skip_locked=True
-).filter(User.is_active == True).all()
+    users = await User.objects.select_for_share(
+        nowait=False, 
+        skip_locked=True
+    ).filter(User.is_active == True).all()
 
 # 额外的 SQL 片段
 users = await User.objects.extra(
@@ -363,34 +364,39 @@ posts = await Post.objects.join(
     )
 ).all()
 
-# 悲观锁
-# FOR UPDATE 锁定
-users = await User.objects.select_for_update().filter(
-    User.balance > 0
-).all()
+# 悲观锁：行锁只在事务内有意义。除 SQLite 外，
+# select_for_update() / select_for_share() 必须在显式事务（ctx_session）中执行
+async with ctx_session():
+    # FOR UPDATE 锁定
+    users = await User.objects.select_for_update().filter(
+        User.balance > 0
+    ).all()
 
-# FOR UPDATE with NOWAIT
-users = await User.objects.select_for_update(nowait=True).filter(
-    User.account_status == "active"
-).all()
+    # FOR UPDATE with NOWAIT
+    users = await User.objects.select_for_update(nowait=True).filter(
+        User.account_status == "active"
+    ).all()
 
-# FOR UPDATE with SKIP LOCKED
-users = await User.objects.select_for_update(skip_locked=True).filter(
-    User.processing_status == "pending"
-).all()
+    # FOR UPDATE with SKIP LOCKED
+    users = await User.objects.select_for_update(skip_locked=True).filter(
+        User.processing_status == "pending"
+    ).all()
 
-# 共享锁
-# FOR SHARE 锁定
-users = await User.objects.select_for_share().filter(
-    User.is_active == True
-).all()
+    # 共享锁
+    # FOR SHARE 锁定
+    users = await User.objects.select_for_share().filter(
+        User.is_active == True
+    ).all()
 
-# 带选项的 FOR SHARE
-users = await User.objects.select_for_share(
-    nowait=True,
-    skip_locked=True
-).filter(User.role == "admin").all()
+    # 带选项的 FOR SHARE
+    users = await User.objects.select_for_share(
+        nowait=True,
+        skip_locked=True
+    ).filter(User.role == "admin").all()
 ```
+
+在 PostgreSQL 和 MySQL 上，没有显式事务的 `select_for_update()` / `select_for_share()`
+查询会在执行前抛出 `TransactionError`；SQLite 不支持行锁，锁定子句会被忽略。
 
 ## 查询执行方法
 
@@ -451,6 +457,29 @@ users_slice = await User.objects.get_item(slice(10, 20))
 async for user in User.objects.iterator(chunk_size=1000):
     await process_user(user)
 ```
+
+#### update() 与 delete() 的限制
+
+QuerySet 的 `update()` 和 `delete()` 只接受可以安全转成单条 UPDATE / DELETE 的查询。
+带有 `limit()` / `offset()` / 切片、JOIN、`group_by()`、`having()`、`distinct()` 或
+`select_related()` 的查询集会在发出 SQL 之前抛出 `QueryError`，这些子句不会被悄悄丢弃。
+相反，`count()` 和 `iterator()` 保留完整的查询语义，包括分组、去重、排序、LIMIT/OFFSET
+和延迟字段。
+
+如果迭代可能提前结束，用 `contextlib.aclosing` 显式关闭迭代器，以便立即释放游标和连接，
+而不是等待垃圾回收：
+
+```python
+from contextlib import aclosing
+
+async with aclosing(User.objects.order_by("id").iterator(chunk_size=500)) as users:
+    async for user in users:
+        if should_stop(user):
+            break
+```
+
+MySQL 的流式查询不支持与 `prefetch_related()` 组合：活跃的流式游标不能与预取查询安全地
+共享连接，这种组合会被拒绝，请改用显式分页。
 
 ### 原生 SQL 查询
 
@@ -720,9 +749,12 @@ print(plan)
 ObjectsManager 提供对所有 QuerySet 方法的直接访问：
 
 ```python
-# 去重操作
-unique_departments = await User.objects.distinct("department").all()
+# 去重投影值（所有支持的数据库）
+unique_departments = await User.objects.order_by("department").distinct().values_list("department", flat=True)
 all_distinct = await User.objects.distinct().all()
+
+# 仅 PostgreSQL：每个部门选取一个用户，组内按 id 排序
+department_users = await User.objects.order_by("department", "id").distinct("department").all()
 
 # 排除过滤
 non_deleted = await User.objects.exclude(User.is_deleted == True).all()
@@ -749,11 +781,23 @@ users = await User.objects.prefetch_related("posts").all()
 
 # 使用自定义查询集的高级预取
 users = await User.objects.prefetch_related(
-    recent_posts=Post.objects.filter(
+    posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
-    ).order_by("-created_at").limit(5)
+    ).order_by("-created_at")
 ).all()
 ```
+
+`distinct()` 比较的是被选中的列。选择完整模型时主键也包含在内，因此要对部分列去重，
+请使用 `values()` 或 `values_list()`。排序必须与目标数据库上被选中的列兼容。
+
+`distinct(*fields)` 使用 PostgreSQL 的 `DISTINCT ON`，排序必须以这些去重字段开头，
+未知字段名抛出 `QueryError`。在 SQLite 和 MySQL 上，按字段去重会在执行 SQL 之前抛出
+`QueryError`，即使它嵌套在 `count()`、`exists()`、子查询或 CTE 中也一样；需要跨数据库的
+去重值时，请使用普通 `distinct()` 配合投影。两种形式的 distinct 都拒绝 QuerySet 的
+`update()` 和 `delete()`。`aggregate()` 和 `count()` 支持两种形式，并在应用 LIMIT/OFFSET
+之前保留去重。要统计单列的去重值个数，请使用聚合表达式，例如
+`func.count(User.department.distinct())`，或者 `values()` 配合 `distinct()`。
+EXPLAIN 对 PostgreSQL 的要求与查询执行一致。
 
 ## 日期和时间查询
 

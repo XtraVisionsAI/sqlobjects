@@ -267,16 +267,17 @@ posts = await Post.objects.outerjoin(
     Tag.post_id == Post.id
 ).all()
 
-# Row-level locking
-users = await User.objects.select_for_update(
-    nowait=True, 
-    skip_locked=False
-).filter(User.balance > 0).all()
+# Row-level locking (requires an explicit transaction on PostgreSQL/MySQL)
+async with ctx_session():
+    users = await User.objects.select_for_update(
+        nowait=True, 
+        skip_locked=False
+    ).filter(User.balance > 0).all()
 
-users = await User.objects.select_for_share(
-    nowait=False, 
-    skip_locked=True
-).filter(User.is_active == True).all()
+    users = await User.objects.select_for_share(
+        nowait=False, 
+        skip_locked=True
+    ).filter(User.is_active == True).all()
 
 # Extra SQL fragments
 users = await User.objects.extra(
@@ -408,34 +409,41 @@ posts = await Post.objects.join(
     )
 ).all()
 
-# Pessimistic locking
-# FOR UPDATE locking
-users = await User.objects.select_for_update().filter(
-    User.balance > 0
-).all()
+# Row locks only live inside an explicit transaction on PostgreSQL/MySQL.
+# Outside ctx_session() the lock is released as soon as the statement completes.
+async with ctx_session():
+    # Pessimistic locking
+    # FOR UPDATE locking
+    users = await User.objects.select_for_update().filter(
+        User.balance > 0
+    ).all()
 
-# FOR UPDATE with NOWAIT
-users = await User.objects.select_for_update(nowait=True).filter(
-    User.account_status == "active"
-).all()
+    # FOR UPDATE with NOWAIT
+    users = await User.objects.select_for_update(nowait=True).filter(
+        User.account_status == "active"
+    ).all()
 
-# FOR UPDATE with SKIP LOCKED
-users = await User.objects.select_for_update(skip_locked=True).filter(
-    User.processing_status == "pending"
-).all()
+    # FOR UPDATE with SKIP LOCKED
+    users = await User.objects.select_for_update(skip_locked=True).filter(
+        User.processing_status == "pending"
+    ).all()
 
-# Shared locks
-# FOR SHARE locking
-users = await User.objects.select_for_share().filter(
-    User.is_active == True
-).all()
+    # Shared locks
+    # FOR SHARE locking
+    users = await User.objects.select_for_share().filter(
+        User.is_active == True
+    ).all()
 
-# FOR SHARE with options
-users = await User.objects.select_for_share(
-    nowait=True,
-    skip_locked=True
-).filter(User.role == "admin").all()
+    # FOR SHARE with options
+    users = await User.objects.select_for_share(
+        nowait=True,
+        skip_locked=True
+    ).filter(User.role == "admin").all()
 ```
+
+Explicit `select_for_update()` / `select_for_share()` reads require an explicit
+transaction outside SQLite; wrap them in `ctx_session()` together with the write
+that depends on the lock.
 
 ## Query Execution Methods
 

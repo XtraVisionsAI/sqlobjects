@@ -132,18 +132,26 @@ deferred_fields = field_cache.get("deferred_fields", set())
 relationship_fields = field_cache.get("relationship_fields", set())
 ```
 
-### 关系对象缓存
+### 关系对象加载
+
+关系属性不能直接 `await`。未预加载时，属性是关系代理，通过 `load_relation()`
+（或代理的 `fetch()`）发出查询；经 `prefetch_related()` / `select_related()` 预加载后，
+属性直接是实体对象或实体对象列表，`load_relation()` 会原样返回，不再查询。
 
 ```python
-# 相关对象在首次访问后被缓存
+# 未预加载：每次 load_relation() 都会执行查询
 user = await User.objects.get(User.id == 1)
-posts = await user.posts  # 加载并缓存相关文章
-posts_again = await user.posts  # 返回缓存的文章
+posts = await user.load_relation("posts")
 
-# 单一关系缓存
-post = await Post.objects.get(Post.id == 1)
-author = await post.author  # 加载并缓存作者
-author_again = await post.author  # 返回缓存的作者
+# 预加载后：属性已是实体列表，load_relation() 不再查询
+users = await User.objects.prefetch_related("posts").all()
+for user in users:
+    posts = await user.load_relation("posts")  # 无额外查询
+
+# 单值关系
+post = await Post.objects.select_related("author").get(Post.id == 1)
+author = post.author  # 来自 JOIN 的实体对象
+author = await post.load_relation("author")  # 同样可用
 ```
 
 ## 查询优化
@@ -171,15 +179,13 @@ posts = await Post.objects.select_related("author", "category").all()
 # 对反向关系使用 prefetch_related（独立查询）
 users = await User.objects.prefetch_related("posts", "comments").all()
 
-# 使用自定义 QuerySets 的高级预获取（并发执行）
+# 使用自定义 QuerySet 的高级预获取：key 必须是已声明的关系名，
+# 支持过滤和排序，不支持按父对象的 limit/offset（切片会抛出错误）
 users = await User.objects.prefetch_related(
-    recent_posts=Post.objects.filter(
+    posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
-    ).order_by('-created_at').limit(10),
-    popular_posts=Post.objects.filter(Post.view_count > 1000)
-                             .order_by('-view_count')
-                             .limit(5)
-).all()  # 所有预获取查询并发执行
+    ).order_by('-created_at')
+).all()
 
 # 结合两种策略
 posts = await Post.objects.select_related("author").prefetch_related("tags").all()
@@ -325,25 +331,34 @@ db = await init_db(config.url, **config.engine_kwargs)
 ### 会话管理模式
 
 ```python
-# 为您的用例选择适当的会话模式
+# 会话归属于打开它的 asyncio task，不能跨 task 共享
 
-# 模式 1：ContextVar 继承（最适合统一事务）
+# ❌ 错误：在 ctx_session() 内 gather 子任务。子任务继承的父会话属于另一个
+# 仍在运行的 task，ORM 操作会在发出 SQL 之前抛出 TransactionError
 async with ctx_session() as session:
     tasks = [asyncio.create_task(process_batch(batch)) for batch in batches]
-    await asyncio.gather(*tasks)  # 所有任务共享同一会话
+    await asyncio.gather(*tasks)
 
-# 模式 2：独立上下文（最适合容错）
-tasks = [
-    asyncio.create_task(process_batch(batch), context=contextvars.copy_context())
-    for batch in batches
-]
-await asyncio.gather(*tasks, return_exceptions=True)
-
-# 模式 3：显式传递（最适合复杂逻辑）
+# ❌ 错误：把 session 显式传给子任务，同样抛出 TransactionError
 async with ctx_session() as session:
     tasks = [asyncio.create_task(process_batch(batch, session)) for batch in batches]
     await asyncio.gather(*tasks)
+
+# ✅ 并发：每个任务自己打开 ctx_session()，各自独立提交
+async def process_batch(batch):
+    async with ctx_session():
+        ...
+
+await asyncio.gather(*(process_batch(batch) for batch in batches), return_exceptions=True)
+
+# ✅ 原子性：需要所有批次在同一个事务中时，在拥有事务的 task 内串行执行
+async with ctx_session():
+    for batch in batches:
+        await process_batch_in_current_session(batch)
 ```
+
+并发任务的独立事务不会随父事务一起回滚；复制 context 也不会复制其中的会话或连接。
+事务内需要超时控制时使用 `asyncio.timeout()`，`asyncio.wait_for()` 会把协程调度到另一个 task。
 
 ### 连接生命周期管理
 
@@ -520,9 +535,9 @@ async def benchmark_bulk_operations():
 # ✅ 使用适当的加载策略
 posts = await Post.objects.select_related("author").prefetch_related("tags").all()
 
-# ✅ 使用高级预获取进行过滤关系
+# ✅ 使用高级预获取进行过滤关系（key 为已声明的关系名）
 users = await User.objects.prefetch_related(
-    recent_posts=Post.objects.filter(
+    posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by('-created_at')
 ).all()
@@ -543,7 +558,7 @@ users = await User.objects.only("id", "username").all()
 # ❌ 避免 N+1 查询
 posts = await Post.objects.all()
 for post in posts:
-    author = await post.author  # N 个额外查询！
+    author = await post.load_relation("author")  # N 个额外查询！
 ```
 
 ### 内存管理检查清单

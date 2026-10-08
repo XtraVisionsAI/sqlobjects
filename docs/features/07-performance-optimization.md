@@ -133,19 +133,24 @@ deferred_fields = field_cache.get("deferred_fields", set())
 relationship_fields = field_cache.get("relationship_fields", set())
 ```
 
-### Relationship Object Caching
+### Relationship Loading Results
 
 ```python
-# Related objects are cached after first access
+# Without eager loading the attribute is a lazy proxy; every explicit load
+# issues a new query (nothing is cached on the instance)
 user = await User.objects.get(User.id == 1)
-posts = await user.posts  # Loads and caches related posts
-posts_again = await user.posts  # Returns cached posts
+posts = await user.load_relation("posts")  # Query
+posts_again = await user.load_relation("posts")  # Another query
 
-# Single relationship caching
-post = await Post.objects.get(Post.id == 1)
-author = await post.author  # Loads and caches author
-author_again = await post.author  # Returns cached author
+# After select_related / prefetch_related the attribute already holds the
+# entity object or list, so no further query is needed
+post = await Post.objects.select_related("author").get(Post.id == 1)
+author = post.author  # Hydrated User instance, no query
 ```
+
+Relationship attributes cannot be awaited directly. Use eager loading when the
+related data is needed for many instances, and `load_relation()` for one-off
+loads.
 
 ## Query Optimization
 
@@ -172,15 +177,14 @@ posts = await Post.objects.select_related("author", "category").all()
 # Use prefetch_related for reverse relationships (separate queries)
 users = await User.objects.prefetch_related("posts", "comments").all()
 
-# Advanced prefetching with custom QuerySets (concurrent execution)
+# Advanced prefetching with a custom QuerySet
+# The keyword must be the declared relationship name; the QuerySet must target
+# the related model and may filter/order but not slice (limit/offset)
 users = await User.objects.prefetch_related(
-    recent_posts=Post.objects.filter(
+    posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
-    ).order_by('-created_at').limit(10),
-    popular_posts=Post.objects.filter(Post.view_count > 1000)
-                             .order_by('-view_count')
-                             .limit(5)
-).all()  # All prefetch queries execute concurrently
+    ).order_by('-created_at')
+).all()
 
 # Combine both strategies
 posts = await Post.objects.select_related("author").prefetch_related("tags").all()
@@ -326,25 +330,30 @@ db = await init_db(config.url, **config.engine_kwargs)
 ### Session Management Patterns
 
 ```python
-# Choose appropriate session patterns for your use case
+# A session belongs to the asyncio task that opened it. Inheriting the
+# ContextVar into a child task, or passing the session object to one, raises
+# TransactionError before any SQL runs.
 
-# Pattern 1: ContextVar inheritance (best for unified transactions)
-async with ctx_session() as session:
-    tasks = [asyncio.create_task(process_batch(batch)) for batch in batches]
-    await asyncio.gather(*tasks)  # All tasks share the same session
+# Concurrent work: each task opens its own ctx_session()
+async def process_batch(batch):
+    async with ctx_session():
+        for item in batch:
+            await Item.objects.create(**item)
 
-# Pattern 2: Independent contexts (best for fault tolerance)
-tasks = [
-    asyncio.create_task(process_batch(batch), context=contextvars.copy_context())
-    for batch in batches
-]
+tasks = [asyncio.create_task(process_batch(batch)) for batch in batches]
 await asyncio.gather(*tasks, return_exceptions=True)
 
-# Pattern 3: Explicit passing (best for complex logic)
-async with ctx_session() as session:
-    tasks = [asyncio.create_task(process_batch(batch, session)) for batch in batches]
-    await asyncio.gather(*tasks)
+# Atomic work: run sequentially inside one transaction
+async with ctx_session():
+    for batch in batches:
+        for item in batch:
+            await Item.objects.create(**item)
 ```
+
+Concurrent tasks commit independent transactions; they are not rolled back with
+the parent's transaction. When all batches must succeed or fail together, run
+them sequentially in a single `ctx_session()`. See
+[Async task ownership](../design/06-orm-correctness.md#async-task-ownership-and-cleanup).
 
 ### Connection Lifecycle Management
 
@@ -521,9 +530,9 @@ async def benchmark_bulk_operations():
 # ✅ Use appropriate loading strategies
 posts = await Post.objects.select_related("author").prefetch_related("tags").all()
 
-# ✅ Use advanced prefetching for filtered relationships
+# ✅ Use advanced prefetching for filtered relationships (key = relationship name)
 users = await User.objects.prefetch_related(
-    recent_posts=Post.objects.filter(
+    posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by('-created_at')
 ).all()
@@ -544,7 +553,7 @@ users = await User.objects.only("id", "username").all()
 # ❌ Avoid N+1 queries
 posts = await Post.objects.all()
 for post in posts:
-    author = await post.author  # N additional queries!
+    author = await post.load_relation("author")  # N additional queries!
 ```
 
 ### Memory Management Checklist

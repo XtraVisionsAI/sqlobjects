@@ -314,16 +314,21 @@ posts = await Post.objects.outerjoin(
 ### Row Locking
 
 ```python
-# Pessimistic locking (FOR UPDATE)
-user = await User.objects.filter(
-    User.id == 1
-).select_for_update(nowait=True).first()
+# Row locks require an explicit transaction on PostgreSQL/MySQL
+async with ctx_session():
+    # Pessimistic locking (FOR UPDATE)
+    user = await User.objects.filter(
+        User.id == 1
+    ).select_for_update(nowait=True).first()
 
-# Shared locking (FOR SHARE)
-users = await User.objects.filter(
-    User.department == "sales"
-).select_for_share(skip_locked=True).all()
+    # Shared locking (FOR SHARE)
+    users = await User.objects.filter(
+        User.department == "sales"
+    ).select_for_share(skip_locked=True).all()
 ```
+
+Outside SQLite, `select_for_update()` / `select_for_share()` must run inside an
+explicit transaction; the lock is held until that transaction ends.
 
 ### Date/Time Extraction
 

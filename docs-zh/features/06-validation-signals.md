@@ -282,6 +282,13 @@ collector.raise_if_errors()  # 如有错误则抛出ValidationError
 
 ### 信号类型
 
+`objects.create()` 按以下顺序触发实例钩子：`before_save`、`before_create`、
+`after_save`、`after_create`。它总是执行 INSERT，即使调用方提供了主键。before 钩子
+可以在验证和 SQL 之前修改实例；after 钩子看到的是已持久化的实例。`create()` 会加入
+显式事务，或者自有一个覆盖全部钩子与 INSERT 的事务。钩子失败时异常向上传播，
+并回滚自有事务；显式事务的回滚由调用方负责。处理器可以是同步函数、异步函数，
+或返回 awaitable。
+
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext, Operation
@@ -334,6 +341,23 @@ class User(ObjectModel):  # 已内置信号功能
 ```
 
 ### 批量操作信号
+
+管理器的 `bulk_create()`、`bulk_update()`、`bulk_delete()` 对每个批次触发一次类级钩子，
+不触发单个实例钩子。创建和更新会先触发通用的 `before_bulk_save` / `after_bulk_save`，
+再触发对应的操作钩子。`actual_operation` 描述的是调用的批量 API，即使 `bulk_create()`
+的冲突处理更新了已有行也不变。空输入不触发任何钩子。
+
+before 钩子的 `affected_count` 是该批次的输入条数；after 钩子的 `affected_count` 是
+该批次成功影响的行数，计数保证与 `BulkResult.success_count` 相同，缺失的目标行和被
+收集的失败都会使它减少。QuerySet 的 `update()` 与 `delete()` 每次调用触发一次对应的
+类级钩子：before 阶段计数未知（`None`），after 阶段是返回的计数。只有 QuerySet 的
+`update()` 会在 `update_data` 中提供统一的字段值。
+
+每个上下文携带执行该批次或 QuerySet 写入的会话。`context.on_commit()` 遵循批量
+事务模式：独立事务 / 每批事务模式下，回调可能在外层事务结束前就被分发，而 savepoint
+释放后回调要等到根事务提交。钩子错误即使在 `IGNORE` 或 `COLLECT` 策略下也会向上
+传播，并回滚自有事务或该批次的 savepoint；之前已提交的批次保持不变。提交错误与
+提交回调错误同样向上传播，不会被当作失败的输入行报告。
 
 ```python
 class User(ObjectModel):
@@ -441,6 +465,37 @@ user, created = await User.objects.update_or_create(
 # 如果更新：before_save → before_update → after_save → after_update
 # 如果创建：before_save → before_create → after_save → after_create
 ```
+
+### 事务提交后的副作用
+
+`after_save`、`after_create` 等 after 钩子在 SQL 操作之后运行，但可能在外层事务提交之前
+执行。外部副作用应通过 `await context.on_commit(callback)` 推迟到提交之后，它使用的是
+本次操作的数据库 / 会话。
+
+```python
+from functools import partial
+from sqlobjects.session import ctx_session
+
+class User(ObjectModel):
+    async def after_save(self, context: SignalContext):
+        await context.on_commit(partial(invalidate_user_cache, self.id))
+
+    async def after_create(self, context: SignalContext):
+        await context.on_commit(partial(notify_user_created, self.id), robust=True)
+
+async with ctx_session():
+    user = User(username="alice")
+    await user.save()
+    # 外部副作用等到提交后才执行；回滚会丢弃它们。
+```
+
+传入可调用对象而不是协程对象，并在注册时捕获回调所需的值。回调错误无法回滚
+已提交的事务；`robust=True` 时普通错误只记录日志并继续执行后续回调。管理器的
+`create()`、批量方法和 QuerySet 写入为各自的钩子提供事务边界。直接调用实例 `save()`
+时，在隐式会话上它会自有一个事务，回调在该事务提交后执行；若要在 `before_*` 钩子中
+注册回调并与其他操作共享事务，请先用 `ctx_session()` 包裹。不在显式事务或操作自有事务
+中时，注册会立即执行回调。必须与原操作保持原子性的数据库更新应放在同一事务内，
+而不是放进提交后的回调。
 
 ## 高级验证模式
 
@@ -565,11 +620,12 @@ class User(ObjectModel):
   
     # === 缓存管理 ===
     async def after_update(self, context: SignalContext):
-        cache.delete(f"user:{self.id}")
+        key = f"user:{self.id}"
+        await context.on_commit(lambda: cache.delete(key))
   
     # === 通知 ===
     async def after_create(self, context: SignalContext):
-        await self.send_welcome_email()
+        await context.on_commit(self.send_welcome_email)
 ```
 
 ### 错误处理
@@ -578,19 +634,13 @@ class User(ObjectModel):
 # 信号中的优雅错误处理
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext
-import logging
-
-logger = logging.getLogger(__name__)
 
 class User(ObjectModel):
     async def after_create(self, context: SignalContext):
-        try:
-            # 非关键操作
-            await self.send_welcome_email()
-            await self.create_default_preferences()
-        except Exception as e:
-            # 记录但不使事务失败
-            logger.error(f"用户 {self.id} 的创建后任务失败：{e}")
+        # 相关的数据库修改留在当前事务中
+        await self.create_default_preferences()
+        # 通知失败会在提交后记录日志，不会撤销已提交的事务
+        await context.on_commit(self.send_welcome_email, robust=True)
   
     async def before_save(self, context: SignalContext):
         # 关键验证 - 让异常向上抛出

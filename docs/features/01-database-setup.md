@@ -88,7 +88,7 @@ from sqlobjects.session import ctx_session, ctx_sessions
 # Single database session (recommended)
 async with ctx_session() as session:
     user = await User.objects.using(session).create(username="alice")
-    posts = await user.posts.all()
+    posts = await user.load_relation("posts")
     # Auto-commit on success, rollback on error
 
 # Specific database session
@@ -148,6 +148,30 @@ async with ctx_session() as session:
     profile = await Profile.objects.using(session).create(user_id=user.id)
     # Auto-commit on success, rollback on error
 ```
+
+### Recovering From Errors
+
+An SQL error inside an explicit transaction leaves it unusable: the next
+statement raises `TransactionError` until you call `rollback()`. Catching the
+exception alone does not restore the transaction. To continue after a statement
+that may fail, isolate it with a savepoint:
+
+```python
+async with ctx_session() as session:
+    try:
+        async with await session.begin_nested():
+            await User.objects.create(username="duplicate")
+    except IntegrityError:
+        pass  # savepoint rolled back; the transaction stays usable
+    await User.objects.create(username="next")
+```
+
+Readonly sessions hold no transaction and release their connection after each
+statement, so a failed query there does not affect later queries. On an implicit
+(auto-commit) session, `begin_nested()` opens a transaction only for its
+savepoints; when the outermost savepoint ends, that transaction commits and the
+connection is released. See
+[Writes and transaction boundaries](../design/06-orm-correctness.md#writes-and-transaction-boundaries).
 
 ### Independent Transactions
 

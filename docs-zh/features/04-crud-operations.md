@@ -205,6 +205,27 @@ affected = await User.objects.bulk_create(
 )
 ```
 
+#### 批量操作的事务模式
+
+`bulk_create()` / `bulk_update()` 等批量方法通过 `transaction_mode` 参数
+（`sqlobjects.TransactionMode`）控制事务边界：
+
+| 模式 | 事务边界 |
+| --- | --- |
+| `INHERIT`（默认） | 使用调用方的显式事务；没有显式事务时，为整个调用自有一个事务。 |
+| `INDEPENDENT` | 在同一数据库上另开一个独立事务，覆盖所有批次。 |
+| `BATCH` | 每个批次自有一个事务，先提交的批次不受后续批次失败影响。 |
+| `SAVEPOINT` | 在调用方事务（或自有事务）内，用 savepoint 隔离每个批次。 |
+
+`on_error` 为 `ErrorHandling.COLLECT` 或 `ErrorHandling.IGNORE` 时，每条尝试写入的记录
+都用一个 savepoint 隔离，`COLLECT` 报告的是跨批次的输入索引。独立连接可能被外层事务
+持有的锁阻塞，不要在独立批次中写入外层事务已锁定的行；SQLite 还会在数据库级别限制并发写入。
+
+UPSERT（`on_conflict=ConflictResolution.UPDATE` 等）会处理每一条输入行。当 RETURNING
+能按唯一冲突键匹配时，结果按输入顺序返回，返回对象包含数据库中实际存储的值；
+不支持 RETURNING 的后端会按键回查插入或更新的记录，这会产生额外查询。在不报告
+`executemany` 行数的驱动上，精确的 UPDATE 计数需要逐行执行。
+
 ### 更新或创建模式
 
 ```python
@@ -299,23 +320,29 @@ deleted = await User.objects.delete_all(fast=True)  # 返回 -1，无事务安�
 user = User(username="new_user", email="new@example.com")
 await user.save()  # INSERT 操作
 
-# 现有实例（有主键）→ UPDATE
+# 从数据库加载的实例 → UPDATE，只写入脏字段（被赋值过的字段）
 user.email = "updated@example.com"
-await user.save()  # UPDATE 操作
+await user.save()  # UPDATE 操作，仅更新 email；没有脏字段时不发出 UPDATE
 
-# 分离实例（有主键）→ 通过 merge() 进行 UPDATE
+# 新构造但带主键的实例 → 先 SELECT 判断该主键是否存在：
+# 存在则 UPDATE（仅写入已赋值的字段），不存在则 INSERT。不存在 merge() 步骤。
 detached_user = User(id=1, username="detached", email="detached@example.com")
-await user.save()  # 通过 merge() 策略进行 UPDATE
+await detached_user.save()
 
-# from_dict 创建具有正确脏字段跟踪的实例
+# from_dict 创建的实例同样遵循上述规则
 user_data = {"username": "new_user", "email": "new@example.com"}
-user = User.from_dict(user_data)  # 没有标记脏字段
-await user.save()  # 干净的 INSERT 操作
+user = User.from_dict(user_data)  # 没有主键
+await user.save()  # INSERT 操作
 
-# 手动构造会标记所有字段为脏
-user = User(username="manual", email="manual@example.com")  # 所有字段标记为脏
-await user.save()  # 包含所有字段的 UPDATE 操作
+# 手动构造且没有主键的实例一律 INSERT
+user = User(username="manual", email="manual@example.com")
+await user.save()  # INSERT 操作
 ```
+
+保存已持久化对象时只写入脏字段，因此一个过期的对象不会覆盖其他字段上的并发修改。
+事务回滚不会回退 Python 对象的状态，受影响的实例应丢弃或 `refresh()`。
+`create()` / `save()` 不会把数据库异常包装成 `RuntimeError` 或 `PrimaryKeyError`，
+`IntegrityError` 等原始异常会直接抛出。
 
 ### 刷新操作
 
@@ -383,6 +410,28 @@ async with ctx_session() as session:
         await session.rollback()
         raise
 ```
+
+### 显式事务中的失败处理
+
+显式事务里某条 SQL 失败后（且不在 savepoint 内），事务在回滚之前不可再用：
+仅捕获异常不能恢复它，后续语句会抛出 `TransactionError`。对于可恢复的错误，
+把语句包在 savepoint 中：
+
+```python
+from sqlalchemy.exc import IntegrityError
+
+async with ctx_session() as session:
+    try:
+        async with await session.begin_nested():
+            await User.objects.create(username="duplicate")
+    except IntegrityError:
+        pass
+    await User.objects.create(username="next")  # 事务仍可用
+```
+
+只读会话不持有事务，每条语句后即释放连接，失败的查询不影响后续查询。在隐式
+（自动提交）会话上，`begin_nested()` 只为 savepoint 打开一个事务，最外层 savepoint
+结束后该事务自动提交。
 
 ## 性能优化
 

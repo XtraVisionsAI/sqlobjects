@@ -2,6 +2,9 @@
 
 本目录包含 SQLObjects 的完整功能文档，按功能组织，帮助用户理解和实现特定功能。
 
+关于 save、部分加载、批量事务、count、iterator 和关系的精确语义，请参阅
+[持久化与查询契约](../design/06-orm-correctness.md)。
+
 ## 文档结构
 
 ### [01. 数据库设置](01-database-setup.md)
@@ -11,7 +14,7 @@
 - 单数据库和多数据库设置
 - 连接池和配置
 - 会话管理模式
-- 事务控制
+- 事务控制与提交后动作（`session.on_commit()`）
 - 数据库事件和生命周期管理
 - SQL 日志（`sqlobjects.sql` 日志器）
 - ASGI / FastAPI 集成（SessionMiddleware、`get_db_session`）
@@ -26,6 +29,7 @@
 - 数据类集成的代码生成控制
 - 身份列和计算列
 - 复合与命名外键约束（`foreignkey()`）
+- 应用注册表（`__registry__`）与自动约束、索引名称
 - 自定义字段类型和类型注册
 
 ### [03. 数据查询](03-querying-data.md)
@@ -92,6 +96,15 @@
 - 自定义类型的最佳实践
 - 类型注册表API参考
 
+### [09. 数据库迁移](09-migrations.md)
+使用 Alembic 和异步数据库连接演进已有的 schema。
+
+**核心主题：**
+- 隔离的应用注册表与表归属
+- 自动生成、升级、降级与 schema 检查
+- 历史数据回填与 SQLite 批量操作
+- 离线 SQL 与共享已有的异步连接
+
 ## 入门指南
 
 如果您是SQLObjects的新用户，我们建议按照以下学习路径：
@@ -104,6 +117,7 @@
 6. **实现[验证和信号](06-validation-signals.md)** - 添加业务逻辑
 7. **使用[性能优化](07-performance-optimization.md)优化** - 扩展您的应用程序
 8. **使用[自定义字段类型](08-custom-field-types.md)扩展** - 添加数据库特定类型（可选）
+9. **使用[数据库迁移](09-migrations.md)演进 schema** - 用 Alembic 管理已有数据库（可选）
 
 ## 功能分类
 

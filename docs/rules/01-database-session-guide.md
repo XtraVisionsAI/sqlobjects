@@ -48,7 +48,7 @@ from sqlobjects.session import ctx_session, ctx_sessions
 # Single database transaction
 async with ctx_session() as session:
     user = await User.objects.using(session).create(username="bob")
-    posts = await user.posts.using(session).all()
+    posts = await user.load_relation("posts")
     # Auto-commit on success, rollback on exception
 
 # Multi-database transaction
@@ -114,6 +114,11 @@ if has_session("analytics"):
 - `has_session()` reports only an open session usable by the current task.
 - A closed session cannot be reused. Background work must open a new context.
 - Cancellation rolls back request/context transactions and releases their connections.
+- After an SQL error in an explicit transaction, call `rollback()` or wrap the
+  risky statement in `async with await session.begin_nested():`; otherwise later
+  statements raise `TransactionError`. Readonly sessions are unaffected by a failed
+  query. On an implicit (auto-commit) session the transaction opened by
+  `begin_nested()` commits when its outermost savepoint ends.
 
 ### ✅ Do
 
@@ -198,7 +203,7 @@ async with ctx_session() as session:
     # All operations share the same connection
     users = await User.objects.using(session).all()
     for user in users:
-        await user.posts.using(session).all()
+        await user.load_relation("posts")  # Uses the loading session
 ```
 
 ### Read/Write Separation

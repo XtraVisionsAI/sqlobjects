@@ -113,7 +113,18 @@ affected_rows = await User.objects.bulk_update(update_data, match_fields=["id"])
 
 # Bulk delete - uses IN clause and batch processing
 deleted_rows = await User.objects.bulk_delete([1, 2, 3], batch_size=1000)
+
+# Bulk hooks fire once per batch inside that batch's transaction or savepoint;
+# before counts describe the batch input, after counts the batch result.
+# transaction_mode selects the boundary (TransactionMode):
+#   INHERIT     - caller's transaction, or one owned transaction for the whole call
+#   INDEPENDENT - one separate transaction across all batches
+#   BATCH       - one transaction per batch; committed batches survive later failures
+#   SAVEPOINT   - a savepoint per batch inside the caller's/owned transaction
+await User.objects.bulk_create(users_data, transaction_mode=TransactionMode.BATCH)
 ```
+
+See [Writes and transaction boundaries](06-orm-correctness.md#writes-and-transaction-boundaries).
 
 ## Module Architecture
 
@@ -205,7 +216,12 @@ await .count() / await .exists()
 await .last() / await .earliest() / await .latest()
 await .values(*fields) / await .values_list(*fields)
 await .aggregate(**kwargs) / await .raw(sql)
-await .iterator() / await .update() / await .delete()
+await .update() / await .delete()
+
+# Streaming (preserves ordering, limit/offset and deferred fields)
+async with aclosing(qs.iterator(chunk_size=500)) as rows:  # from contextlib import aclosing
+    async for obj in rows:
+        ...
 
 # Date/time query methods
 await .dates(field, precision, order) / await .datetimes(field, precision, order)

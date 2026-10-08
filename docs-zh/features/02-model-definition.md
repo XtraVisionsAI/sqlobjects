@@ -36,6 +36,23 @@ manager1 = User.objects  # 新的 ObjectsManager 实例
 manager2 = User.objects  # 另一个新的 ObjectsManager 实例
 ```
 
+## 应用注册表
+
+除非基类显式声明了注册表，模型都共享默认注册表：
+
+```python
+from sqlobjects.metadata import ModelRegistry
+
+class AppModel(ObjectModel):
+    __abstract__ = True
+    __registry__ = ModelRegistry()
+```
+
+子类会继承这个注册表，使其表和关系与其他应用隔离。显式注册表必须是 `ModelRegistry`
+实例。它同时也是 SQLAlchemy 的 `MetaData`，在导入所有模型模块之后可以直接作为 Alembic
+的 `target_metadata`。未显式指定时，默认的共享注册表仍然可用。
+参见[数据库迁移](09-migrations.md)。
+
 ## 字段类型
 
 ### 字符串字段
@@ -362,13 +379,15 @@ Index("idx_lower_name", func.lower(sql_column("name")))
 Index("idx_price_desc", sql_column("price").desc())
 ```
 
-定义等价且唯一性相同的索引会去重，优先保留显式名称。只有有序表达式和数据库选项均相同，
-全表唯一索引才会替代普通索引；部分索引不能替代全表索引。
+去重时按表达式顺序、唯一性以及方言选项进行比较：列序相反、函数不同、排序方向或
+partial 条件不同的索引都会分别保留。定义等价且唯一性相同的索引会去重，优先保留显式名称；
+当某列同时声明 `index=True` 和一个显式命名的 `Index` 时，保留显式名称。
+只有有序表达式和数据库选项均相同，全表唯一索引才会替代普通索引；部分索引不能替代全表索引。
 带 `ddl_if()` 条件或无法使用通用 SQL 编译器编译的索引会保留，模型注册不会执行 DDL 条件回调。
 数据库是否支持对应表达式和选项，仍由其方言决定。
 
 已有数据库可能缺少被旧版去重逻辑丢弃的索引。升级时请参考
-[索引迁移说明](../../docs/features/09-migrations.md#restore-previously-discarded-indexes)。
+[索引迁移说明](09-migrations.md#恢复先前被丢弃的索引)。
 
 #### 自动约束和索引名称
 
@@ -383,7 +402,7 @@ CHECK 表达式和部分索引条件的签名包含绑定参数的值，避免�
 
 已有数据库若使用过超长或冲突的自动名称，应检查并编写相应迁移；旧数据库可能保存完整名称、
 数据库截断名称或 SQLAlchemy 原有的索引截断名称。需要保留时可显式指定实际名称。
-Alembic 不会可靠地自动识别重命名和 CHECK 约束变更。
+Alembic 不会可靠地自动识别重命名和 CHECK 约束变更。参见[迁移指南](09-migrations.md)。
 
 #### 复合与命名外键约束
 

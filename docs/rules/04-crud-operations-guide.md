@@ -337,7 +337,7 @@ await User.objects.bulk_create(data, batch_size=100)   # SQLite
 async with ctx_session() as session:
     # Quick database operations only
     user = await User.objects.using(session).create(username="alice")
-    await user.posts.using(session).create(title="Post")
+    await Post.objects.using(session).create(title="Post", author_id=user.id)
 # Transaction commits here
 
 # Don't hold transactions during I/O

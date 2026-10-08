@@ -147,7 +147,7 @@ from sqlobjects.session import ctx_session, ctx_sessions
 # Single database transaction
 async with ctx_session() as session:
     user = await User.objects.using(session).create(username="bob")
-    posts = await user.posts.using(session).all()
+    posts = await Post.objects.using(session).filter(author_id=user.id).all()
     # Automatic commit on success, rollback on error
 
 # Multi-database transactions
@@ -271,10 +271,12 @@ avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).subquery(query_type
 older_users = await User.objects.filter(User.age > avg_age).all()
 
 # Manual joins and locking
-posts = await Post.objects.join(
-    User,  # Using Model class (recommended)
-    Post.author_id == User.id
-).select_for_update(nowait=True).all()
+# Row locks need an explicit transaction on PostgreSQL/MySQL
+async with ctx_session():
+    posts = await Post.objects.join(
+        User,  # Using Model class (recommended)
+        Post.author_id == User.id
+    ).select_for_update(nowait=True).all()
 
 # Raw SQL when needed
 users = await User.objects.raw(

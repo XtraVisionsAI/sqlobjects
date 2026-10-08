@@ -71,30 +71,30 @@ QuerySet 集成的 prefetch_related，支持自定义 QuerySet 配置和 Related
 # 简单预取 - 使用默认 QuerySet
 users = await User.objects.prefetch_related("posts").all()
 
-# 高级预取配置 - 传递自定义 QuerySet
+# 高级预取配置 - 传递自定义 QuerySet（key 必须是已声明的关系名，
+# 支持过滤和排序；不支持别名和按父对象的 limit/offset，切片会抛出错误）
 users = await User.objects.prefetch_related(
-    published_posts=Post.objects.filter(Post.is_published == True)
-                               .order_by("-created_at")
-                               .limit(5)
+    posts=Post.objects.filter(Post.is_published == True)
+                      .order_by("-created_at")
 ).all()
 
 # 混合使用 - 支持字符串和 QuerySet 配置
 users = await User.objects.prefetch_related(
     "profile",  # 简单预取
-    recent_posts=Post.objects.filter(
+    posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by("-created_at")
 ).all()
 
 # QueryExecutor 处理预取：
-# 1. 并发执行所有预取查询
+# 1. 为每个预取关系执行一条独立查询
 # 2. 按外键关系分组结果
-# 3. 将结果关联到主实例
+# 3. 将结果关联到主实例；此后关系属性是实体对象列表，而不再是代理
 
 # RelatedCollection 延迟加载
 user = await User.objects.first()
 # user.posts 返回 RelatedCollection 代理
-# await user.posts.fetch() 实际加载数据
+# await user.posts.fetch() 或 await user.load_relation("posts") 实际加载数据
 ```
 
 ### 4. 多对多关系
@@ -180,9 +180,9 @@ SQLObjects 在两个协作层面统一级联行为（`sqlobjects/cascade.py`）�
 **统一集成**: relationship() 函数返回 Related 容器，ModelProcessor 提取描述符
 **延迟加载**: RelatedObject 和 RelatedCollection 提供透明的延迟加载和缓存
 **灵活预取**: prefetch_related 支持字符串和自定义 QuerySet 的混合使用
-**并发优化**: QueryExecutor 并发执行多个预取查询，提高性能
+**批量加载**: QueryExecutor 对整个结果集的每个预取关系只发出一条额外查询，避免 N+1
 **自动关联**: 根据外键关系自动分组和关联预取结果
-**容错处理**: 预取失败时返回空列表，不影响主查询
+**显式报错**: 无效的关系路径与预取执行错误会直接抛出，而不是静默返回空列表
 
 ### 与其他模块的集成
 
@@ -248,8 +248,12 @@ tags: Related[list[Tag]] = relationship("Tag", secondary="post_tags", back_popul
 
 ```python
 # 关系访问
-instance.relation_name  # 获取关系代理（RelatedObject 或 RelatedCollection）
-await instance.relation_name.fetch()  # 获取关联数据
+instance.relation_name  # 未加载时为关系代理（RelatedObject 或 RelatedCollection）
+await instance.relation_name.fetch()  # 通过代理获取关联数据
+await instance.load_relation("relation_name")  # 统一入口：代理则查询，已加载则直接返回
+
+# 经 select_related() / prefetch_related() 预加载后，关系属性直接是实体对象
+# 或实体对象列表，不再是代理，不能再调用 .fetch()；请使用 load_relation()
 
 # 集合操作
 await instance.relation_name.count()  # 计数关联对象
@@ -329,13 +333,13 @@ users = await User.objects.prefetch_related(
     # 简单预取
     "profile",
   
-    # 自定义预取查询
-    published_posts=Post.objects.filter(
+    # 自定义预取查询（key 为已声明的关系名，不支持 limit/offset）
+    posts=Post.objects.filter(
         Post.is_published == True
-    ).select_related("category").order_by("-created_at").limit(5),
+    ).select_related("category").order_by("-created_at"),
   
     # 嵌套预取
-    recent_comments=Comment.objects.filter(
+    comments=Comment.objects.filter(
         Comment.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
     ).select_related("post").order_by("-created_at")
 ).all()
@@ -371,7 +375,7 @@ await UserRole.objects.create(
 # 查询多对多关系
 users_with_roles = await User.objects.prefetch_related("roles").all()
 for user in users_with_roles:
-    roles = await user.roles.fetch()
+    roles = await user.load_relation("roles")
     print(f"{user.name}: {[role.name for role in roles]}")
 
 # 复杂关系查询
@@ -384,7 +388,7 @@ admin_users = await User.objects.filter(
 active_users = await User.objects.filter(
     User.posts__created_at >= datetime.now(timezone.utc) - timedelta(days=30)
 ).prefetch_related(
-    recent_posts=Post.objects.filter(
+    posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by("-created_at")
 ).distinct().all()

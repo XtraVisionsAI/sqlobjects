@@ -74,29 +74,30 @@ QuerySet-integrated prefetch_related with support for custom QuerySet configurat
 users = await User.objects.prefetch_related("posts").all()
 
 # Advanced prefetch configuration - passing custom QuerySet
+# The keyword is the declared relationship name; the QuerySet may filter and
+# order but must not be sliced (limit/offset are rejected)
 users = await User.objects.prefetch_related(
-    published_posts=Post.objects.filter(Post.is_published == True)
-                               .order_by("-created_at")
-                               .limit(5)
+    posts=Post.objects.filter(Post.is_published == True)
+                      .order_by("-created_at")
 ).all()
 
 # Hybrid usage - supports both strings and QuerySet configurations
 users = await User.objects.prefetch_related(
     "profile",  # Simple prefetch
-    recent_posts=Post.objects.filter(
+    posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by("-created_at")
 ).all()
 
 # QueryExecutor handles prefetch:
-# 1. Concurrently executes all prefetch queries
+# 1. Executes one query per prefetched relationship
 # 2. Groups results by foreign key relationships
-# 3. Associates results with main instances
+# 3. Associates results with main instances (the attribute becomes a list)
 
 # RelatedCollection lazy loading
 user = await User.objects.first()
 # user.posts returns RelatedCollection proxy
-# await user.posts.fetch() actually loads the data
+# await user.load_relation("posts") actually loads the data
 ```
 
 ### 4. Many-to-Many Relationships
@@ -196,9 +197,9 @@ otherwise a direct `_delete_internal()` runs. `cascade=False` always skips casca
 **Unified Integration**: relationship() function returns Related container, ModelProcessor extracts descriptor
 **Lazy Loading**: RelatedObject and RelatedCollection provide transparent lazy loading and caching
 **Flexible Prefetch**: prefetch_related supports hybrid usage of strings and custom QuerySets
-**Concurrent Optimization**: QueryExecutor concurrently executes multiple prefetch queries for improved performance
+**Batched Loading**: QueryExecutor issues one additional query per prefetched relationship for the whole result set, avoiding N+1 queries
 **Automatic Association**: Automatically groups and associates prefetch results based on foreign key relationships
-**Error Tolerance**: Returns empty lists when prefetch fails, doesn't affect main query
+**Explicit Errors**: Invalid relationship paths and prefetch execution errors raise instead of silently returning empty lists
 
 ### Integration with Other Modules
 
@@ -265,7 +266,10 @@ tags: Related[list[Tag]] = relationship("Tag", secondary="post_tags", back_popul
 ```python
 # Relationship access
 instance.relation_name  # Get relationship proxy (RelatedObject or RelatedCollection)
-await instance.relation_name.fetch()  # Fetch related data
+await instance.relation_name.fetch()  # Fetch related data (lazy proxy only)
+await instance.load_relation("relation_name")  # Recommended: works before and after eager loading
+# After select_related/prefetch_related the attribute is the entity object or
+# list itself, not a proxy, so .fetch() is unavailable there.
 
 # Collection operations
 await instance.relation_name.count()  # Count related objects
@@ -345,13 +349,13 @@ users = await User.objects.prefetch_related(
     # Simple prefetch
     "profile",
   
-    # Custom prefetch query
-    published_posts=Post.objects.filter(
+    # Custom prefetch query (key = declared relationship name, no slicing)
+    posts=Post.objects.filter(
         Post.is_published == True
-    ).select_related("category").order_by("-created_at").limit(5),
+    ).select_related("category").order_by("-created_at"),
   
     # Nested prefetch
-    recent_comments=Comment.objects.filter(
+    comments=Comment.objects.filter(
         Comment.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
     ).select_related("post").order_by("-created_at")
 ).all()
@@ -387,7 +391,7 @@ await UserRole.objects.create(
 # Query many-to-many relationships
 users_with_roles = await User.objects.prefetch_related("roles").all()
 for user in users_with_roles:
-    roles = await user.roles.fetch()
+    roles = await user.load_relation("roles")  # Prefetched list, no query
     print(f"{user.name}: {[role.name for role in roles]}")
 
 # Complex relationship queries
@@ -400,7 +404,7 @@ admin_users = await User.objects.filter(
 active_users = await User.objects.filter(
     User.posts__created_at >= datetime.now(timezone.utc) - timedelta(days=30)
 ).prefetch_related(
-    recent_posts=Post.objects.filter(
+    posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by("-created_at")
 ).distinct().all()

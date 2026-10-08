@@ -66,7 +66,7 @@ for post in posts:
 # prefetch_related for reverse relationships (fast - 2 queries)
 users = await User.objects.prefetch_related("posts").all()
 for user in users:
-    posts = await user.posts.fetch()  # No N+1 queries
+    posts = await user.load_relation("posts")  # Returns the prefetched list, no query
 ```
 
 ### Query Optimization
@@ -106,7 +106,7 @@ async with ctx_session() as session:
     # All operations share the same connection
     users = await User.objects.using(session).all()
     for user in users:
-        await user.posts.using(session).all()
+        await user.load_relation("posts")  # Uses the loading session
 ```
 
 ## Best Practices
@@ -297,7 +297,7 @@ print(f"Query took {duration:.3f} seconds")
 start = time.time()
 posts = await Post.objects.all()
 for post in posts[:10]:
-    author = await post.author.fetch()
+    author = await post.load_relation("author")
 time_without = time.time() - start
 
 # With select_related

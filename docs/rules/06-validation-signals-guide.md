@@ -233,7 +233,9 @@ async def before_save(self, context: SignalContext):
     self.updated_at = datetime.now(timezone.utc)  # Fast
 
 async def after_save(self, context: SignalContext):
-    asyncio.create_task(self.process_large_file())  # Background task
+    # after_* hooks run before the transaction commits; defer external side
+    # effects until the commit succeeds
+    await context.on_commit(self.process_large_file)
 ```
 
 ## Signal Execution Flow
@@ -323,22 +325,23 @@ class User(ObjectModel):
 ### Signal Performance
 
 ```python
-# Group related operations
+# ORM writes that belong to the same transaction: await them sequentially.
+# Hooks run inside the operation's session, which belongs to the current task;
+# asyncio.create_task()/gather() would run them in other tasks and raise
+# TransactionError.
 async def after_create(self, context: SignalContext):
-    await asyncio.gather(
-        self.send_welcome_email(),
-        self.create_default_preferences(),
-        self.log_user_creation()
-    )
+    await self.create_default_preferences()
+    await self.log_user_creation()
 
-# Background tasks for non-critical operations
+# External side effects: defer until the transaction has committed.
+# after_* hooks fire before commit, so a rollback would otherwise leave
+# emails sent or indexes updated for data that never persisted.
 async def after_save(self, context: SignalContext):
-    # Critical operations (blocking)
     self.updated_at = datetime.now(timezone.utc)
-    
-    # Non-critical operations (background)
+
     if not context.is_bulk:
-        asyncio.create_task(self.update_search_index())
+        await context.on_commit(self.update_search_index)
+        await context.on_commit(self.send_welcome_email)
 ```
 
 ### Validation Performance

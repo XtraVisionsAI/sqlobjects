@@ -147,7 +147,7 @@ from sqlobjects.session import ctx_session, ctx_sessions
 # 单数据库事务
 async with ctx_session() as session:
     user = await User.objects.using(session).create(username="bob")
-    posts = await user.posts.using(session).all()
+    posts = await Post.objects.using(session).filter(author_id=user.id).all()
     # 成功时自动提交，出错时自动回滚
 
 # 多数据库事务
@@ -271,10 +271,12 @@ avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).subquery(query_type
 older_users = await User.objects.filter(User.age > avg_age).all()
 
 # 手动连接和锁定
-posts = await Post.objects.join(
-    User,  # 使用 Model 类（推荐）
-    Post.author_id == User.id
-).select_for_update(nowait=True).all()
+# 在 PostgreSQL/MySQL 上，行锁需要显式事务
+async with ctx_session():
+    posts = await Post.objects.join(
+        User,  # 使用 Model 类（推荐）
+        Post.author_id == User.id
+    ).select_for_update(nowait=True).all()
 
 # 需要时使用原生 SQL
 users = await User.objects.raw(

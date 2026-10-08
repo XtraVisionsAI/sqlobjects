@@ -119,7 +119,7 @@ class Product(ObjectModel):
 
 - **_DatabaseManager**: 内部全局数据库管理器（`database/manager.py`），管理多个数据库实例。不直接访问；公开入口是模块级函数 `init_db`/`init_dbs`/`close_db`/`close_dbs`。
 - **Database**: 数据库实例，提供事件处理和连接管理
-- **AsyncSession**: 智能会话类，提供连接管理和事务控制
+- **AsyncSession**: 智能会话类，提供连接管理和事务控制。打开的会话归属于打开它的 asyncio task，从父 task 继承或显式传入另一个仍在运行的 task 时，ORM 操作会抛出 `TransactionError`；每个并发 worker 需自己打开 `ctx_session()`。详见 [持久化与查询契约](06-orm-correctness.md)。
 - **_SessionContextManager**: 内部全局会话上下文管理器（`session.py`），基于 ContextVar 的上下文级会话管理。不直接访问；公开入口是模块级函数 `ctx_session`/`get_session`/`has_session`。
 
 **模型层**
@@ -156,7 +156,7 @@ class Product(ObjectModel):
 
 **横切子系统**
 
-- **SQL 日志** (`sql_logging.py`): `ObjectLogger` 将日志记录的调用者字段重写为真实的用户代码调用位置；安装为 `sqlobjects.sql` 日志器，供查询执行器使用。参见文档 05。
+- **SQL 日志** (`sql_logging.py`): 数据库 engine 监听器记录驱动层的执行与失败；`ObjectLogger` 跨 SQLAlchemy 的异步 greenlet 桥，将日志记录的调用者字段重写为真实的用户代码调用位置。安装为 `sqlobjects.sql` 日志器。参见文档 05。
 - **级联** (`cascade.py`): 统一的级联策略，协调数据库层的 `ondelete`/`onupdate` 与 ORM 层的 `cascade`，包含依赖解析与级联执行。参见文档 04。
 
 ### 设计理念
@@ -210,6 +210,9 @@ async with ctx_sessions(*db_names) as sessions:
 # 推荐使用上下文管理器而非直接获取会话
 # 模块级 get_session()（底层由内部 _SessionContextManager 支撑）主要用于内部实现
 ```
+
+会话归属于打开它的 asyncio task；并发子任务不能复用父 task 的会话，必须各自打开
+`ctx_session()`。任务归属、提交回调与事务失败规则见 [持久化与查询契约](06-orm-correctness.md)。
 
 ### 模型定义
 

@@ -43,7 +43,16 @@ author = await post.author.fetch()  # 通过 RelatedObject 代理延迟加载
 # 反向关系
 user = await User.objects.get(User.id == 1)
 user_posts = await user.posts.fetch()  # 通过 RelatedCollection 代理获取
+
+# 统一写法：无论是否已预加载都可用
+author = await post.load_relation("author")
+user_posts = await user.load_relation("posts")
 ```
+
+未预加载时，关系属性是代理对象，可以 `await proxy.fetch()`。经 `prefetch_related()`
+预加载后，关系属性直接是实体对象列表（单值关系为实体对象），不再是代理；经
+`select_related()` 加载后，属性是实体对象，不能再对它调用 `.fetch()`。因此推荐统一使用
+`await obj.load_relation("name")`：它对代理执行查询，对已加载的值直接返回。
 
 ## 关系类型
 
@@ -167,7 +176,8 @@ rows = await user.posts.fetch()  # 每次执行新查询，不缓存列表
 
 动态关系支持普通异步 QuerySet 的筛选、排序、投影、分页、计数和流式读取。
 关系的 `order_by` 作为初始排序，查询上的 `order_by()` 可以覆盖它。
-`fetch()` 和 `load_relation()` 返回新的列表，关系属性始终保留为查询代理。
+对于 `lazy="dynamic"` 的关系，`fetch()` 和 `load_relation()` 返回新的列表，关系属性始终
+保留为查询代理，不会缓存结果（其他加载策略下，预加载后的属性是实体对象列表）。
 请显式使用 `await relation.count()` 和 `await relation.exists()`；同步迭代、
 `len()`、`bool()` 会抛出 `TypeError`。
 
@@ -215,12 +225,12 @@ posts = await Post.objects.select_related("author").all()
 # 对反向外键和多对多关系使用 prefetch_related
 users = await User.objects.prefetch_related("posts").all()
 for user in users:
-    posts = await user.posts.fetch()  # 无额外查询
+    posts = await user.load_relation("posts")  # 无额外查询
 
 # 多对多关系
 posts = await Post.objects.prefetch_related("tags").all()
 for post in posts:
-    tags = await post.tags.fetch()  # 无额外查询
+    tags = await post.load_relation("tags")  # 无额外查询
 
 # 多个预取
 users = await User.objects.prefetch_related("posts", "groups", "permissions").all()
@@ -231,37 +241,26 @@ users = await User.objects.prefetch_related("posts").all()
 
 ### 高级预取配置
 
+配置项的 key 必须是模型上已声明的关系名。自定义查询集支持过滤和排序；不支持
+按父对象的 LIMIT/OFFSET，也不支持任意输出别名。带切片的查询集会抛出错误，
+而不是截断整个预取结果。
+
 ```python
 # 带过滤和排序的高级预取
 users = await User.objects.prefetch_related(
-    published_posts=Post.objects.filter(Post.is_published == True)
-                               .order_by('-created_at')
-                               .limit(5)
+    posts=Post.objects.filter(Post.is_published == True).order_by('-created_at')
 ).all()
 
-# 多个高级配置
-users = await User.objects.prefetch_related(
-    recent_posts=Post.objects.filter(
-        Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
-    ).order_by('-created_at'),
-    popular_posts=Post.objects.filter(Post.view_count > 1000)
-                             .order_by('-view_count')
-                             .limit(3)
-).all()
+for user in users:
+    published_posts = await user.load_relation("posts")  # 已缓存的过滤列表
 
 # 混合简单和高级预取
 users = await User.objects.prefetch_related(
     'profile',  # 简单预取
-    recent_comments=Comment.objects.filter(
-        Comment.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
+    posts=Post.objects.filter(
+        Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
     ).order_by('-created_at')
 ).all()
-
-# 访问预取数据
-for user in users:
-    # 高级预取结果可直接访问
-    recent_posts = user.recent_posts  # 过滤/排序的帖子列表
-    popular_posts = user.popular_posts  # 热门帖子列表
 ```
 
 ### 组合加载策略
@@ -272,8 +271,8 @@ posts = await Post.objects.select_related("author").prefetch_related("tags", "co
 
 for post in posts:
     author = post.author  # 来自 JOIN（select_related）
-    tags = await post.tags.all()  # 来自预取（prefetch_related）
-    comments = await post.comments.all()  # 来自预取
+    tags = await post.load_relation("tags")  # 来自预取（prefetch_related）
+    comments = await post.load_relation("comments")  # 来自预取
 ```
 
 ## 高级关系查询

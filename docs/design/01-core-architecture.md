@@ -34,7 +34,9 @@ def on_connect(conn, record):
 ### 2. ContextVar-Based Session Context
 
 AsyncSession class provides intelligent connection management, and an internal session context manager (`_SessionContextManager`) provides context-level session
-management based on `contextvars.ContextVar`:
+management based on `contextvars.ContextVar`. An open session belongs to the asyncio task that opened it; a child task that
+inherits or is passed the session raises `TransactionError` and must open its own `ctx_session()`
+(see [Async task ownership](06-orm-correctness.md#async-task-ownership-and-cleanup)):
 
 ```python
 # Automatic session management - using default database

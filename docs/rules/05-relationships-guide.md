@@ -58,7 +58,7 @@ for post in posts:
 # prefetch_related (separate query) - for reverse relationships
 users = await User.objects.prefetch_related("posts").all()
 for user in users:
-    posts = await user.posts.fetch()  # No N+1 queries
+    posts = await user.load_relation("posts")  # Prefetched list, no query
 
 # Combined loading
 posts = await Post.objects.select_related("author").prefetch_related("comments").all()
@@ -162,7 +162,9 @@ users = await User.objects.prefetch_related(
 ### ❌ Don't
 
 - **Don't use select_related** for reverse relationships (use prefetch_related)
-- **Don't forget to fetch()** lazy-loaded relationships
+- **Don't forget to load** lazy relationships with `load_relation()`; after
+  `select_related`/`prefetch_related` the attribute is already an entity or list and
+  has no `.fetch()`
 - **Don't cause N+1 queries** by not using loading strategies
 - **Don't mix loading strategies** incorrectly
 
@@ -200,7 +202,7 @@ class Book(ObjectModel):
 
 # Usage
 author = await Author.objects.prefetch_related("books").get(Author.id == 1)
-books = await author.books.fetch()
+books = await author.load_relation("books")  # Prefetched list, no extra query
 ```
 
 ### One-to-One
@@ -233,7 +235,7 @@ class Course(ObjectModel):
 
 # Usage
 student = await Student.objects.prefetch_related("courses").get(Student.id == 1)
-courses = await student.courses.fetch()
+courses = await student.load_relation("courses")  # Prefetched list, no extra query
 ```
 
 ### Self-Referential
@@ -369,11 +371,11 @@ posts = await Post.objects.select_related("author").defer(
     "author__bio"        # Heavy field from related model
 ).all()
 
-# Filter prefetched relationships
+# Filter prefetched relationships (slicing the prefetch queryset is rejected)
 users = await User.objects.prefetch_related(
     posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
-    ).order_by('-created_at').limit(10)
+    ).order_by('-created_at')
 ).all()
 ```
 
@@ -416,9 +418,10 @@ users = await User.objects.prefetch_related("posts").all()
 
 **Solution**:
 ```python
-# Use fetch() for lazy-loaded relationships
+# Use load_relation() for lazy relationships (works whether or not the
+# relationship was eagerly loaded; .fetch() exists only on the lazy proxy)
 post = await Post.objects.get(Post.id == 1)
-author = await post.author.fetch()  # Explicit load
+author = await post.load_relation("author")  # Explicit load
 
 # Or use select_related
 post = await Post.objects.select_related("author").get(Post.id == 1)
