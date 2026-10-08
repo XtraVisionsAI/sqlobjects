@@ -46,7 +46,9 @@ session participate in its transaction.
 | `SAVEPOINT` | Isolate each batch with a savepoint inside the caller's transaction, or inside one owned transaction. |
 
 An SQL error outside a savepoint makes an explicit transaction unusable until
-rollback. Catching the exception alone does not restore it. For recoverable errors:
+rollback. Catching the exception alone does not restore it. Readonly sessions hold
+no transaction and release their connection after each statement, so a failed
+query there does not affect later queries. For recoverable errors:
 
 ```python
 async with ctx_session() as session:
@@ -57,6 +59,11 @@ async with ctx_session() as session:
         pass
     await User.objects.create(username="next")
 ```
+
+`begin_nested()` on an implicit (auto-commit) session opens a transaction only
+for its savepoints. When the outermost savepoint is released or rolled back, that
+transaction commits and the connection is returned, so work released inside the
+savepoint is persisted exactly as individual auto-committed statements are.
 
 `COLLECT` and `IGNORE` isolate each attempted record with a savepoint. `COLLECT`
 reports input indexes across batches. Independent connections can block on locks
@@ -148,7 +155,11 @@ for context fields and direct instance-save behavior.
 ## Bulk results
 
 UPSERT processes every input row. When RETURNING can be matched by unique conflict
-keys, results are restored to input order. Other cases execute per row. Returned
+keys, results are restored to input order. Returned key values may be normalized
+by the database (string to integer, Decimal scale, timezone, case-insensitive
+collation); rows that do not equal their raw input key are attributed through a
+database lookup and accepted only when they belong to the statement's own RETURNING
+set, so counts and objects never drop stored rows. Other cases execute per row. Returned
 objects contain stored database values; missing UPDATE targets do not produce
 fabricated objects. Backends without RETURNING fetch inserted or updated records
 using their keys. This costs additional queries.
@@ -202,8 +213,12 @@ The [query guide](../features/03-querying-data.md#aggregating-composed-queries)
 documents the supported combinations and boundaries.
 
 `iterator()` streams the original query in bounded partitions and yields models,
-preserving ordering, LIMIT, OFFSET and deferred fields. If iteration can stop
-early, close it explicitly so the cursor and owned connection are released:
+preserving ordering, LIMIT, OFFSET and deferred fields. The session an iterator
+owns is released without the task-ownership check, so an iterator abandoned by
+`break` still frees its cursor and connection when asyncio finalizes the generator
+from another task; caller-owned sessions keep the `close()` ownership contract.
+Finalization timing is up to the garbage collector; if iteration can stop early,
+close it explicitly to release resources immediately:
 
 ```python
 from contextlib import aclosing
@@ -243,7 +258,10 @@ registry; unrelated registries can safely contain models with the same names.
 
 Dynamic `fetch()` and `load_relation()` issue new queries without replacing the
 proxy with cached rows. Synchronous iteration, truthiness and length are rejected
-in favor of async iteration, `exists()` and `count()`. The parent must have complete
+in favor of async iteration, `exists()` and `count()`. Only public QuerySet
+methods are proxied; other names raise `AttributeError`, so `hasattr()`,
+`copy`/`pickle` protocol lookups and `to_dict(include_relations=True)` work on
+unsaved parents, which skip dynamic collections like other unloaded proxies. The parent must have complete
 primary key values, and deferred reference fields must be loaded explicitly.
 Null reference values yield an empty query. Eager-loading paths through dynamic
 relationships, scalar dynamic relationships and custom join conditions are
@@ -344,9 +362,14 @@ A full unique index only replaces a plain index with the same expressions and
 options; partial indexes never replace full indexes.
 
 Conditional DDL indexes are preserved without evaluating callbacks during model
-registration. Custom expressions without a generic compiler are also retained.
+registration. Custom expressions without a generic compiler are also retained, and
+dialect predicates whose literals cannot be rendered (for example JSON values)
+are treated as distinct rather than failing model definition.
 Equivalent unconditional definitions still deduplicate deterministically, with
-explicit names preferred. Previously this process compared sorted column names,
+explicit names preferred: when a column declares both `index=True` and an
+explicitly named `Index`, the explicit name is kept. Previously the generated
+`idx_<table>_<column>` name won, so existing databases need the migration note
+in the migrations guide. This process previously compared sorted column names,
 which could silently remove functional uniqueness enforcement.
 
 This follows the expression and ordering semantics documented by

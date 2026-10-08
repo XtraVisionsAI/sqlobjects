@@ -633,13 +633,19 @@ class ModelProcessor(type):
             # Include literal values when comparing SQLAlchemy predicates.
             # dialect_kwargs only holds explicitly passed args, not dialect defaults.
             kwargs = getattr(idx, "dialect_kwargs", None) or {}
-            return tuple(
-                sorted(
-                    (k, str(v.compile(compile_kwargs={"literal_binds": True})) if hasattr(v, "compile") else str(v))
-                    for k, v in kwargs.items()
-                    if v is not None
-                )
-            )
+
+            def render(value):
+                if not hasattr(value, "compile"):
+                    return str(value)
+                try:
+                    return str(value.compile(compile_kwargs={"literal_binds": True}))
+                except CompileError:
+                    # Literal values of some types (JSON, custom types) have no
+                    # generic renderer. Treat the predicate as unique rather than
+                    # failing model definition or proving a false equivalence.
+                    return f"<unrenderable {type(value).__name__} {id(value):#x}>"
+
+            return tuple(sorted((k, render(v)) for k, v in kwargs.items() if v is not None))
 
         def is_partial(idx):
             return any(k.endswith("_where") and value is not None for k, value in idx.dialect_kwargs.items())

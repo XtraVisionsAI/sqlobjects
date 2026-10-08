@@ -55,6 +55,56 @@ class UpsertHandler:
             update_fields=update_fields,
         )
 
+    async def _match_returned_rows(
+        self,
+        table: sa.Table,
+        values: list[dict[str, Any]],
+        match_fields: list[str],
+        returned: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Restore input order for multi-row RETURNING without trusting input values.
+
+        The database may normalize conflict-key values (string to integer,
+        Decimal scale, timezone, case-insensitive collations, UUID objects), so a
+        returned row does not always equal the raw input key. Rows that cannot be
+        matched in Python are resolved by asking the database, and only accepted
+        when they are among the rows this statement actually returned.
+        """
+        by_key: dict[tuple, dict[str, Any]] = {}
+        for row in returned:
+            by_key.setdefault(tuple(row[f] for f in match_fields), row)
+        pk_columns = [col.name for col in table.primary_key]
+
+        def identity(row: dict[str, Any]) -> tuple:
+            return tuple(row[c] for c in pk_columns) if pk_columns else tuple(sorted(row.items()))
+
+        ordered: list[dict[str, Any] | None] = []
+        unmatched: list[int] = []
+        for index, value in enumerate(values):
+            row = by_key.pop(tuple(value[f] for f in match_fields), None)
+            ordered.append(row)
+            if row is None:
+                unmatched.append(index)
+
+        # Every returned row was matched, or nothing is left to attribute.
+        if unmatched and by_key:
+            remaining = {identity(row) for row in by_key.values()}
+            for index in unmatched:
+                if not remaining:
+                    break
+                value = values[index]
+                stored = await self.session.execute(
+                    sa.select(table).where(*(table.c[f] == value[f] for f in match_fields))
+                )
+                row = stored.one_or_none()
+                if row is None:
+                    continue
+                data = dict(row._mapping)
+                if identity(data) in remaining:
+                    remaining.discard(identity(data))
+                    ordered[index] = data
+        return [row for row in ordered if row is not None]
+
     async def execute_upsert_with_returning(
         self,
         table: sa.Table,
@@ -79,8 +129,7 @@ class UpsertHandler:
             stmt = self.get_upsert_statement(table, values, conflict_resolution, match_fields)
             stmt = stmt.returning(*table.columns)  # noqa
             result = await self.session.execute(stmt)
-            rows = {tuple(row._mapping[f] for f in match_fields): dict(row._mapping) for row in result.fetchall()}
-            return [rows[key] for value in values if (key := tuple(value[f] for f in match_fields)) in rows]
+            return await self._match_returned_rows(table, values, match_fields, [dict(r._mapping) for r in result])
 
         rows = []
         for value in values:

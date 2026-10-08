@@ -434,7 +434,17 @@ class RelatedQuerySet(BaseRelated[list[T]]):
         return await self._get_queryset().all()
 
     def __getattr__(self, name: str) -> Any:
-        """Proxy all QuerySet methods."""
+        """Proxy public QuerySet methods.
+
+        Unknown and private names raise AttributeError so ``hasattr()``,
+        ``getattr(obj, name, default)``, ``copy``/``pickle`` protocol lookups and
+        ``to_dict(safe_access=True)`` keep working; only real QuerySet methods
+        build a parent-scoped query, which requires a saved parent.
+        """
+        from ..queryset import QuerySet
+
+        if name.startswith("_") or not hasattr(QuerySet, name):
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
         return getattr(self._get_queryset(), name)
 
     def __getitem__(self, key) -> "QuerySet[T]":

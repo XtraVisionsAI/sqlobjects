@@ -114,6 +114,14 @@ Long names and generated-name collisions receive a stable hash suffix; explicit
 names and names already assigned by SQLAlchemy conventions remain unchanged.
 See [automatic schema names](02-model-definition.md#automatic-schema-names).
 
+Short generated names for ordinary columns, composite uniques, foreign keys and
+CHECK constraints are unchanged. Two cases do change: when a column declares both
+`index=True` (or `unique=True`) and an explicitly named `Index` on the same
+expression, deduplication now keeps the explicit name instead of the generated
+`idx_<table>_<column>`; and when several generated names collided (for example two
+unnamed CHECKs on the same column), every member of the collision receives a hash
+suffix. Alembic reports the first case as a drop/create of the index.
+
 Existing databases may have older full names, server-truncated names or indexes
 shortened by SQLAlchemy. Inspect the deployment database before generating a
 revision. To retain an existing object, explicitly name it with its physical name

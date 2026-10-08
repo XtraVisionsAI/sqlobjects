@@ -2,7 +2,7 @@ import hashlib
 import re
 
 
-__all__ = ["to_snake_case", "to_camel_case"]
+__all__ = ["to_snake_case", "to_camel_case", "schema_name"]
 
 
 def schema_name(name: str, *, disambiguator: str | None = None) -> str:

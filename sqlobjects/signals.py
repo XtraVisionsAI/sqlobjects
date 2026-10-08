@@ -243,6 +243,18 @@ def emit_signals(operation: Operation, is_bulk: bool = False):
                 async with session.transaction() as transaction:
                     arguments.arguments[next(iter(signature.parameters))] = self_or_cls.using(transaction)
                     return await invoke(arguments, transaction)
+            if (
+                not is_bulk
+                and "session" in signature.parameters
+                and getattr(session, "auto_commit", False)
+                and not getattr(session, "readonly", True)
+            ):
+                # Instance writes on an implicit session own one transaction that
+                # spans the hooks and the SQL, so context.on_commit() runs after
+                # the row is actually committed rather than before it is written.
+                async with session.transaction() as transaction:
+                    arguments.arguments["session"] = transaction
+                    return await invoke(arguments, transaction)
             return await invoke(arguments, session)
 
         async def invoke(arguments, session):

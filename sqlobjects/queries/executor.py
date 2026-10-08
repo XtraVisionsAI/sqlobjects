@@ -149,7 +149,9 @@ class QueryExecutor:
                     await result.close()
             finally:
                 if owned:
-                    await session.close()
+                    # Generator finalization may run in another task; the owned
+                    # session is internal, so release it without the owner check.
+                    await session._dispose()
 
     async def explain(self, query, analyze: bool = False, verbose: bool = False) -> str:
         """Execute EXPLAIN for SQLAlchemy query object.

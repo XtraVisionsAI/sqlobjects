@@ -587,6 +587,7 @@ class DataConversionMixin(FieldCacheMixin):
             ManyToManyRelation,
             OneToManyRelation,
             RelatedObject,
+            RelatedQuerySet,
         )
 
         all_fields = set(self._get_field_names())
@@ -622,7 +623,7 @@ class DataConversionMixin(FieldCacheMixin):
                 try:
                     rel_value = getattr(self, rel_name)
                     # Skip proxy objects if not loaded
-                    if isinstance(rel_value, (RelatedObject, OneToManyRelation, ManyToManyRelation)):
+                    if isinstance(rel_value, (RelatedObject, OneToManyRelation, ManyToManyRelation, RelatedQuerySet)):
                         if safe_access:
                             continue  # Skip unloaded relationship proxies
                     # Handle loaded relationship data

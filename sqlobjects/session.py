@@ -296,6 +296,18 @@ class AsyncSession:
         if self._closed:
             return
         self._check_database_operation()
+        await self._dispose()
+
+    async def _dispose(self) -> None:
+        """Release resources without the task-ownership check.
+
+        For sessions owned by internal machinery only: asyncio finalizes an
+        abandoned async generator (an ``iterator()`` left by ``break``) from a
+        different task, and refusing to clean up there would leak the connection
+        and its transaction. Caller-owned sessions keep the ``close()`` contract.
+        """
+        if self._closed:
+            return
         try:
             await self._release_connection()
         finally:
@@ -348,6 +360,22 @@ class AsyncSession:
         if savepoint in self._savepoints:
             del self._savepoints[self._savepoints.index(savepoint) :]
 
+    async def _complete_implicit_transaction(self) -> None:
+        """Commit the transaction an implicit session opened only for savepoints.
+
+        Statements on an auto_commit session commit individually, so once the
+        outermost savepoint has been released or rolled back nothing else is
+        pending and the owned transaction must end; otherwise ``close()`` would
+        roll back the released savepoint's work.
+        """
+        if not self.auto_commit or self._savepoints or not self._trans:
+            return
+        try:
+            await self.commit()
+        finally:
+            if self._conn and not self._conn.in_nested_transaction():
+                await self._release_connection()
+
     async def _ensure_connection(self):
         """Ensure connection is available with health check."""
         self._check_database_operation()
@@ -361,9 +389,13 @@ class AsyncSession:
 
     async def _handle_exception(self, exc: Exception):
         """Handle exceptions with unified error processing."""
-        if self.auto_commit and not (self._conn and self._conn.in_nested_transaction()):
+        nested = bool(self._conn and self._conn.in_nested_transaction())
+        if self.auto_commit and not nested:
             await self.rollback()
-        elif not (self._conn and self._conn.in_nested_transaction()):
+        elif not self.readonly and not nested:
+            # Readonly sessions never hold a transaction and release their
+            # connection after every statement, so a failed query must not
+            # make the session unusable.
             self._rollback_only = True
 
         # Log detailed error for debugging when echo is enabled
@@ -442,6 +474,7 @@ class _SessionSavepoint:
             self._session._rollback_only = True
             raise
         self._session._finish_savepoint(self, rolled_back=False)
+        await self._session._complete_implicit_transaction()
 
     async def rollback(self) -> None:
         self._check_scope()
@@ -454,6 +487,7 @@ class _SessionSavepoint:
             raise
         finally:
             self._session._finish_savepoint(self, rolled_back=True)
+        await self._session._complete_implicit_transaction()
 
     async def close(self) -> None:
         await self.rollback()
