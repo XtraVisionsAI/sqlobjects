@@ -1,7 +1,23 @@
+import hashlib
 import re
 
 
 __all__ = ["to_snake_case", "to_camel_case"]
+
+
+def schema_name(name: str, *, disambiguator: str | None = None) -> str:
+    """Keep generated schema identifiers within PostgreSQL's 63-byte limit.
+
+    The same physical name is used on every supported backend and in migrations.
+    Hash the complete name so identifiers sharing a long prefix remain distinct.
+    """
+    encoded = name.encode("utf-8")
+    if len(encoded) <= 63 and disambiguator is None:
+        return name
+    identity = encoded if disambiguator is None else encoded + b"\0" + disambiguator.encode("utf-8")
+    digest = hashlib.sha256(identity).hexdigest()[:10]
+    prefix = encoded[:52].decode("utf-8", errors="ignore")
+    return f"{prefix}_{digest}"
 
 
 def to_snake_case(name: str) -> str:

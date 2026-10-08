@@ -93,6 +93,22 @@ SQLite and MySQL use their own integer autoincrement behavior. PostgreSQL Identi
 changes and ordinary server-default changes still participate in comparison.
 Generate and review revisions against your deployment dialect.
 
+## Changes to generated schema names
+
+SQLObjects now bounds its automatic constraint and index names to 63 UTF-8 bytes.
+Long names and generated-name collisions receive a stable hash suffix; explicit
+names and names already assigned by SQLAlchemy conventions remain unchanged.
+See [automatic schema names](02-model-definition.md#automatic-schema-names).
+
+Existing databases may have older full names, server-truncated names or indexes
+shortened by SQLAlchemy. Inspect the deployment database before generating a
+revision. To retain an existing object, explicitly name it with its physical name
+in the model configuration. To adopt the new name, write a rename or drop/create
+operation appropriate for the deployment dialect; SQLite constraint changes may
+need batch mode. Alembic can report index/unique-name changes as drop/create, and
+CHECK-name changes may not appear in autogenerate at all. Review the revision
+rather than treating an empty `check` result as proof that every name agrees.
+
 ## Migrate existing data with historical definitions
 
 The second revision demonstrates adding a required field to populated tables:

@@ -5,8 +5,8 @@ define the behavior of its model and QuerySet APIs. Regression coverage lives in
 `tests/integration/test_orm_contracts.py`, `test_commit_callbacks.py`,
 `test_query_logging_contracts.py`, `test_distinct_contracts.py`,
 `test_signal_contracts.py`, `test_database_events.py`,
-`test_dynamic_relationships.py` and `test_aggregate_contracts.py`. These run against
-SQLite, PostgreSQL and MySQL in CI.
+`test_dynamic_relationships.py`, `test_aggregate_contracts.py` and
+`test_schema_naming.py`. These run against SQLite, PostgreSQL and MySQL in CI.
 
 ## Persisted and partial objects
 
@@ -320,6 +320,30 @@ actual server-default changes. Alembic 1.16.5 and the lockfile version are both
 tested locally on SQLite; the lockfile version is also exercised on PostgreSQL
 and MySQL in CI.
 
+## Portable generated schema names
+
+SQLObjects bounds its generated CHECK, UNIQUE, foreign key and index names to
+63 UTF-8 bytes, retaining short names and adding a readable prefix plus a stable
+SHA-256 suffix for long names. This handles both composite keys and multibyte
+identifiers without relying on server truncation. Generated-name collisions use
+the constraint/index definition to select distinct names. Explicit names and
+names already assigned by SQLAlchemy naming conventions keep their existing rules.
+Field/helper indexes share the same naming path; explicit index names take
+precedence during deduplication. Partial-index comparisons include bound values.
+
+[SQLAlchemy's deterministic truncation](https://docs.sqlalchemy.org/en/20/core/constraints.html#truncation-of-long-names)
+informed this approach. SQLObjects bounds the metadata name itself using
+[PostgreSQL's byte limit](https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS),
+so the resulting physical name is shared across the supported backends.
+The tests exercise real DDL, reflection, constraint enforcement, drop/recreate and
+Alembic comparison, including Unicode names and long composite foreign keys.
+
+Existing long/colliding names need a reviewed migration or explicit names that
+pin the current database identifiers. CHECK changes are not fully covered by
+Alembic autogenerate. See the [migration guide](../features/09-migrations.md#changes-to-generated-schema-names).
+Table/column names and database-wide collisions between explicitly named objects
+remain the application's responsibility.
+
 ## Verification and remaining work
 
 CI runs the SQLite unit/integration suite, the cross-database contract suite and
@@ -332,9 +356,9 @@ Local verification on 2026-10-08 used Python 3.12, SQLAlchemy 2.0.44 and Alembic
 
 | Database | Scope | Result |
 | --- | --- | --- |
-| SQLite | Unit and integration suite | 716 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
-| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events, dynamic relationships, aggregation, CRUD, relationships, deferred fields, bulk results, cascades and signals | 353 passed. |
-| MySQL 8.4 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events and dynamic relationships and aggregation with aiomysql and its RSA authentication extra | 217 passed; one executemany RETURNING test skipped because this backend does not support it. |
+| SQLite | Unit and integration suite | 739 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
+| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events, dynamic relationships, aggregation, schema naming, CRUD, relationships, deferred fields, bulk results, cascades and signals | 359 passed. |
+| MySQL 8.4 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events and dynamic relationships, aggregation and schema naming with aiomysql and its RSA authentication extra | 223 passed; one executemany RETURNING test skipped because this backend does not support it. |
 
 The 10 migration integration tests also pass with Alembic 1.16.5 on SQLite.
 
@@ -344,7 +368,6 @@ The workflow definitions were checked locally; hosted CI results will
 be available after the changes are pushed.
 
 Further work from the ORM review includes aggregation over grouped queries,
-portable automatic constraint-name lengths, realistic performance benchmarks,
-batched data-migration tooling and broader driver/version coverage. Long composite
-constraint names currently need an explicit shorter name on PostgreSQL/MySQL.
-These are separate from the persistence and query corrections described here.
+realistic performance benchmarks, batched data-migration tooling and broader
+driver/version coverage. These are separate from the persistence and query
+corrections described here.

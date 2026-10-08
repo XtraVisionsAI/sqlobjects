@@ -100,6 +100,13 @@ class User(ObjectModel):
         ]
 ```
 
+Automatic constraint and SQLObjects index names are limited to 63 UTF-8 bytes,
+using a readable prefix and a stable hash when needed. Short, non-conflicting
+names remain unchanged. Explicit names and SQLAlchemy convention names retain
+control over their own naming rules. Partial-index identity includes bound values.
+When upgrading an existing schema with long or conflicting generated names, inspect
+the physical names and write a migration; pin names explicitly to preserve them.
+
 ### Named & Composite Foreign Keys
 
 For composite foreign keys, custom constraint names, or explicit referential

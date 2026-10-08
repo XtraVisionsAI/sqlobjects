@@ -1,14 +1,16 @@
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Union, cast
 
 from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, UniqueConstraint
 from sqlalchemy import MetaData as SqlAlchemyMetaData
+from sqlalchemy.sql.elements import conv
 
 from .fields import ColumnAttribute
 from .fields.relations import M2MTable, RelationshipDescriptor, RelationshipResolver
 from .fields.utils import get_column_from_field, is_field_definition
-from .utils.naming import to_snake_case
+from .utils.naming import schema_name, to_snake_case
 from .utils.pattern import pluralize
 
 
@@ -27,6 +29,23 @@ __all__ = [
 
 _FIELD_NAME_PATTERN = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b")
 _TEMP_INDEX_PREFIX = "__temp__idx_"
+
+
+def _assign_schema_names(generated: list[tuple[Any, str, str]], explicit_names: set[str]) -> None:
+    """Name generated objects without changing caller-supplied names."""
+    counts = Counter(schema_name(name) for _, name, _ in generated)
+    used = explicit_names | set(counts)
+    for item, full_name, signature in sorted(generated, key=lambda entry: (entry[1], entry[2])):
+        name = schema_name(full_name)
+        if counts[name] > 1 or name in explicit_names:
+            attempt = 0
+            while True:
+                name = schema_name(full_name, disambiguator=f"{signature}:{attempt}")
+                if name not in used:
+                    break
+                attempt += 1
+        item.name = conv(name)
+        used.add(name)
 
 
 @dataclass
@@ -452,11 +471,9 @@ class ModelProcessor(type):
 
                 # Collect indexes
                 if getattr(column, "unique", False) and not getattr(column, "primary_key", False):
-                    index_name = f"idx_{table_name}_{name}"
-                    indexes.append(Index(index_name, name, unique=True))
+                    indexes.append(index(None, name, unique=True))
                 elif getattr(column, "index", False) and not getattr(column, "primary_key", False):
-                    index_name = f"idx_{table_name}_{name}"
-                    indexes.append(Index(index_name, name))
+                    indexes.append(index(None, name))
 
                 # Collect validators
                 column_info = getattr(column, "info", None)
@@ -603,10 +620,16 @@ class ModelProcessor(type):
             # Dialect kwargs (postgresql_where / postgresql_using / mysql_using, etc.)
             # are part of an index's identity: same columns with different partial
             # predicates or access methods are distinct indexes, not duplicates.
-            # Values may be str or SQLAlchemy expressions, so compare via str().
+            # Include literal values when comparing SQLAlchemy predicates.
             # dialect_kwargs only holds explicitly passed args, not dialect defaults.
             kwargs = getattr(idx, "dialect_kwargs", None) or {}
-            return tuple(sorted((k, str(v)) for k, v in kwargs.items() if v is not None))
+            return tuple(
+                sorted(
+                    (k, str(v.compile(compile_kwargs={"literal_binds": True})) if hasattr(v, "compile") else str(v))
+                    for k, v in kwargs.items()
+                    if v is not None
+                )
+            )
 
         def is_partial(idx):
             return any(k.endswith("_where") for k, _ in dialect_sig(idx))
@@ -624,12 +647,16 @@ class ModelProcessor(type):
         to_remove: set = set()
 
         # Remove exact duplicates (same columns, unique flag, and dialect kwargs):
-        # prefer explicit names over SQLAlchemy auto-generated "ix_*". Sort by name
+        # prefer explicit names over generated names. Sort by name
         # so the kept index is deterministic regardless of set iteration order.
         for indexes in full_sig_map.values():
             if len(indexes) > 1:
                 explicit = sorted(
-                    (i for i in indexes if not (i.name and i.name.startswith("ix_"))),
+                    (
+                        i
+                        for i in indexes
+                        if not (isinstance(i.name, conv) or (i.name and i.name.startswith(_TEMP_INDEX_PREFIX)))
+                    ),
                     key=lambda i: i.name or "",
                 )
                 keep = explicit[0] if explicit else sorted(indexes, key=lambda i: i.name or "")[0]
@@ -645,10 +672,20 @@ class ModelProcessor(type):
         for idx in to_remove:
             table.indexes.discard(idx)
 
-        # Normalize temp names after dedup
+        # Normalize generated names after dedup. Explicit names and SQLAlchemy
+        # naming conventions retain control over their own identifiers.
+        generated = []
+        explicit_names = {str(cst.name) for cst in table.constraints if cst.name is not None}
         for idx in table.indexes:
             if idx.name and idx.name.startswith(_TEMP_INDEX_PREFIX) and idx.columns:
-                idx.name = f"idx_{table_name}_{'_'.join(col.name for col in idx.columns)}"
+                name = f"idx_{table_name}_{'_'.join(col.name for col in idx.columns)}"
+            else:
+                if idx.name is not None:
+                    explicit_names.add(str(idx.name))
+                continue
+            signature = repr((tuple(str(expr) for expr in idx.expressions), idx.unique, dialect_sig(idx)))
+            generated.append((idx, name, signature))
+        _assign_schema_names(generated, explicit_names)
 
     @classmethod
     def _post_process_table_constraints(mcs, table, table_name: str) -> None:
@@ -658,6 +695,8 @@ class ModelProcessor(type):
             table: SQLAlchemy Table instance
             table_name: Database table name
         """
+        generated = []
+        explicit_names = {str(item.name) for item in [*table.constraints, *table.indexes] if item.name is not None}
         for cst in table.constraints:
             if cst.name is None:
                 if isinstance(cst, CheckConstraint):
@@ -665,12 +704,14 @@ class ModelProcessor(type):
                     field_matches = _FIELD_NAME_PATTERN.findall(str(cst.sqltext))
                     if field_matches:
                         field_part = "_".join(field_matches[:2])
-                        cst.name = f"ck_{table_name}_{field_part}"
+                        name = f"ck_{table_name}_{field_part}"
                     else:
-                        cst.name = f"ck_{table_name}_constraint"
+                        name = f"ck_{table_name}_constraint"
+                    signature = str(cst.sqltext.compile(compile_kwargs={"literal_binds": True}))
                 elif isinstance(cst, UniqueConstraint) and hasattr(cst, "columns"):
                     field_names = "_".join(col.name for col in cst.columns)
-                    cst.name = f"uq_{table_name}_{field_names}"
+                    name = f"uq_{table_name}_{field_names}"
+                    signature = field_names
                 elif isinstance(cst, ForeignKeyConstraint) and hasattr(cst, "columns"):
                     # Handle foreign key constraints
                     field_names = "_".join(col.name for col in cst.columns)
@@ -679,12 +720,17 @@ class ModelProcessor(type):
                         try:
                             ref_table = cst.elements[0].column.table.name
                             ref_columns = "_".join(elem.column.name for elem in cst.elements)
-                            cst.name = f"fk_{table_name}_{field_names}_{ref_table}_{ref_columns}"
+                            name = f"fk_{table_name}_{field_names}_{ref_table}_{ref_columns}"
                         except Exception:
                             # Fallback if reference cannot be resolved yet
-                            cst.name = f"fk_{table_name}_{field_names}"
+                            name = f"fk_{table_name}_{field_names}"
                     else:
-                        cst.name = f"fk_{table_name}_{field_names}"
+                        name = f"fk_{table_name}_{field_names}"
+                    signature = repr(tuple(elem.target_fullname for elem in cst.elements))
+                else:
+                    continue
+                generated.append((cst, name, signature))
+        _assign_schema_names(generated, explicit_names)
 
     @classmethod
     def _apply_dataclass_functionality(mcs, cls: Any) -> Any:

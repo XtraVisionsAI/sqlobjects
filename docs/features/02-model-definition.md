@@ -365,6 +365,31 @@ class Product(ObjectModel):
         ]
 ```
 
+#### Automatic schema names
+
+SQLObjects generates names for unnamed CHECK, UNIQUE and foreign key constraints,
+field indexes (`index=True` / `unique=True`), and `index(None, *fields)`.
+Non-conflicting names of up to 63 UTF-8 bytes keep their existing spelling. Longer
+names retain a readable prefix plus a ten-character SHA-256 suffix. The same name
+is stored in metadata and used on SQLite, PostgreSQL and MySQL, including when
+names contain non-ASCII characters.
+
+If generated names collide within a table, a stable suffix distinguishes the
+constraint expressions or index definitions. Explicit names take precedence.
+CHECK signatures and partial-index predicates include literal parameter values;
+two different conditions are not treated as identical just because their SQL
+uses the same parameter placeholders.
+
+Explicit names and names already supplied by a SQLAlchemy `naming_convention`
+are not shortened by SQLObjects. Their validity and dialect-specific truncation
+remain under SQLAlchemy's rules. Table and column names are not shortened.
+
+For an existing database with long or conflicting automatic names, review a
+migration before upgrading the schema. Older databases may contain full names,
+server-truncated names or SQLAlchemy's previous index truncation. Pin the existing
+physical name explicitly if it should be retained; Alembic does not reliably infer
+renames or changes to CHECK constraints. See the [migration guide](09-migrations.md).
+
 #### Composite and Named Foreign Key Constraints
 
 For simple single-column foreign keys, prefer the `foreign_key()` field descriptor
