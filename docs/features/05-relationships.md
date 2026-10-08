@@ -137,6 +137,75 @@ for post in posts:
     author = await post.author.fetch()  # Executes N additional queries!
 ```
 
+### Dynamic Collections
+
+Use `lazy="dynamic"` for one-to-many or many-to-many collections that should
+remain queryable instead of loading into a cached list. Attribute access and
+QuerySet construction do not execute SQL.
+
+```python
+from sqlobjects.fields import Column, RelatedQuerySet, foreign_key, identity, relationship
+
+class User(ObjectModel):
+    id: Column[int] = identity()
+    posts: RelatedQuerySet["Post"] = relationship(
+        "Post", remote_fields="author_id", lazy="dynamic", order_by="-id"
+    )
+
+class Post(ObjectModel):
+    id: Column[int] = identity()
+    author_id: Column[int] = foreign_key("users.id")
+
+user = await User.objects.get(id=1)
+count = await user.posts.filter(Post.id > 100).count()
+page = await user.posts.order_by("id")[:20].all()
+ids = await user.posts.values_list("id", flat=True)
+exists = await user.posts.exists()
+
+async for post in user.posts:
+    print(post.id)
+
+rows = await user.posts.fetch()  # New query every time, like .all()
+```
+
+The proxy delegates to the regular async QuerySet, retaining the relationship
+condition through filters, projections, ordering, slices, counts and streaming.
+Relationship `order_by` supplies the initial ordering; a query's `order_by()`
+replaces it. `fetch()` and `load_relation()` return fresh lists without replacing
+the proxy or caching its results. Use `count()` and `exists()` explicitly;
+synchronous iteration, `len()` and `bool()` raise `TypeError`.
+
+Queries inherit the parent's database alias or explicitly bound session. A new
+query reads the parent's current key and binding; an already-built QuerySet
+retains the key and binding it was created with. `.using(...)` overrides the
+database/session without dropping the relationship condition. Loaded objects
+retain normal persisted state and the database alias for subsequent saves.
+
+Reverse foreign keys use the actual referenced columns, including composite and
+non-primary keys. Many-to-many relationships use the existing association table
+and support custom `M2MTable` column mappings. Repeated links do not duplicate
+target rows. Model names resolve within the parent's registry.
+
+The following boundaries apply:
+
+- The parent needs complete primary key values. A missing key raises
+  `PrimaryKeyError`; a null referenced value produces an empty query.
+- Load deferred relationship key fields explicitly before query construction,
+  using `await parent.load_deferred_field("field")`.
+- Dynamic loading requires a collection. Scalar relationships and custom
+  `primaryjoin` / `secondaryjoin` conditions raise `QueryError`.
+- `select_related()` and `prefetch_related()` reject dynamic relationship paths,
+  including nested paths and custom prefetch querysets. Use a regular collection
+  relationship when eager loading is needed.
+- QuerySet `update()` and `delete()` operate on related **rows**, using normal
+  transaction and cascade rules. Deleting a many-to-many target is not unlinking
+  it from the parent. Relationship `add()` / `remove()` / `set()` and manager
+  creation methods are not provided by this proxy.
+
+For self-referential collections, supply `remote_fields` and `uselist=True` to
+distinguish children from the parent-side relationship. Nullable numeric foreign
+keys may use `Column[int | None]`; automatic inference preserves the integer SQL type.
+
 ### Eager Loading with select_related
 
 ```python

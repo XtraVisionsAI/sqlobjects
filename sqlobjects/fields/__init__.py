@@ -6,6 +6,7 @@ from .proxies import (
     ManyToManyRelation,
     OneToManyRelation,
     RelatedObject,
+    RelatedQuerySet,
 )
 from .relations import M2MTable, relationship
 from .shortcuts import (
@@ -60,6 +61,7 @@ __all__ = [
     "RelatedObject",
     "OneToManyRelation",
     "ManyToManyRelation",
+    "RelatedQuerySet",
     # Utility functions
     "extract_field_metadata",
     "get_deferred_fields",

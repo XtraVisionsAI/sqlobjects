@@ -4,8 +4,8 @@ The ORM uses SQLAlchemy Core for SQL and connection management. These contracts
 define the behavior of its model and QuerySet APIs. Regression coverage lives in
 `tests/integration/test_orm_contracts.py`, `test_commit_callbacks.py`,
 `test_query_logging_contracts.py`, `test_distinct_contracts.py`,
-`test_signal_contracts.py` and `test_database_events.py`. These run against SQLite,
-PostgreSQL and MySQL in CI.
+`test_signal_contracts.py`, `test_database_events.py` and
+`test_dynamic_relationships.py`. These run against SQLite, PostgreSQL and MySQL in CI.
 
 ## Persisted and partial objects
 
@@ -196,6 +196,42 @@ Invalid paths raise errors. Custom prefetch querysets must target the declared
 related model. Sliced prefetch querysets are rejected until per-parent limits are
 implemented; a global limit would truncate collections incorrectly.
 
+### Dynamic collections
+
+`lazy="dynamic"` now returns a working `RelatedQuerySet` proxy instead of a
+placeholder. Building a query does not execute SQL. Each new query captures the
+parent's current reference values and database/session binding, then delegates
+to the ordinary QuerySet for filtering, ordering, projection, counting, streaming
+and writes. QuerySets already built retain their original scope. Hydration uses
+normal persisted state and database alias retention.
+
+Reverse relationships use real FK mappings, including non-primary and composite
+references. Many-to-many relationships use a membership subquery over the existing
+association table, so repeated links do not duplicate target rows. Explicit
+`M2MTable` mappings support custom columns. Model names resolve in the owning
+registry; unrelated registries can safely contain models with the same names.
+
+Dynamic `fetch()` and `load_relation()` issue new queries without replacing the
+proxy with cached rows. Synchronous iteration, truthiness and length are rejected
+in favor of async iteration, `exists()` and `count()`. The parent must have complete
+primary key values, and deferred reference fields must be loaded explicitly.
+Null reference values yield an empty query. Eager-loading paths through dynamic
+relationships, scalar dynamic relationships and custom join conditions are
+rejected. This proxy does not add relationship add/remove/set or creation methods.
+
+Cross-database coverage also exposed a nullable type inference bug:
+`Column[int | None]` with `column()` or `foreign_key()` was inferred as a string.
+The mapper now recognizes PEP 604 unions alongside `Optional[T]`, retaining the
+integer SQL type; the self-referencing dynamic-collection test creates and queries
+this FK on all three databases.
+
+This adopts the queryable-collection pattern described by
+[Django's related manager](https://docs.djangoproject.com/en/5.2/ref/models/relations/)
+using SQLObjects' async Core QuerySet. SQLAlchemy documents its legacy dynamic
+loader's [async and implicit-iteration limitations](https://docs.sqlalchemy.org/en/20/orm/large_collections.html#dynamic-relationship);
+SQLObjects keeps evaluation explicit and uses its existing async streaming path.
+See the [dynamic collection guide](../features/05-relationships.md#dynamic-collections).
+
 ## Query execution logging
 
 The `sqlobjects.sql` logger observes each configured engine, covering model
@@ -279,9 +315,9 @@ Local verification on 2026-10-08 used Python 3.12, SQLAlchemy 2.0.44 and Alembic
 
 | Database | Scope | Result |
 | --- | --- | --- |
-| SQLite | Unit and integration suite | 667 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
-| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events, CRUD, relationships, deferred fields, bulk results, cascades and signals | 305 passed. |
-| MySQL 8.4 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts and database events with aiomysql and its RSA authentication extra | 169 passed; one executemany RETURNING test skipped because this backend does not support it. |
+| SQLite | Unit and integration suite | 692 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
+| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events, dynamic relationships, CRUD, relationships, deferred fields, bulk results, cascades and signals | 329 passed. |
+| MySQL 8.4 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events and dynamic relationships with aiomysql and its RSA authentication extra | 193 passed; one executemany RETURNING test skipped because this backend does not support it. |
 
 The 10 migration integration tests also pass with Alembic 1.16.5 on SQLite.
 
@@ -290,7 +326,8 @@ unnecessary-ignore warnings. SQLite no longer emits DISTINCT ON dialect warnings
 The workflow definitions were checked locally; hosted CI results will
 be available after the changes are pushed.
 
-Further work from the ORM review includes dynamic relationship queries, aggregation
-over composed queries, realistic performance benchmarks, batched data-migration
-tooling and broader driver/version coverage.
+Further work from the ORM review includes aggregation over composed queries,
+portable automatic constraint-name lengths, realistic performance benchmarks,
+batched data-migration tooling and broader driver/version coverage. Long composite
+constraint names currently need an explicit shorter name on PostgreSQL/MySQL.
 These are separate from the persistence and query corrections described here.

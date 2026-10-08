@@ -15,12 +15,13 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from sqlalchemy import join, select
 
-from ..exceptions import DeferredFieldError
+from ..exceptions import DeferredFieldError, PrimaryKeyError, QueryError
 
 
 if TYPE_CHECKING:
     from ..mixins import DeferredLoadingMixin
     from ..model import ObjectModel
+    from ..queryset import QuerySet
     from .relations.descriptors import RelationshipDescriptor
 
 
@@ -379,40 +380,77 @@ class ManyToManyRelation(RelatedCollection[T]):
         return f"ManyToManyRelation(field='{self.property.name}')"
 
 
-class RelatedQuerySet(BaseRelated[T]):
-    """Dynamic query set proxy for lazy='dynamic' relationships."""
+class RelatedQuerySet(BaseRelated[list[T]]):
+    """Build fresh, parent-scoped queries for lazy='dynamic' collections."""
 
-    def __init__(self, instance: "ObjectModel", descriptor: "RelationshipDescriptor"):
-        super().__init__(instance, descriptor)
-        self.parent_instance = instance
-        self.relationship_desc = descriptor
-        self._queryset: Any = None
-        self._initialized = False
+    def _reference_value(self, field: str) -> Any:
+        value = getattr(self.instance, field)
+        if isinstance(value, DeferredObject):
+            raise DeferredFieldError(
+                f"Load relationship key '{field}' before querying dynamic relationship '{self.property.name}'"
+            )
+        return value
 
-    def _get_queryset(self) -> Any:
-        """Lazy initialize QuerySet."""
-        if not self._initialized:
-            # QuerySet will be implemented in Layer 5
-            self._queryset = None
-            self._initialized = True
-        return self._queryset
+    def _get_queryset(self) -> "QuerySet[T]":
+        from ..queryset import QuerySet
 
-    async def _load(self):
-        """Load implementation - returns QuerySet."""
-        self._cached_value = self._get_queryset()
-        self._loaded = True
+        if self.property.primaryjoin is not None or self.property.secondaryjoin is not None:
+            raise QueryError("Dynamic relationships do not support custom join conditions")
+        info = self._get_relationship_info()
+        if not info or info["type"] not in {"reverse_fk", "many_to_many"}:
+            raise QueryError(f"Dynamic relationship '{self.property.name}' requires a resolved collection relationship")
+        if not self.instance._has_primary_key_values():
+            raise PrimaryKeyError("A dynamic relationship requires a parent with complete primary key values")
 
-    def _set_empty_result(self):
-        """Set empty QuerySet result."""
-        self._cached_value = None
-        self._loaded = True
+        model = info["related_model"]
+        table = model.get_table()
+        queryset = QuerySet(table, model, self.instance._state_manager.get_bound_session())
+        ordering = self.property.order_by
+        if ordering is not None:
+            queryset = queryset.order_by(*([ordering] if isinstance(ordering, str) else ordering))
+
+        if info["type"] == "many_to_many":
+            value = self._reference_value(info["left_ref_field"])
+            if value is None:
+                return queryset.none()
+            through = self.instance.__class__.__registry__.tables[info["through_table"]]
+            # Membership avoids duplicate target rows, even if the association
+            # table permits repeated links to the same target.
+            members = select(through.c[info["right_field"]]).where(through.c[info["left_field"]] == value)
+            return queryset.filter(table.c[info["right_ref_field"]].in_(members))
+
+        conditions = []
+        for foreign_key, reference in zip(info["foreign_key_fields"], info["ref_fields"], strict=True):
+            value = self._reference_value(reference)
+            if value is None:
+                return queryset.none()
+            conditions.append(table.c[foreign_key] == value)
+        if not conditions:
+            raise QueryError(f"Dynamic relationship '{self.property.name}' has no foreign key mapping")
+        return queryset.filter(*conditions)
+
+    async def fetch(self) -> list[T]:
+        """Read the current related rows without caching a materialized list."""
+        return await self._get_queryset().all()
 
     def __getattr__(self, name: str) -> Any:
         """Proxy all QuerySet methods."""
-        qs = self._get_queryset()
-        if qs is None:
-            raise NotImplementedError("QuerySet not yet implemented")
-        return getattr(qs, name)
+        return getattr(self._get_queryset(), name)
+
+    def __getitem__(self, key) -> "QuerySet[T]":
+        return self._get_queryset()[key]
+
+    def __aiter__(self):
+        return self._get_queryset().iterator()
+
+    def __iter__(self):
+        raise TypeError("Use async iteration or await relation.fetch() for a dynamic relationship")
+
+    def __len__(self):
+        raise TypeError("Use await relation.count() for a dynamic relationship")
+
+    def __bool__(self):
+        raise TypeError("Use await relation.exists() for a dynamic relationship")
 
     def __str__(self):
         return f"<RelatedQuerySet: {self.property.name}>"

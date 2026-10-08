@@ -194,7 +194,9 @@ class RelationshipAnalyzer:
 
     @staticmethod
     def _extract_relationship_info(model_class, prop):
-        related_model = RelationshipAnalyzer._resolve_model_class(prop.argument)
+        related_model = (
+            model_class.__registry__.get_model(prop.argument) if isinstance(prop.argument, str) else prop.argument
+        )
         if not related_model:
             return None
 

@@ -509,6 +509,11 @@ class QuerySet(Generic[T]):
         for path in relationship_paths:
             model: Any = self._model_class
             for name in path.split("__"):
+                descriptor = getattr(model, "_relationships", {}).get(name)
+                if descriptor is not None and descriptor.property.lazy == "dynamic":
+                    raise ValueError(
+                        f"Cannot eager-load dynamic relationship '{name}' in path '{path}'; query it explicitly"
+                    )
                 info = RelationshipAnalyzer.analyze_relationship(model, name)
                 if not info:
                     available = {

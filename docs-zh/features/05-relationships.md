@@ -136,6 +136,61 @@ for post in posts:
     author = await post.author.fetch()  # 执行 N 个额外查询！
 ```
 
+### 动态集合查询
+
+一对多、多对多关系可设置 `lazy="dynamic"`，按需构建带父对象条件的 QuerySet。
+访问属性和构造查询都不会执行 SQL。
+
+```python
+from sqlobjects.fields import Column, RelatedQuerySet, foreign_key, identity, relationship
+
+class User(ObjectModel):
+    id: Column[int] = identity()
+    posts: RelatedQuerySet["Post"] = relationship(
+        "Post", remote_fields="author_id", lazy="dynamic", order_by="-id"
+    )
+
+class Post(ObjectModel):
+    id: Column[int] = identity()
+    author_id: Column[int] = foreign_key("users.id")
+
+user = await User.objects.get(id=1)
+count = await user.posts.filter(Post.id > 100).count()
+page = await user.posts.order_by("id")[:20].all()
+ids = await user.posts.values_list("id", flat=True)
+
+async for post in user.posts:
+    print(post.id)
+
+rows = await user.posts.fetch()  # 每次执行新查询，不缓存列表
+```
+
+动态关系支持普通异步 QuerySet 的筛选、排序、投影、分页、计数和流式读取。
+关系的 `order_by` 作为初始排序，查询上的 `order_by()` 可以覆盖它。
+`fetch()` 和 `load_relation()` 返回新的列表，关系属性始终保留为查询代理。
+请显式使用 `await relation.count()` 和 `await relation.exists()`；同步迭代、
+`len()`、`bool()` 会抛出 `TypeError`。
+
+新建查询使用父对象当前的关联键及数据库别名或绑定 session；已经构造的 QuerySet
+保留构造时的条件和绑定。可以通过 `.using(...)` 覆盖数据库，但关联条件仍然保留。
+查询结果具有正常的持久化状态和数据库别名，可以继续保存。
+
+反向外键使用真实引用列，支持复合外键及非主键引用。多对多使用已存在的中间表，
+支持显式 `M2MTable` 列映射，重复关联不会造成目标对象重复返回。关联模型在父对象
+所属的注册表中解析。
+
+- 父对象必须具有完整主键，否则抛出 `PrimaryKeyError`；引用值为 `None` 时返回空查询。
+- 延迟加载的关联键必须先用 `await parent.load_deferred_field("字段名")` 显式加载。
+- 仅支持集合关系；单对象关系和自定义 `primaryjoin` / `secondaryjoin` 会明确报错。
+- `select_related()`、`prefetch_related()` 不接受动态关系路径，包括嵌套路径和自定义
+  预加载查询。需要预加载时请定义普通集合关系。
+- `update()`、`delete()` 修改或删除关联的目标行，遵循普通事务和级联规则；多对多
+  目标行的删除不等于解除中间表关联。该代理不提供 `add()`、`remove()`、`set()` 或
+  manager 的创建方法。
+
+自引用的子集合请同时指定 `remote_fields` 和 `uselist=True`。可空数字外键可以标注
+`Column[int | None]`，自动推断会保留整数 SQL 类型。
+
 ### 使用 select_related 预加载
 
 ```python

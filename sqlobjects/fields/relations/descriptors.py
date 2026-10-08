@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Generic, TypeVar, cast, overload
 
 from ...cascade import OnDelete
 
@@ -144,7 +144,9 @@ class RelationshipDescriptor(Generic[T]):
         )
 
         if self.property.lazy == "dynamic":
-            return RelatedQuerySet(instance, self)
+            # T describes the collection here; RelatedQuerySet's parameter is
+            # its element type, determined by the resolved relationship.
+            return cast("BaseRelated[T]", RelatedQuerySet(instance, self))
         elif self.property.lazy == "noload":
             return NoLoadRelation(instance, self)
         elif self.property.lazy == "raise":

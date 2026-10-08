@@ -1,6 +1,9 @@
 """Test nullable column type annotations"""
 
-from sqlobjects.fields import Column, IntegerColumn, StringColumn
+from sqlalchemy import Integer
+
+from sqlobjects.fields import Column, IntegerColumn, StringColumn, column
+from sqlobjects.metadata import ModelRegistry
 from sqlobjects.model import ObjectModel
 
 
@@ -12,6 +15,16 @@ def validate_positive(value):
 
 class TestNullableTypeAnnotations:
     """Test that nullable columns work with union type annotations"""
+
+    def test_auto_nullable_integer_has_integer_database_type(self):
+        class AutoNullableInteger(ObjectModel):
+            __registry__ = ModelRegistry()
+            age: Column[int | None] = column()
+
+        field = AutoNullableInteger.__table__.c.age
+        assert isinstance(field.type, Integer)
+        assert field.nullable
+        assert AutoNullableInteger(age=None).age is None
 
     def test_nullable_integer_column_type_annotation(self):
         """Test that nullable integer columns work with int | None annotation"""

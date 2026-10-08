@@ -69,6 +69,9 @@ comments = await Comment.objects.select_related("post__author").all()
 
 ### Advanced prefetch_related
 
+Dynamic relationships (`lazy="dynamic"`) cannot be eagerly loaded. See the
+dynamic collection contract below before choosing this strategy.
+
 Custom queryset keys must name declared relationships. Filtering and ordering are
 supported; sliced querysets and arbitrary output aliases are rejected.
 
@@ -85,6 +88,28 @@ users = await User.objects.prefetch_related(
     comments=Comment.objects.order_by('-created_at')
 ).all()
 ```
+
+### Dynamic Collections
+
+- Define a one-to-many or many-to-many relationship with `lazy="dynamic"`; use
+  `RelatedQuerySet["Model"]` from `sqlobjects.fields` for its annotation.
+- Query with `await parent.children.filter(...).all()`, `.count()`, `.exists()`,
+  projections, slices or `async for`. Query construction does not execute SQL.
+- `.fetch()` and `load_relation()` requery without caching a list. Synchronous
+  iteration, `len()` and truthiness are rejected.
+- New queries use the parent's current keys and database/session binding.
+  Existing QuerySets keep their original conditions and binding.
+- A complete parent primary key is required. Load deferred relation keys before
+  constructing a query; null reference values yield an empty query.
+- `remote_fields` selects the child FK when several point to the parent. Composite
+  FK mappings and non-primary references are supported. Existing M2M tables use
+  membership subqueries to prevent duplicate targets.
+- Custom join conditions and scalar dynamic relationships are rejected. Use
+  `uselist=True` with `remote_fields` for self-referential child collections.
+- QuerySet writes affect target rows, not M2M links. This proxy does not supply
+  relationship add/remove/set or manager creation methods.
+
+See the [dynamic collection examples](../features/05-relationships.md#dynamic-collections).
 
 ### Accessing Relationships
 

@@ -1,6 +1,7 @@
 """Core field classes for SQLObjects"""
 
 from collections.abc import Callable
+from types import UnionType
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, Union, cast, get_args, get_origin, overload
 
 from sqlalchemy import Column as CoreColumn
@@ -1104,8 +1105,8 @@ def _map_python_type_to_sqlalchemy(python_type) -> tuple[str, dict[str, Any]]:
     Returns:
         Tuple of (type_name, parameters_dict)
     """
-    # Handle Optional[T] -> Union[T, None]
-    if get_origin(python_type) is Union:
+    # Handle both Optional[T] and the PEP 604 spelling T | None.
+    if get_origin(python_type) in (Union, UnionType):
         union_args = get_args(python_type)
         if len(union_args) == 2 and type(None) in union_args:
             # Optional[T] case
