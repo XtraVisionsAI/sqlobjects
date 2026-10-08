@@ -67,6 +67,7 @@ jobs:
       - run: >-
           uv run --no-sync pytest --db=${{ matrix.database }}
           tests/integration/test_orm_contracts.py tests/integration/test_commit_callbacks.py
+          tests/integration/test_query_logging_contracts.py
       - if: matrix.database == 'postgresql'
         run: >-
           uv run --no-sync pytest --db=postgresql

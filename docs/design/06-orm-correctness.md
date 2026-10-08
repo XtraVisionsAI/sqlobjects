@@ -3,8 +3,9 @@
 The ORM uses SQLAlchemy Core for SQL and connection management. These contracts
 define the behavior of its model and QuerySet APIs. Regression coverage lives in
 `tests/integration/test_orm_contracts.py` and
-`tests/integration/test_commit_callbacks.py`; both run against SQLite, PostgreSQL
-and MySQL in CI.
+`tests/integration/test_commit_callbacks.py`, with execution logging covered by
+`tests/integration/test_query_logging_contracts.py`. All three run against SQLite,
+PostgreSQL and MySQL in CI.
 
 ## Persisted and partial objects
 
@@ -163,6 +164,30 @@ Invalid paths raise errors. Custom prefetch querysets must target the declared
 related model. Sliced prefetch querysets are rejected until per-parent limits are
 implemented; a global limit would truncate collections incorrectly.
 
+## Query execution logging
+
+The `sqlobjects.sql` logger observes each configured engine, covering model
+writes, bulk operations, raw SQL and streaming alongside QuerySet reads. Records
+describe physical driver calls, including failures and cancellation; they do not
+duplicate records at the QueryExecutor layer. Batched RETURNING records use each
+batch's actual SQL and parameters rather than the original unbatched values.
+
+Structured records include database alias, dialect, duration, driver row count,
+executemany status and success/error type. `hide_parameters=True` suppresses bind
+values on success and failure. Handler exceptions do not change the database
+outcome. Caller lookup walks frames across SQLAlchemy's async greenlet bridge.
+Disabled logging skips timing and stack inspection, and logging never recompiles
+SQL. Timing measures cursor execution, excluding pool wait, compilation, later
+fetching, hydration and commit. See the
+[logging field contract](../features/01-database-setup.md#sql-logging) for format
+changes from the old QueryExecutor logger.
+
+Central execution instrumentation follows the purpose of
+[Django's query instrumentation](https://docs.djangoproject.com/en/5.2/topics/db/instrumentation/),
+implemented using the underlying
+[SQLAlchemy dialect and connection events](https://docs.sqlalchemy.org/en/20/core/events.html)
+so every ORM entry point shares the same recording path.
+
 ## Verification and remaining work
 
 CI runs the SQLite unit/integration suite, the cross-database contract suite and
@@ -175,16 +200,15 @@ Local verification on 2026-10-08 used Python 3.12 and SQLAlchemy 2.0.44:
 
 | Database | Scope | Result |
 | --- | --- | --- |
-| SQLite | Unit and integration suite | 574 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
-| PostgreSQL 16 | Contracts, commit callbacks, CRUD, relationships, deferred fields, bulk results, cascades and signals | 218 passed. |
-| MySQL 8.4 | Contracts and commit callbacks with aiomysql and its RSA authentication extra | 83 passed. |
+| SQLite | Unit and integration suite | 592 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
+| PostgreSQL 16 | Contracts, commit callbacks, query logging, CRUD, relationships, deferred fields, bulk results, cascades and signals | 241 passed. |
+| MySQL 8.4 | Contracts, commit callbacks and query logging with aiomysql and its RSA authentication extra | 100 passed; one executemany RETURNING test skipped because this backend does not support it. |
 
 Ruff lint and formatting passed. Pyright reported zero errors and three existing
 unnecessary-ignore warnings. SQLite retains two existing DISTINCT ON dialect
 warnings. The workflow definitions were checked locally; hosted CI results will
 be available after the changes are pushed.
 
-Further work from the ORM review includes Alembic examples,
-unified query instrumentation, realistic
+Further work from the ORM review includes Alembic examples, realistic
 performance benchmarks and broader driver/version coverage. These are separate
 from the persistence and query corrections described here.

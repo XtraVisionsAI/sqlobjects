@@ -287,9 +287,11 @@ except Exception as e:
 ## SQL Logging
 
 SQLObjects emits executed statements through the standard `logging` module under
-the logger name `sqlobjects.sql`. Logging is zero-configuration: the query
-executor only compiles SQL for logging when the logger is actually enabled for
-`DEBUG`, so there is no overhead when logging is off.
+the logger name `sqlobjects.sql`. Each configured engine records driver cursor
+executions at `DEBUG`, including QuerySets, instance writes, bulk operations,
+raw SQL, streaming, and direct use of `db.engine`. Failed and cancelled driver
+executions use the same logger. Logging never recompiles SQL; with `DEBUG`
+disabled, event handlers skip timing and caller inspection.
 
 ### Enabling SQL Logging
 
@@ -307,9 +309,37 @@ users = await User.objects.filter(User.is_active == True).all()
 Each SQL log record carries structured data in `record.__dict__` that you can
 consume from a custom handler:
 
-- `sql` - the compiled SQL string (bind parameters not inlined)
-- `params` - a dict of the bind parameters
-- `duration_ms` - execution time in milliseconds
+| Field | Meaning |
+| --- | --- |
+| `sql` | SQL string passed to the driver, with expanded placeholders. |
+| `params` | Driver parameters: dictionary, tuple, or a sequence of parameter sets; `None` when absent or hidden. |
+| `duration_ms` | Driver execution time in milliseconds. |
+| `db_name`, `dialect` | Configured database alias and SQL dialect. |
+| `executemany` | Whether this driver call uses `executemany()`. |
+| `rowcount` | Driver row count, often `-1` when unknown; `None` on failure. |
+| `success`, `error_type` | Cursor execution outcome and exception class name, without exception messages or tracebacks. |
+
+One record describes one driver call. A batched INSERT with RETURNING can produce
+multiple records; a driver `executemany()` call produces one record for all its
+parameter sets. Timing excludes pool checkout, SQL compilation, later result
+fetching, model hydration and transaction commit. In particular, a successful
+streaming execution does not imply that later fetching succeeded. Connection,
+compilation and commit errors are outside this cursor-execution log.
+
+Set `hide_parameters=True` when initializing a database to omit bind values from
+both successful and failed records:
+
+```python
+await init_db(database_url, hide_parameters=True)
+```
+
+This does not redact literals already embedded in raw SQL; use bound parameters.
+Ordinary exceptions from a custom logging handler are suppressed so they cannot
+roll back a successful write or replace the original database exception.
+
+Compared with the previous QueryExecutor-only logger, `params` now uses the
+driver's format rather than always a dictionary, and `duration_ms` measures
+cursor execution rather than the surrounding session operation.
 
 ```python
 class SQLHandler(logging.Handler):
@@ -329,8 +359,8 @@ It overrides `makeRecord()` to rewrite each record's caller fields
 (`pathname`, `filename`, `module`, `funcName`, `lineno`) to the first
 **user-code** frame, skipping frames from `sqlobjects.*`, `sqlalchemy.*`, the
 standard `logging` package, and any `site-packages`. This means log output
-points at the line in your application that issued the query rather than at
-internal library code, and it works with any handler (including loguru's
+points at the line in your application that issued the query, including across
+SQLAlchemy's async greenlet bridge. It works with any handler (including loguru's
 `InterceptHandler`) without extra filter configuration.
 
 For custom scenarios you can also resolve the caller frame directly:

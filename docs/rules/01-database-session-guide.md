@@ -358,7 +358,7 @@ async def get_user(user_id: int, session: AsyncSession = Depends(get_db_session)
 ## SQL Logging
 
 SQLObjects ships zero-config SQL logging through the standard library `logging`
-module. Every executed statement is logged at `DEBUG` level to the logger named
+module. Driver cursor executions are logged at `DEBUG` level to the logger named
 **`sqlobjects.sql`**. This logger is an `ObjectLogger` (installed automatically
 on import) that rewrites each record's caller fields — `pathname`, `filename`,
 `funcName`, `lineno` — to the first user-code frame, skipping internal
@@ -392,10 +392,22 @@ handler.setFormatter(logging.Formatter("%(pathname)s:%(lineno)d - %(message)s"))
 sql_logger.addHandler(handler)
 ```
 
-Statement compilation only happens when the logger is actually enabled for
-`DEBUG`, so leaving logging off has no runtime cost. Each record carries the
-compiled SQL as the message plus an `extra` dict with `sql`, `params`, and
-`duration_ms`.
+Logging is installed on each database engine and covers reads, writes, bulk,
+raw SQL and streaming. It does not compile statements again. Disabled logging
+skips timing and frame inspection; enabled logging resolves the user frame
+across the async greenlet bridge.
+
+Each record carries `sql`, driver-format `params`, `duration_ms`, `db_name`,
+`dialect`, `executemany`, `rowcount`, `success`, and `error_type`. Parameters may
+be a dictionary, tuple or a sequence of parameter sets. `hide_parameters=True`
+in `init_db()` makes `params` null, including on failure; raw SQL literals are
+not redacted. Errors include only the exception class, not its message.
+
+Records count driver calls, not ORM methods or returned rows. Timing excludes
+pool checkout, compilation, later fetching, hydration and commit. `rowcount` can
+be `-1` when unknown or null on failure. Driver failures and cancellation are
+logged without replacing the original exception; ordinary handler failures do
+not affect the database operation.
 
 ### Public API
 

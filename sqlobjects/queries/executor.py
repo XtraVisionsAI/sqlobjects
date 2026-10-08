@@ -1,5 +1,3 @@
-import logging
-import time
 from collections.abc import AsyncGenerator
 from typing import Any, TypeVar, overload
 
@@ -11,8 +9,6 @@ from sqlalchemy import (
     text,
     update,
 )
-
-from ..sql_logging import _sql_logger
 
 
 _T = TypeVar("_T")
@@ -259,37 +255,12 @@ class QueryExecutor:
             else:  # exists
                 return False
 
-        # Compile SQL for logging only when the logger is active (avoids overhead)
-        _logging_active = _sql_logger.isEnabledFor(logging.DEBUG)
-        sql_str = ""
-        params: dict = {}
-        t0 = 0.0
-        if _logging_active:
-            try:
-                compiled = query.compile(
-                    dialect=session.bind.dialect,
-                    compile_kwargs={"literal_binds": False},
-                )
-                sql_str = str(compiled)
-                params = dict(compiled.params) if compiled.params else {}
-            except Exception:
-                sql_str = str(query)
-                params = {}
-            t0 = time.perf_counter()
-
         if getattr(query, "_for_update_arg", None) is not None and session.bind.dialect.name != "sqlite":
             if session.readonly or session.auto_commit:
                 from ..exceptions import TransactionError
 
                 raise TransactionError("select_for_update/select_for_share requires an explicit transaction")
         result = await session.execute(query)
-
-        if _logging_active:
-            duration_ms = (time.perf_counter() - t0) * 1000
-            _sql_logger.debug(
-                sql_str,
-                extra={"sql": sql_str, "params": params, "duration_ms": duration_ms},
-            )
 
         if query_type == "all":
             rows = result.fetchall()

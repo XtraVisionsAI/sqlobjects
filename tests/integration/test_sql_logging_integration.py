@@ -1,5 +1,5 @@
 # tests/integration/test_sql_logging_integration.py
-"""Integration tests: QueryExecutor emits SQL log records via ObjectLogger."""
+"""Integration tests: QuerySet executions emit SQL records via ObjectLogger."""
 
 import logging
 
@@ -34,7 +34,7 @@ def sql_records(test_db):
 
 @pytest.mark.asyncio
 async def test_executor_emits_log_on_query(sql_records, test_db):
-    """QueryExecutor emits a log record for each executed query."""
+    """QuerySet execution emits a log record through the engine listeners."""
     async with ctx_session() as session:
         await User.objects.using(session).all()
 

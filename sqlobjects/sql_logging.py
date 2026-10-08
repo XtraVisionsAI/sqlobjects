@@ -15,8 +15,14 @@ from __future__ import annotations
 import inspect
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from time import perf_counter
+from types import FrameType
 from typing import Any
+
+from greenlet import getcurrent
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
 
 
 __all__ = ["get_caller_frame", "ObjectLogger"]
@@ -57,6 +63,23 @@ def _should_skip_frame(
     return False
 
 
+def _caller_frames() -> Iterator[FrameType]:
+    """Walk Python frames, including parents suspended by SQLAlchemy's greenlet."""
+    current = getcurrent()
+    frame = inspect.currentframe()
+    try:
+        while True:
+            while frame is not None:
+                yield frame
+                frame = frame.f_back
+            current = current.parent
+            if current is None:
+                break
+            frame = current.gr_frame
+    finally:
+        del frame
+
+
 def _find_user_frame(
     extra_skip_packages: list[str] | None = None,
 ) -> inspect.FrameInfo | None:
@@ -66,10 +89,10 @@ def _find_user_frame(
     FrameInfo instead of a formatted string. Returns None if no frame found.
     """
     extra_skip_prefixes: tuple[str, ...] = tuple(extra_skip_packages) if extra_skip_packages else ()
-    for frame_info in inspect.stack():
-        module = frame_info.frame.f_globals.get("__name__", "")
-        if not _should_skip_frame(frame_info.filename, module, extra_skip_prefixes):
-            return frame_info
+    for frame in _caller_frames():
+        module = frame.f_globals.get("__name__", "")
+        if not _should_skip_frame(frame.f_code.co_filename, module, extra_skip_prefixes):
+            return inspect.FrameInfo(frame, *inspect.getframeinfo(frame, context=0))
     return None
 
 
@@ -97,12 +120,12 @@ def get_caller_frame(
     extra_skip_prefixes: tuple[str, ...] = tuple(extra_skip_packages) if extra_skip_packages else ()
     frames: list[str] = []
 
-    for frame_info in inspect.stack():
-        module = frame_info.frame.f_globals.get("__name__", "")
-        if _should_skip_frame(frame_info.filename, module, extra_skip_prefixes):
+    for frame in _caller_frames():
+        module = frame.f_globals.get("__name__", "")
+        if _should_skip_frame(frame.f_code.co_filename, module, extra_skip_prefixes):
             continue
-        rel_path = _relative_path(frame_info.filename)
-        frames.append(f"{rel_path}:{frame_info.lineno} in {frame_info.function}")
+        rel_path = _relative_path(frame.f_code.co_filename)
+        frames.append(f"{rel_path}:{frame.f_lineno} in {frame.f_code.co_name}")
         if len(frames) >= max_frames:
             break
 
@@ -196,5 +219,71 @@ def _install_object_logger(name: str) -> ObjectLogger:
     return logger
 
 
-# Module-level instance — imported by executor.py and usable by callers
+# Module-level instance shared by all database engines and usable by callers.
 _sql_logger: ObjectLogger = _install_object_logger("sqlobjects.sql")
+
+
+def _install_query_logging(engine: Engine, db_name: str) -> None:
+    """Observe physical cursor executions without recompilation or row fetching."""
+    timing_key = "_sqlobjects_query_timing"
+
+    def start(context, statement, parameters, executemany):
+        if context is not None and _sql_logger.isEnabledFor(logging.DEBUG):
+            setattr(
+                context,
+                timing_key,
+                (perf_counter(), statement, None if engine.hide_parameters else parameters, executemany),
+            )
+
+    def do_execute(cursor, statement, parameters, context):
+        start(context, statement, parameters, False)
+
+    def do_executemany(cursor, statement, parameters, context):
+        start(context, statement, parameters, True)
+
+    def do_execute_no_params(cursor, statement, context):
+        start(context, statement, None, False)
+
+    def emit(context, cursor=None, error=None):
+        if context is None:
+            return
+        timing = context.__dict__.pop(timing_key, None)
+        if timing is None or not _sql_logger.isEnabledFor(logging.DEBUG):
+            return
+        started, statement, parameters, executemany = timing
+        duration_ms = (perf_counter() - started) * 1000
+        try:
+            _sql_logger.debug(
+                statement,
+                extra={
+                    "sql": statement,
+                    "params": None if engine.hide_parameters else parameters,
+                    "duration_ms": duration_ms,
+                    "db_name": db_name,
+                    "dialect": engine.dialect.name,
+                    "executemany": executemany,
+                    "rowcount": cursor.rowcount if cursor is not None and error is None else None,
+                    "success": error is None,
+                    "error_type": type(error).__name__ if error is not None else None,
+                },
+            )
+        except Exception:
+            # Diagnostics must not roll back a successful write or replace a DB error.
+            pass
+
+    def after_execute(conn, cursor, statement, parameters, context, executemany):
+        emit(context, cursor)
+
+    def handle_error(exception_context):
+        emit(
+            exception_context.execution_context,
+            error=exception_context.original_exception,
+        )
+
+    # Dialect events receive each batch's actual SQL/params. For insertmanyvalues,
+    # after_cursor_execute receives the original unbatched statement/params.
+    event.listen(engine, "do_execute", do_execute)
+    event.listen(engine, "do_executemany", do_executemany)
+    event.listen(engine, "do_execute_no_params", do_execute_no_params)
+    event.listen(engine, "after_cursor_execute", after_execute)
+    event.listen(engine, "handle_error", handle_error)

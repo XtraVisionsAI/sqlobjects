@@ -133,15 +133,23 @@ users = await User.objects.filter(User.is_active == True).all()
   fields (`pathname`, `filename`, `module`, `funcName`, `lineno`) to the first user-code frame. Because the
   rewrite happens on the record, any attached handler — including loguru `InterceptHandler` — shows the real
   call site with no extra `Filter` configuration.
-- **Frame-skipping** (`_find_user_frame` / `_should_skip_frame`): walks `inspect.stack()` and skips frames
+- **Frame-skipping** (`_find_user_frame` / `_should_skip_frame`): walks frames lazily, including suspended
+  parent greenlets, and skips frames
   from `site-packages`, synthetic `<...>` filenames, modules named exactly `sqlobjects`/`sqlalchemy`/`logging`
   or prefixed with `sqlobjects.`/`sqlalchemy.` (covers editable installs), the `sql_logging.py` file itself,
   and any `extra_skip_packages` prefixes supplied by the caller.
 - **Installation**: the module installs itself as the logger named `sqlobjects.sql` via
   `_install_object_logger()`, which writes the `ObjectLogger` directly into `logging.root.manager.loggerDict`
-  (under the logging lock), migrating any pre-existing handlers/level/propagate. The `QueryExecutor` emits SQL
-  through this logger, compiling SQL for logging only when the logger is enabled for `DEBUG` (avoiding overhead
-  when logging is off).
+  (under the logging lock), migrating any pre-existing handlers/level/propagate. Each `Database` installs
+  engine listeners that emit SQL without recompilation. Disabled logging skips timing and frame inspection.
+- **Execution tracking**: dialect `do_execute`, `do_executemany` and `do_execute_no_params` events capture
+  each driver's actual statement, parameters and start time on the execution context. `after_cursor_execute`
+  and `handle_error` consume that state once. This handles RETURNING batches, whose completion events can
+  carry the original unbatched parameters, and avoids connection-level timing state leaking across requests.
+- **Structured fields**: `sql`, driver-format `params`, `duration_ms`, `db_name`, `dialect`, `executemany`,
+  `rowcount`, `success` and `error_type`. Parameter hiding follows the engine's `hide_parameters` setting.
+  Timing ends at cursor execution, before later fetching, hydration or commit. Logging handler errors cannot
+  change the database outcome. Connection and compilation failures without a driver call produce no record.
 - **Public API**: `ObjectLogger` and `get_caller_frame(extra_skip_packages=None, max_frames=1) -> str | list[str]`,
   which returns the first user-code frame(s) as `"path:lineno in func"` strings for custom scenarios.
 
@@ -182,7 +190,7 @@ users = await User.objects.filter(User.is_active == True).all()
 
 **SQL Logging Layer (`sql_logging.py`)**
 
-- **ObjectLogger**: `logging.Logger` subclass that rewrites LogRecord caller fields to the user-code call site; installed as the `sqlobjects.sql` logger and used by `QueryExecutor`
+- **ObjectLogger**: `logging.Logger` subclass that rewrites LogRecord caller fields to the user-code call site; installed as the `sqlobjects.sql` logger and used by database engine listeners
 - **get_caller_frame() / _find_user_frame() / _should_skip_frame()**: user-frame discovery skipping library and internal frames
 
 ### Design Philosophy

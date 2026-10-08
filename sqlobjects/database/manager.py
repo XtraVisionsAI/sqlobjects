@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from ..sql_logging import _install_query_logging
+
 
 __all__ = [
     "DatabaseConfig",
@@ -130,6 +132,7 @@ class Database:
 
         # Create async engine
         self.engine: AsyncEngine = create_async_engine(config.url, **engine_kwargs)
+        _install_query_logging(self.engine.sync_engine, name)
 
     def on(
         self,

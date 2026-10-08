@@ -167,7 +167,7 @@ class Product(ObjectModel):
 
 **Cross-cutting Subsystems**
 
-- **SQL Logging** (`sql_logging.py`): `ObjectLogger` rewrites log-record caller fields to the real user-code call site; installed as the `sqlobjects.sql` logger and used by the query executor. See document 05.
+- **SQL Logging** (`sql_logging.py`): database engine listeners record driver executions and failures; `ObjectLogger` rewrites caller fields across the async greenlet bridge to the user-code call site. See document 05.
 - **Cascade** (`cascade.py`): unified cascade strategy coordinating database-level `ondelete`/`onupdate` and ORM-level `cascade`, with dependency resolution and cascade execution. See document 04.
 
 ### Design Philosophy
