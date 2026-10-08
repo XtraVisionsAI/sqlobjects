@@ -64,7 +64,9 @@ jobs:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --frozen --group test
-      - run: uv run --no-sync pytest tests/integration/test_orm_contracts.py --db=${{ matrix.database }}
+      - run: >-
+          uv run --no-sync pytest --db=${{ matrix.database }}
+          tests/integration/test_orm_contracts.py tests/integration/test_commit_callbacks.py
       - if: matrix.database == 'postgresql'
         run: >-
           uv run --no-sync pytest --db=postgresql

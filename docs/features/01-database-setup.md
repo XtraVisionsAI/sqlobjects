@@ -177,6 +177,48 @@ An implicit session's automatic connection release does not close the session
 object, so sequential calls on it remain supported. An explicitly managed session
 may be handed off only after its previous owning task has finished.
 
+### Actions After Commit
+
+Use `await session.on_commit(callback)` or the `on_commit()` helper for effects
+that should run only after a successful transaction. Pass a callable; both sync
+functions and functions returning awaitables are supported.
+
+```python
+from functools import partial
+from sqlobjects.session import ctx_session, on_commit
+
+async with ctx_session() as session:
+    user = await User.objects.create(username="alice")
+    await session.on_commit(partial(invalidate_user_cache, user.id))
+    await on_commit(partial(notify_user_created, user.id), robust=True)
+    # Both callbacks wait until this context successfully commits.
+```
+
+Callbacks run in registration order and are awaited inline. Root rollback,
+cancellation before commit and session close discard pending callbacks. Savepoint
+rollback discards callbacks registered in that savepoint and its descendants;
+releasing a savepoint leaves them waiting for root commit. Use
+`async with await session.begin_nested()` or the returned savepoint's
+`commit()` / `rollback()` methods, completing nested savepoints in reverse order.
+
+An explicit writable session queues callbacks even before its first SQL statement.
+Outside a transaction the helper executes immediately. A named database or an
+explicit session can be selected with `on_commit(callback, db_or_session)`.
+Readonly, failed, closed and foreign-task sessions reject registration.
+
+A callback failure cannot undo a completed commit. By default it propagates and
+stops later callbacks; `robust=True` logs ordinary exceptions and continues.
+Cancellation still propagates. The connection is released before dispatch, and
+callback ORM calls use fresh sessions for the committed database. Explicitly
+reusing the committing session from a callback raises `TransactionError`; open a
+new `ctx_session()` if the callback needs a transaction.
+
+Callbacks belong to an individual database transaction. `ctx_sessions()` commits
+databases sequentially; it is not a distributed transaction, and one database's
+callback may run before another database commits. These in-process callbacks are
+not a durable delivery queue. Use a transactional outbox when delivery must
+survive a process crash after commit.
+
 ## Database Events
 
 ### Connection Events

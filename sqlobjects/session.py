@@ -1,25 +1,28 @@
+from __future__ import annotations
+
 import asyncio
 import contextvars
 import inspect
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncResult
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncResult, AsyncTransaction
 
 from .database.manager import get_database, get_default
 from .exceptions import TransactionError, convert_sqlalchemy_error
 
 
-__all__ = ["AsyncSession", "ctx_session", "ctx_sessions", "get_session", "has_session"]
+__all__ = ["AsyncSession", "ctx_session", "ctx_sessions", "get_session", "has_session", "on_commit"]
 
 logger = logging.getLogger("sqlobjects.session")
 
 # Explicit session management (highest priority)
-_explicit_sessions: contextvars.ContextVar[dict[str, "AsyncSession"]] = contextvars.ContextVar("explicit_sessions")
+_explicit_sessions: contextvars.ContextVar[dict[str, AsyncSession]] = contextvars.ContextVar("explicit_sessions")
 
 
 def _current_task() -> asyncio.Task[Any] | None:
@@ -28,6 +31,13 @@ def _current_task() -> asyncio.Task[Any] | None:
         return asyncio.current_task()
     except RuntimeError:
         return None
+
+
+@dataclass
+class _CommitHook:
+    callback: Callable[[], Any]
+    robust: bool
+    savepoints: tuple[_SessionSavepoint, ...] = ()
 
 
 class AsyncSession:
@@ -54,6 +64,9 @@ class AsyncSession:
         self._rollback_only = False
         self._owner_task = _current_task()
         self._closed = False
+        self._commit_hooks: list[_CommitHook] = []
+        self._savepoints: list[_SessionSavepoint] = []
+        self._running_commit_hooks = False
 
     def _usable_in_current_task(self) -> bool:
         return not self._closed and (
@@ -72,6 +85,11 @@ class AsyncSession:
             raise TransactionError(
                 "Session belongs to another asyncio task; open a separate ctx_session() in each task"
             )
+
+    def _check_database_operation(self) -> None:
+        self._check_owner()
+        if self._running_commit_hooks:
+            raise TransactionError("An on_commit callback must use a new session for database operations")
 
     @property
     def db_name(self) -> str:
@@ -96,13 +114,13 @@ class AsyncSession:
         # Return engine if no connection yet
         return get_database(self._db_name).engine
 
-    async def execute(self, statement: Any, parameters: Any = None) -> "CursorResult[Any]":
+    async def execute(self, statement: Any, parameters: Any = None) -> CursorResult[Any]:
         """Execute statement with automatic transaction management.
 
         Supports both SQLAlchemy statement objects and raw SQL strings.
         Raw SQL strings are automatically wrapped with text().
         """
-        self._check_owner()
+        self._check_database_operation()
         if self._rollback_only:
             raise TransactionError("Transaction failed; roll it back before executing more statements")
         if self.readonly and getattr(statement, "is_dml", False):
@@ -119,7 +137,11 @@ class AsyncSession:
             self._trans = await self._conn.begin()
 
         try:
-            result = await self._conn.execute(statement, parameters)
+            try:
+                result = await self._conn.execute(statement, parameters)
+            except Exception as e:
+                await self._handle_exception(e)
+                raise
 
             # Auto-commit for implicit sessions
             if self.auto_commit and not self._conn.in_nested_transaction():
@@ -133,9 +155,6 @@ class AsyncSession:
                 result = result.freeze()()
 
             return result  # type: ignore[return-value]
-        except Exception as e:
-            await self._handle_exception(e)
-            raise  # unreachable, _handle_exception always raises
         finally:
             # Auto-close connection for implicit sessions to prevent resource leaks
             # This covers both auto_commit write sessions and readonly sessions
@@ -151,7 +170,7 @@ class AsyncSession:
         Note: stream() is not supported with auto_commit=True sessions.
         Use explicit sessions (ctx_session) for streaming operations.
         """
-        self._check_owner()
+        self._check_database_operation()
         if self._rollback_only:
             raise TransactionError("Transaction failed; roll it back before executing more statements")
         if self.auto_commit:
@@ -176,16 +195,72 @@ class AsyncSession:
 
     async def commit(self):
         """Commit transaction if exists and not readonly."""
-        self._check_owner()
+        self._check_database_operation()
         if self._rollback_only:
             raise TransactionError("Cannot commit a failed transaction; roll it back")
-        if self._trans and not self.readonly:
-            await self._trans.commit()
-            self._trans = None
+        try:
+            if self._trans and not self.readonly:
+                await self._trans.commit()
+                self._trans = None
+        except BaseException:
+            self._commit_hooks.clear()
+            self._rollback_only = True
+            raise
+        self._savepoints.clear()
+        if self._commit_hooks:
+            hooks, self._commit_hooks = self._commit_hooks, []
+            # Return the connection first, including for pools with only one slot.
+            await self._release_connection()
+            await self._run_commit_hooks(hooks)
+
+    async def on_commit(self, callback: Callable[[], Any], *, robust: bool = False) -> None:
+        """Await a callback after commit, or immediately outside a write transaction.
+
+        Explicit writable sessions queue callbacks even before the first SQL
+        statement. Pass a callable, not an already-created coroutine. Rollback
+        discards callbacks; robust=True logs ordinary errors and continues.
+        """
+        self._check_owner()
+        if not callable(callback):
+            raise TypeError("on_commit requires a callable")
+        if self.readonly or self._rollback_only:
+            raise TransactionError("on_commit requires a writable, non-failed session")
+        hook = _CommitHook(callback, robust, tuple(self._savepoints))
+        if self._running_commit_hooks or (self.auto_commit and not self.in_transaction):
+            await self._run_commit_hook(hook)
+        else:
+            self._commit_hooks.append(hook)
+
+    @staticmethod
+    async def _run_commit_hook(hook: _CommitHook) -> None:
+        try:
+            result = hook.callback()
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            if not hook.robust:
+                raise
+            name = getattr(hook.callback, "__qualname__", type(hook.callback).__name__)
+            logger.exception("Error in on_commit callback %s", name)
+
+    async def _run_commit_hooks(self, hooks: list[_CommitHook]) -> None:
+        # ORM calls in a callback must not join a transaction that has just ended.
+        sessions = _explicit_sessions.get({}).copy()
+        sessions.pop(self.db_name, None)
+        token = _explicit_sessions.set(sessions)
+        self._running_commit_hooks = True
+        try:
+            for hook in hooks:
+                await self._run_commit_hook(hook)
+        finally:
+            self._running_commit_hooks = False
+            _explicit_sessions.reset(token)
 
     async def rollback(self):
         """Rollback transaction if exists and not readonly."""
-        self._check_owner()
+        self._check_database_operation()
+        self._commit_hooks.clear()
+        self._savepoints.clear()
         if self._trans and not self.readonly:
             await self._trans.rollback()
             self._trans = None
@@ -194,7 +269,7 @@ class AsyncSession:
     @asynccontextmanager
     async def transaction(self):
         """Join an explicit transaction, or own a transaction for a compound operation."""
-        self._check_owner()
+        self._check_database_operation()
         if self.readonly:
             raise TransactionError("A write transaction requires a writable session")
         if self.auto_commit:
@@ -207,7 +282,7 @@ class AsyncSession:
         """Close session and cleanup resources."""
         if self._closed:
             return
-        self._check_owner()
+        self._check_database_operation()
         try:
             await self._release_connection()
         finally:
@@ -216,6 +291,8 @@ class AsyncSession:
 
     async def _release_connection(self):
         """Release resources without ending a reusable implicit session's lifetime."""
+        self._commit_hooks.clear()
+        self._savepoints.clear()
         if self._trans:
             try:
                 await self._trans.rollback()
@@ -234,7 +311,7 @@ class AsyncSession:
 
     async def begin_nested(self):
         """Begin nested transaction (savepoint)."""
-        self._check_owner()
+        self._check_database_operation()
         if self._rollback_only or self.readonly:
             raise TransactionError("Cannot create a savepoint in a failed or readonly session")
         await self._ensure_connection()
@@ -248,11 +325,19 @@ class AsyncSession:
             driver = cast(Any, sync_connection.connection.driver_connection)
             if not driver.in_transaction:
                 await self._conn.exec_driver_sql("BEGIN")
-        return await self._conn.begin_nested()
+        savepoint = _SessionSavepoint(self, await self._conn.begin_nested())
+        self._savepoints.append(savepoint)
+        return savepoint
+
+    def _finish_savepoint(self, savepoint: _SessionSavepoint, *, rolled_back: bool) -> None:
+        if rolled_back:
+            self._commit_hooks = [hook for hook in self._commit_hooks if savepoint not in hook.savepoints]
+        if savepoint in self._savepoints:
+            del self._savepoints[self._savepoints.index(savepoint) :]
 
     async def _ensure_connection(self):
         """Ensure connection is available with health check."""
-        self._check_owner()
+        self._check_database_operation()
         if self._conn is None or self._conn.closed:
             engine = get_database(self._db_name).engine
             self._conn = await engine.connect()
@@ -280,7 +365,7 @@ class AsyncSession:
             raise convert_sqlalchemy_error(exc) from exc
         raise exc
 
-    async def __aenter__(self) -> "AsyncSession":
+    async def __aenter__(self) -> AsyncSession:
         """Async context manager entry."""
         self._check_owner()
         return self
@@ -302,12 +387,76 @@ class AsyncSession:
             if inspect.iscoroutinefunction(attribute):
 
                 async def guarded(*args, **kwargs):
-                    self._check_owner()
+                    self._check_database_operation()
                     return await attribute(*args, **kwargs)
 
                 return guarded
             return attribute
         raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+
+
+class _SessionSavepoint:
+    """A started savepoint that also tracks callback scope and task ownership."""
+
+    def __init__(self, session: AsyncSession, transaction: AsyncTransaction):
+        self._session = session
+        self._transaction = transaction
+
+    @property
+    def is_active(self) -> bool:
+        return self._transaction.is_active
+
+    @property
+    def is_valid(self) -> bool:
+        return self._transaction.is_valid
+
+    @property
+    def connection(self) -> AsyncConnection:
+        self._session._check_database_operation()
+        return self._transaction.connection
+
+    def _check_scope(self) -> None:
+        self._session._check_database_operation()
+        if self.is_active and (not self._session._savepoints or self._session._savepoints[-1] is not self):
+            raise TransactionError("Savepoints must be finished in reverse creation order")
+
+    async def commit(self) -> None:
+        self._check_scope()
+        try:
+            await self._transaction.commit()
+        except BaseException:
+            self._session._finish_savepoint(self, rolled_back=True)
+            self._session._rollback_only = True
+            raise
+        self._session._finish_savepoint(self, rolled_back=False)
+
+    async def rollback(self) -> None:
+        self._check_scope()
+        if not self.is_active:
+            return
+        try:
+            await self._transaction.rollback()
+        except BaseException:
+            self._session._rollback_only = True
+            raise
+        finally:
+            self._session._finish_savepoint(self, rolled_back=True)
+
+    async def close(self) -> None:
+        await self.rollback()
+
+    async def __aenter__(self) -> _SessionSavepoint:
+        self._session._check_database_operation()
+        if not self.is_active:
+            raise TransactionError("Savepoint is no longer active")
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        if self.is_active:
+            if exc_type is None:
+                await self.commit()
+            else:
+                await self.rollback()
 
 
 class _SessionContextManager:
@@ -359,7 +508,7 @@ class _SessionContextManager:
     @classmethod
     def set_session(
         cls, session: AsyncSession, db_name: str | None = None
-    ) -> contextvars.Token[dict[str, "AsyncSession"]]:
+    ) -> contextvars.Token[dict[str, AsyncSession]]:
         """Set active session in current context.
 
         Returns a Token that can be used with reset_session() to restore the
@@ -375,7 +524,7 @@ class _SessionContextManager:
         return _explicit_sessions.set(new_sessions)
 
     @classmethod
-    def reset_session(cls, token: contextvars.Token[dict[str, "AsyncSession"]]) -> None:
+    def reset_session(cls, token: contextvars.Token[dict[str, AsyncSession]]) -> None:
         """Restore ContextVar to a previous state using a token from set_session()."""
         _explicit_sessions.reset(token)
 
@@ -539,3 +688,10 @@ def has_session(db_name: str | None = None) -> bool:
         return name in explicit_sessions and explicit_sessions[name]._usable_in_current_task()
     except LookupError:
         return False
+
+
+async def on_commit(
+    callback: Callable[[], Any], db_or_session: str | AsyncSession | None = None, *, robust: bool = False
+) -> None:
+    """Register a callback on the selected writable session, or run it immediately."""
+    await get_session(db_or_session, readonly=False).on_commit(callback, robust=robust)

@@ -2,8 +2,9 @@
 
 The ORM uses SQLAlchemy Core for SQL and connection management. These contracts
 define the behavior of its model and QuerySet APIs. Regression coverage lives in
-`tests/integration/test_orm_contracts.py` and runs against SQLite, PostgreSQL and
-MySQL in CI.
+`tests/integration/test_orm_contracts.py` and
+`tests/integration/test_commit_callbacks.py`; both run against SQLite, PostgreSQL
+and MySQL in CI.
 
 ## Persisted and partial objects
 
@@ -90,6 +91,35 @@ Outside SQLite, explicit `select_for_update()` / `select_for_share()` reads requ
 an explicit transaction. Isolation-level serialization failures and deadlocks
 still need application-level retries.
 
+### Commit callbacks
+
+`await session.on_commit(callback)` queues a callable on an explicit writable
+session, even before its first statement. `await on_commit(callback)` selects the
+ambient session and executes immediately when no explicit transaction exists.
+`SignalContext.on_commit()` uses the operation's session, including an instance
+binding or a session passed to `save()`. Sync callbacks and awaitable return
+values run in registration order after successful root commit.
+
+Each callback retains its savepoint ancestry. Savepoint rollback removes its
+callbacks and those from released descendants; release alone never runs them.
+Root rollback, close or failed commit discards the entire queue. The savepoint
+wrapper starts exactly one physical SAVEPOINT for
+`async with await session.begin_nested()`, enforces task ownership and reverse
+completion order, and treats cleanup of an already released savepoint as a no-op.
+
+The committing connection is returned to the pool before dispatch. The committed
+database alias is temporarily removed from ambient sessions so callback queries
+use a fresh session, even with a one-connection pool. Explicit reuse of the
+committing session is rejected during dispatch. Callbacks cannot undo committed
+data: errors propagate and stop later callbacks unless `robust=True`, which logs
+ordinary exceptions and continues. Cancellation always propagates.
+
+Callbacks run inline and are not durable delivery. Use a transactional outbox for
+crash-safe effects. Multi-database contexts commit each database sequentially;
+callbacks do not provide a distributed commit boundary. These semantics follow
+[Django's commit callback contracts](https://docs.djangoproject.com/en/5.2/topics/db/transactions/#performing-actions-after-commit),
+with async callback support and explicit session ownership.
+
 ## Bulk results
 
 UPSERT processes every input row. When RETURNING can be matched by unique conflict
@@ -145,16 +175,16 @@ Local verification on 2026-10-08 used Python 3.12 and SQLAlchemy 2.0.44:
 
 | Database | Scope | Result |
 | --- | --- | --- |
-| SQLite | Unit and integration suite | 544 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
-| PostgreSQL 16 | Contracts, CRUD, relationships, deferred fields, bulk results and cascades | 180 passed. |
-| MySQL 8.4 | Contract suite with aiomysql and its RSA authentication extra | 53 passed. |
+| SQLite | Unit and integration suite | 574 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
+| PostgreSQL 16 | Contracts, commit callbacks, CRUD, relationships, deferred fields, bulk results, cascades and signals | 218 passed. |
+| MySQL 8.4 | Contracts and commit callbacks with aiomysql and its RSA authentication extra | 83 passed. |
 
 Ruff lint and formatting passed. Pyright reported zero errors and three existing
 unnecessary-ignore warnings. SQLite retains two existing DISTINCT ON dialect
 warnings. The workflow definitions were checked locally; hosted CI results will
 be available after the changes are pushed.
 
-Further work from the ORM review includes commit callbacks, Alembic examples,
+Further work from the ORM review includes Alembic examples,
 unified query instrumentation, realistic
 performance benchmarks and broader driver/version coverage. These are separate
 from the persistence and query corrections described here.

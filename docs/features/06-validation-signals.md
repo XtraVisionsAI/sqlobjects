@@ -446,6 +446,37 @@ user, created = await User.objects.update_or_create(
 # If created: before_save → before_create → after_save → after_create
 ```
 
+### Effects After Transaction Commit
+
+`after_save` and `after_create` run after the SQL operation and can run before
+the surrounding transaction commits. Defer external effects with
+`await context.on_commit(callback)`, which uses the operation's database/session.
+
+```python
+from functools import partial
+from sqlobjects.session import ctx_session
+
+class User(ObjectModel):
+    async def after_save(self, context: SignalContext):
+        await context.on_commit(partial(invalidate_user_cache, self.id))
+
+    async def after_create(self, context: SignalContext):
+        await context.on_commit(partial(notify_user_created, self.id), robust=True)
+
+async with ctx_session():
+    user = User(username="alice")
+    await user.save()
+    # External effects wait until commit; rollback discards them.
+```
+
+Pass a callable, not a coroutine object. Capture the values the callback needs at
+registration time. Callback errors cannot roll back a committed transaction;
+`robust=True` logs ordinary errors and continues to later callbacks. Without an
+explicit transaction, registration executes immediately, so callbacks registered
+from a `before_*` signal require an enclosing `ctx_session()` to defer the effect.
+Database updates that must be atomic with the original operation belong inside
+its transaction, not in an after-commit callback.
+
 ## Advanced Validation Patterns
 
 ### Conditional Validation
@@ -569,11 +600,12 @@ class User(ObjectModel):
 
     # === Cache management ===
     async def after_update(self, context: SignalContext):
-        cache.delete(f"user:{self.id}")
+        key = f"user:{self.id}"
+        await context.on_commit(lambda: cache.delete(key))
 
     # === Notifications ===
     async def after_create(self, context: SignalContext):
-        await self.send_welcome_email()
+        await context.on_commit(self.send_welcome_email)
 ```
 
 ### Error Handling
@@ -582,19 +614,13 @@ class User(ObjectModel):
 # Graceful error handling in signals
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext
-import logging
-
-logger = logging.getLogger(__name__)
 
 class User(ObjectModel):
     async def after_create(self, context: SignalContext):
-        try:
-            # Non-critical operations
-            await self.send_welcome_email()
-            await self.create_default_preferences()
-        except Exception as e:
-            # Log but don't fail the transaction
-            logger.error(f"Post-creation tasks failed for user {self.id}: {e}")
+        # Related database changes remain in the current transaction.
+        await self.create_default_preferences()
+        # A notification failure is logged after commit and does not undo it.
+        await context.on_commit(self.send_welcome_email, robust=True)
 
     async def before_save(self, context: SignalContext):
         # Critical validation - let exceptions bubble up

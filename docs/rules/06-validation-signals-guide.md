@@ -10,6 +10,22 @@
 
 ## Common Usage
 
+### Commit callbacks
+
+- `after_*` signals describe operation completion, not transaction commit.
+- Use `await context.on_commit(callback)` for external effects from an instance
+  signal, or `await session.on_commit(callback)` / `await on_commit(callback)`
+  from `sqlobjects.session` in application code.
+- Pass a callable. Sync functions and awaitable return values run inline after
+  successful commit, in registration order. Rollback discards pending callbacks,
+  including those registered in a rolled-back savepoint.
+- Outside a transaction registration executes immediately. Registering from
+  `before_*` therefore requires an explicit surrounding write transaction.
+- `robust=True` logs ordinary callback errors and continues. Callback errors never
+  undo an already committed transaction; cancellation is not swallowed.
+- Open a new session for database work in callbacks. Use an outbox if delivery
+  must survive a process crash between commit and callback execution.
+
 ### Field-level Validation
 
 ```python

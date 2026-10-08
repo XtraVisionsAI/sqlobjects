@@ -121,6 +121,10 @@ class SignalContext:
         """
         return self.instance is not None
 
+    async def on_commit(self, callback: Callable[[], Any], *, robust: bool = False) -> None:
+        """Defer an effect until this signal's database transaction commits."""
+        await self.session.on_commit(callback, robust=robust)
+
 
 class SignalMixin:
     """Mixin class that provides signal handling capabilities to model classes.
@@ -225,11 +229,13 @@ def emit_signals(operation: Operation, is_bulk: bool = False):
     """
 
     def decorator(func: F) -> F:
+        signature = inspect.signature(func)
+
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
             # Extract self/cls and session from arguments
             self_or_cls = args[0]
-            session = _extract_session(self_or_cls, kwargs)
+            session = _extract_session(self_or_cls, dict(signature.bind_partial(*args, **kwargs).arguments))
 
             # Create signal context with original operation
             context = _create_signal_context(
@@ -294,8 +300,11 @@ def _extract_session(self_or_cls, kwargs) -> Any:
         Database session for the operation
     """
     # Try to get session from kwargs first
-    if "session" in kwargs:
+    if kwargs.get("session") is not None:
         return kwargs["session"]
+
+    if hasattr(self_or_cls, "get_session"):
+        return self_or_cls.get_session(readonly=False)
 
     # Try to get session from instance/class - support both property and method
     if hasattr(self_or_cls, "_session"):
@@ -303,10 +312,10 @@ def _extract_session(self_or_cls, kwargs) -> Any:
         # Handle both property and method cases
         return session_attr() if callable(session_attr) else session_attr
     elif hasattr(self_or_cls, "_get_session"):
-        return self_or_cls._get_session()  # noqa
+        return self_or_cls._get_session(readonly=False)  # noqa
 
     # Fallback to default session
-    return get_session()
+    return get_session(readonly=False)
 
 
 def _create_signal_context(operation: Operation, session, self_or_cls, is_bulk: bool, kwargs: dict) -> SignalContext:
