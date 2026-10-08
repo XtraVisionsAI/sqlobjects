@@ -1,3 +1,24 @@
+## 2.1.0 (2026-10-08)
+
+### Feat
+
+- **queries**: support aggregation over grouped querysets
+- **relations**: implement scoped async dynamic collections
+- **migrations**: add async Alembic integration and isolated registries
+- **logging**: observe SQL execution across database engines
+- **session**: add transaction commit callbacks
+
+### Fix
+
+- **orm**: close review follow-ups in sessions, upsert attribution and dynamic proxies
+- **metadata**: preserve distinct index definitions during deduplication
+- **metadata**: generate portable collision-safe schema names
+- **queries**: preserve composed queryset aggregation semantics
+- **database**: align event registration with SQLAlchemy Core
+- **orm**: preserve distinct semantics and transaction-bound signals
+- **session**: enforce task ownership and cancellation cleanup
+- **orm**: enforce persistence and transaction contracts
+
 ## 2.0.1 (2026-08-31)
 
 ### Fix
