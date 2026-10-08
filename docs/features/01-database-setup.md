@@ -221,34 +221,73 @@ survive a process crash after commit.
 
 ## Database Events
 
-### Connection Events
+`db.on(name, **options)` registers a synchronous listener on that database's
+`engine.sync_engine`. Names, callback arguments and options follow SQLAlchemy's
+[Engine, Pool and Dialect events](https://docs.sqlalchemy.org/en/20/core/events.html).
+Register listeners before opening the connections they should observe.
+
+### Connection and Transaction Events
 
 ```python
-# Register database events
 @db.on("connect")
-def on_connect(conn, record):
+def on_connect(dbapi_connection, connection_record):
     print("Database connected")
 
-@db.on("before_commit")
-def before_commit(session):
+@db.on("commit")
+def committing(connection):
     print("About to commit transaction")
 
-@db.on("after_commit")
-def after_commit(session):
-    print("Transaction committed")
+@db.on("rollback")
+def rolling_back(connection):
+    print("About to roll back transaction")
+
+@db.on("reset")
+def resetting(dbapi_connection, connection_record, reset_state):
+    # SQLAlchemy 2.x pool-reset signature includes reset_state.
+    pass
 ```
 
-### SQLAlchemy Events
+Connection events such as `commit` receive a SQLAlchemy synchronous `Connection`;
+pool events such as `connect` receive an adapted DBAPI connection. Neither is a
+SQLObjects session. These handlers run synchronously inside SQLAlchemy's async
+adaptation layer. Coroutine functions, async callable objects and async-generator
+functions are rejected at registration. A synchronous handler must not return an
+awaitable. See [SQLAlchemy's async event guidance](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html#using-events-with-the-asyncio-extension)
+for driver-specific async setup via an adapted connection's `run_async()`.
+
+`commit` and `rollback` intercept attempts, before the driver completes the
+operation. A `commit` event can fire even if the commit subsequently fails.
+`before_commit`, `after_commit`, `before_rollback` and `after_rollback` are not
+Engine events; `db.on()` rejects them with guidance. The old examples using these
+names were invalid. For effects after a successful commit, use:
+
+```python
+from sqlobjects.session import ctx_session
+
+async with ctx_session() as session:
+    await User.objects.using(session).create(username="alice")
+    await session.on_commit(lambda: print("Transaction committed"))
+```
+
+### Listener Options and Removal
 
 ```python
 from sqlalchemy import event
 
-# Register SQLAlchemy events directly
-@event.listens_for(db.engine.sync_engine, "connect")
-def setup_connection(dbapi_connection, connection_record):
-    # Configure connection settings
-    pass
+@db.on("before_cursor_execute", named=True, retval=True)
+def annotate_statement(statement, parameters, **kwargs):
+    return statement + " /* application */", parameters
+
+# The decorator preserves the callable, so native removal works.
+event.remove(db.engine.sync_engine, "before_cursor_execute", annotate_statement)
 ```
+
+Options are forwarded to `sqlalchemy.event.listen`; their availability and return
+contracts depend on the event. Unknown names and invalid options use SQLAlchemy's
+validation. Listener exceptions propagate according to SQLAlchemy's event rules;
+they are not handled by the SQL logger's error-isolation policy. Listeners belong
+to one engine and do not observe other database aliases. Direct
+`event.listens_for(db.engine.sync_engine, name)` registration remains available.
 
 ## Connection Lifecycle
 

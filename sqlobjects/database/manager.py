@@ -1,7 +1,9 @@
-from collections.abc import Mapping
+import inspect
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, TypeVar
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from ..sql_logging import _install_query_logging
@@ -20,6 +22,9 @@ __all__ = [
     "get_default",
     "get_database",
 ]
+
+
+_EventListener = TypeVar("_EventListener", bound=Callable[..., Any])
 
 
 @dataclass(init=False)
@@ -134,48 +139,54 @@ class Database:
         self.engine: AsyncEngine = create_async_engine(config.url, **engine_kwargs)
         _install_query_logging(self.engine.sync_engine, name)
 
-    def on(
-        self,
-        event_name: Literal[
-            "connect",
-            "close",
-            "begin",
-            "commit",
-            "rollback",
-            "before_commit",
-            "before_rollback",
-            "after_commit",
-            "after_rollback",
-            "checkout",
-            "checkin",
-            "invalidate",
-            "soft_invalidate",
-            "close_detached",
-        ],
-    ):
-        """Unified event registration method
+    def on(self, event_name: str, **options: Any) -> Callable[[_EventListener], _EventListener]:
+        """Register a synchronous SQLAlchemy Engine, Pool or Dialect listener.
+
+        Listeners target this database's ``engine.sync_engine`` and receive
+        SQLAlchemy's native arguments. They must not return an awaitable.
+        The ``commit`` event runs before the driver commits; use
+        ``await session.on_commit(callback)`` for effects after successful commit.
 
         Args:
-            event_name: Event name (connect, close, before_commit, etc.)
+            event_name: Native SQLAlchemy event name, such as ``connect``,
+                ``commit``, ``before_cursor_execute`` or ``handle_error``.
+            **options: Options forwarded to ``sqlalchemy.event.listen``,
+                such as ``named=True`` or ``retval=True`` where supported.
 
         Returns:
-            SQLAlchemy event listener decorator
+            A decorator that registers and returns the original callable.
+
+        Raises:
+            ValueError: For transaction event names that are not Engine events.
+            TypeError: For coroutine or async-generator listener functions.
+            sqlalchemy.exc.InvalidRequestError: For unknown native event names.
 
         Examples:
             >>> @db.on("connect")
             ... def on_connect(conn, record):
             ...     print("Database connected")
 
-            >>> @db.on("before_commit")
-            ... def before_commit(conn):
+            >>> @db.on("commit")
+            ... def committing(conn):
             ...     print("About to commit transaction")
         """
-        from sqlalchemy import event
+        unsupported = {
+            "before_commit": "Use db.on('commit') to intercept a commit attempt.",
+            "before_rollback": "Use db.on('rollback') to intercept a rollback attempt.",
+            "after_commit": "Use await session.on_commit(callback) for effects after a successful commit.",
+            "after_rollback": "Use db.on('rollback') for rollback attempts; it is not an after-rollback hook.",
+        }
+        if event_name in unsupported:
+            raise ValueError(f"{event_name!r} is not an Engine event. {unsupported[event_name]}")
 
-        # Automatically select event target
-        target = self.engine.sync_engine
+        def register(listener: _EventListener) -> _EventListener:
+            callbacks = (listener, listener.__call__)
+            if any(inspect.iscoroutinefunction(fn) or inspect.isasyncgenfunction(fn) for fn in callbacks):
+                raise TypeError("Database event listeners must be synchronous; SQLAlchemy does not await them")
+            event.listen(self.engine.sync_engine, event_name, listener, **options)
+            return listener
 
-        return event.listens_for(target, event_name)
+        return register
 
     async def create_tables(self, base_class, tables: list[type] | None = None) -> None:
         """Create tables defined in the model registry of SQLObjects base class

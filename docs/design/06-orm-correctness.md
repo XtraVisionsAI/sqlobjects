@@ -3,8 +3,9 @@
 The ORM uses SQLAlchemy Core for SQL and connection management. These contracts
 define the behavior of its model and QuerySet APIs. Regression coverage lives in
 `tests/integration/test_orm_contracts.py`, `test_commit_callbacks.py`,
-`test_query_logging_contracts.py`, `test_distinct_contracts.py` and
-`test_signal_contracts.py`. These run against SQLite, PostgreSQL and MySQL in CI.
+`test_query_logging_contracts.py`, `test_distinct_contracts.py`,
+`test_signal_contracts.py` and `test_database_events.py`. These run against SQLite,
+PostgreSQL and MySQL in CI.
 
 ## Persisted and partial objects
 
@@ -219,6 +220,32 @@ implemented using the underlying
 [SQLAlchemy dialect and connection events](https://docs.sqlalchemy.org/en/20/core/events.html)
 so every ORM entry point shares the same recording path.
 
+## Database event registration
+
+`db.on(name, **options)` registers native SQLAlchemy Engine, Pool and Dialect
+listeners on the selected database's `engine.sync_engine`. The decorator retains
+the listener's identity and signature, forwards options such as `named` and
+`retval`, and supports removal with `sqlalchemy.event.remove`. Unknown names and
+invalid options retain SQLAlchemy's validation. Listeners are scoped to one
+engine; register before opening connections that should observe them.
+
+SQLAlchemy events run synchronously even with async drivers. Coroutine functions,
+async callable objects and async-generator functions are rejected at registration;
+ordinary synchronous listeners must not return awaitables. Native connection and
+pool callback arguments are passed through, including SQLAlchemy 2.x's third
+`reset_state` argument for pool reset. Listener exceptions follow SQLAlchemy's
+event rules, independently of the SQL logger's handler-error isolation.
+
+The previously advertised `before_commit`, `after_commit`, `before_rollback` and
+`after_rollback` names do not belong to Engine events and now produce actionable
+errors. `commit` and `rollback` intercept attempts before the driver completes
+them; they cannot confirm success. For effects after a successful transaction,
+use `await session.on_commit(callback)`. Tests verify event/driver/callback order
+and callback suppression when either an event listener or the driver commit fails.
+
+See the [event usage guide](../features/01-database-setup.md#database-events) and
+[SQLAlchemy's async event contracts](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html#using-events-with-the-asyncio-extension).
+
 ## Schema migrations
 
 An explicit `__registry__ = ModelRegistry(...)` on a model or abstract base is
@@ -252,9 +279,9 @@ Local verification on 2026-10-08 used Python 3.12, SQLAlchemy 2.0.44 and Alembic
 
 | Database | Scope | Result |
 | --- | --- | --- |
-| SQLite | Unit and integration suite | 650 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
-| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, CRUD, relationships, deferred fields, bulk results, cascades and signals | 288 passed. |
-| MySQL 8.4 | Contracts, commit callbacks, query logging, migrations, DISTINCT and signal contracts with aiomysql and its RSA authentication extra | 152 passed; one executemany RETURNING test skipped because this backend does not support it. |
+| SQLite | Unit and integration suite | 667 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
+| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events, CRUD, relationships, deferred fields, bulk results, cascades and signals | 305 passed. |
+| MySQL 8.4 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts and database events with aiomysql and its RSA authentication extra | 169 passed; one executemany RETURNING test skipped because this backend does not support it. |
 
 The 10 migration integration tests also pass with Alembic 1.16.5 on SQLite.
 
@@ -263,7 +290,7 @@ unnecessary-ignore warnings. SQLite no longer emits DISTINCT ON dialect warnings
 The workflow definitions were checked locally; hosted CI results will
 be available after the changes are pushed.
 
-Further work from the ORM review includes database event API alignment, dynamic
-relationship queries, aggregation over composed queries, realistic performance
-benchmarks, batched data-migration tooling and broader driver/version coverage.
+Further work from the ORM review includes dynamic relationship queries, aggregation
+over composed queries, realistic performance benchmarks, batched data-migration
+tooling and broader driver/version coverage.
 These are separate from the persistence and query corrections described here.

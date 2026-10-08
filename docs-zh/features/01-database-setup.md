@@ -163,34 +163,68 @@ await asyncio.gather(*tasks, return_exceptions=True)
 
 ## 数据库事件
 
-### 连接事件
+`db.on(name, **options)` 将同步处理器注册到当前数据库的 `engine.sync_engine`。
+事件名称、参数和注册选项遵循 SQLAlchemy 的
+[Engine、Pool 和 Dialect 事件接口](https://docs.sqlalchemy.org/en/20/core/events.html)。
+应在建立需要监听的连接之前注册处理器。
+
+### 连接与事务事件
 
 ```python
-# 注册数据库事件
 @db.on("connect")
-def on_connect(conn, record):
+def on_connect(dbapi_connection, connection_record):
     print("数据库已连接")
 
-@db.on("before_commit")
-def before_commit(session):
+@db.on("commit")
+def committing(connection):
     print("即将提交事务")
 
-@db.on("after_commit")
-def after_commit(session):
-    print("事务已提交")
+@db.on("rollback")
+def rolling_back(connection):
+    print("即将回滚事务")
+
+@db.on("reset")
+def resetting(dbapi_connection, connection_record, reset_state):
+    # SQLAlchemy 2.x 的连接池 reset 事件包含 reset_state 参数。
+    pass
 ```
 
-### SQLAlchemy 事件
+`commit` 等连接事件接收 SQLAlchemy 同步 `Connection`；`connect` 等连接池事件
+接收适配后的 DBAPI 连接，都不是 SQLObjects session。处理器在 SQLAlchemy 的异步
+适配层中同步执行；注册协程函数、异步可调用对象或异步生成器函数时会抛出 `TypeError`。
+同步处理器也不能返回协程。需要异步驱动初始化时，可参考
+[SQLAlchemy 异步事件文档](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html#using-events-with-the-asyncio-extension)
+中的适配连接 `run_async()`。
+
+`commit`、`rollback` 在驱动完成操作之前触发，不能证明事务已经提交或回滚。
+`before_commit`、`after_commit`、`before_rollback`、`after_rollback` 不是 Engine
+事件，旧示例中的这些用法无效，现在会给出明确错误提示。成功提交后的操作请使用：
+
+```python
+from sqlobjects.session import ctx_session
+
+async with ctx_session() as session:
+    await User.objects.using(session).create(username="alice")
+    await session.on_commit(lambda: print("事务已提交"))
+```
+
+### 注册选项与移除监听器
 
 ```python
 from sqlalchemy import event
 
-# 直接注册 SQLAlchemy 事件
-@event.listens_for(db.engine.sync_engine, "connect")
-def setup_connection(dbapi_connection, connection_record):
-    # 配置连接设置
-    pass
+@db.on("before_cursor_execute", named=True, retval=True)
+def annotate_statement(statement, parameters, **kwargs):
+    return statement + " /* application */", parameters
+
+# 装饰器保留原函数，可使用 SQLAlchemy 原生接口移除。
+event.remove(db.engine.sync_engine, "before_cursor_execute", annotate_statement)
 ```
+
+选项直接传给 `sqlalchemy.event.listen`，支持范围和返回值约定取决于具体事件。
+未知事件与无效选项由 SQLAlchemy 校验。处理器异常遵循原生事件规则传播，不适用
+SQL 日志处理器的异常隔离策略。监听器仅绑定当前 engine，不会监听其他数据库别名。
+也可以直接使用 `event.listens_for(db.engine.sync_engine, name)` 注册事件。
 
 ## 连接生命周期
 

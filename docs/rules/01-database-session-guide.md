@@ -88,6 +88,22 @@ if has_session("analytics"):
 
 ## Best Practices
 
+### Database Events
+
+- `db.on(name, **options)` targets that database's `engine.sync_engine`, with native
+  SQLAlchemy Engine/Pool/Dialect event names and callback arguments.
+- Handlers must be synchronous and must not return awaitables. Declared async
+  functions, callable objects and async generators are rejected at registration.
+- `commit` and `rollback` run before the driver completes the operation. Use
+  `await session.on_commit(callback)` for effects after successful commit.
+- `before_commit`, `after_commit`, `before_rollback` and `after_rollback` are not
+  Engine events and are rejected; do not register them through `db.on()`.
+- Pass native listener options such as `named=True` or `retval=True` where the
+  event supports them. Remove a listener with
+  `sqlalchemy.event.remove(db.engine.sync_engine, name, handler)`.
+- Register before opening connections. Listener failures follow SQLAlchemy's
+  propagation rules. See the [event guide](../features/01-database-setup.md#database-events).
+
 ### Async task ownership
 
 - Open a separate `ctx_session()` inside each `asyncio.gather()` / `create_task()` worker.
