@@ -143,22 +143,12 @@ class BulkTransactionManager:
 
     async def execute_batch(self, operation_func: Callable, batch_data: Any) -> Any:
         """Execute batch operation with appropriate transaction control."""
-        if self.mode == TransactionMode.INDEPENDENT:
-            async with ctx_session() as new_session:
+        if self.mode == TransactionMode.BATCH:
+            async with ctx_session(self.session.db_name) as new_session:
                 return await operation_func(new_session, batch_data)
-        elif self.mode == TransactionMode.BATCH:
-            # For BATCH mode, use the existing session without creating new transaction
-            # The session should handle its own transaction boundaries
-            return await operation_func(self.session, batch_data)
         elif self.mode == TransactionMode.SAVEPOINT:
-            savepoint = await self.session.begin_nested()
-            try:
-                result = await operation_func(self.session, batch_data)
-                await savepoint.commit()
-                return result
-            except Exception:
-                await savepoint.rollback()
-                raise
+            async with await self.session.begin_nested():
+                return await operation_func(self.session, batch_data)
         else:  # INHERIT
             return await operation_func(self.session, batch_data)
 
@@ -173,6 +163,7 @@ class BulkOperationHandler:
         self.dialect = session.bind.dialect
         self.transaction_manager = BulkTransactionManager(session, transaction_mode)
         self._current_return_fields: list[str] | None = None
+        self.accurate_count = True
 
     async def execute_bulk_operation(
         self,
@@ -183,6 +174,21 @@ class BulkOperationHandler:
         on_error: ErrorHandling,
     ):
         """Execute bulk operation with unified batch processing logic."""
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        if transaction_mode == TransactionMode.INDEPENDENT:
+            async with ctx_session(self.session.db_name) as transaction:
+                handler = BulkOperationHandler(transaction, self.table, self.model_class, TransactionMode.INHERIT)
+                return await handler.execute_bulk_operation(
+                    data, batch_size, operation_func, TransactionMode.INHERIT, on_error
+                )
+        if transaction_mode != TransactionMode.BATCH and self.session.auto_commit:
+            async with self.session.transaction() as transaction:
+                handler = BulkOperationHandler(transaction, self.table, self.model_class, transaction_mode)
+                return await handler.execute_bulk_operation(
+                    data, batch_size, operation_func, transaction_mode, on_error
+                )
+
         all_successful_objects = []
         all_failed_records = []
         total_success_count = 0
@@ -195,12 +201,12 @@ class BulkOperationHandler:
             batch_count += 1
 
             try:
-                if transaction_mode == TransactionMode.BATCH:
-                    successful_objects, success_count, failed_records = await self.transaction_manager.execute_batch(
-                        operation_func, batch
-                    )
-                else:
-                    successful_objects, success_count, failed_records = await operation_func(self.session, batch)
+                successful_objects, success_count, failed_records = await self.transaction_manager.execute_batch(
+                    operation_func, batch
+                )
+                for failed in failed_records:
+                    failed.index += i
+                    failed.batch_index = batch_count - 1
 
                 all_successful_objects.extend(successful_objects)
                 total_success_count += success_count
@@ -208,6 +214,7 @@ class BulkOperationHandler:
 
             except Exception as e:
                 failed_batches += 1
+                rollback_count += 1
                 if on_error == ErrorHandling.FAIL_FAST:
                     raise
                 elif on_error == ErrorHandling.IGNORE:
@@ -271,7 +278,11 @@ class BulkOperationHandler:
 
     def create_objects_from_rows(self, rows, return_fields: list[str] | None = None) -> list:
         """Create model objects or dictionaries from database rows using ResultProcessor."""
-        return ResultProcessor.rows_to_objects(rows, self.model_class, return_fields)
+        objects = ResultProcessor.rows_to_objects(rows, self.model_class, return_fields)
+        for obj in objects:
+            if not isinstance(obj, dict):
+                obj.using(self.session.db_name)
+        return objects
 
     async def execute_with_returning(
         self,
@@ -300,7 +311,7 @@ class BulkOperationHandler:
             else:
                 result = await exec_session.execute(stmt_with_returning)
             objects = self.create_objects_from_rows(result.fetchall(), return_fields)
-            return objects, result.rowcount or 0, True
+            return objects, len(objects), True
 
         # Regular execution without RETURNING
         if parameters is not None and isinstance(parameters, list) and len(parameters) > 1:
@@ -312,7 +323,11 @@ class BulkOperationHandler:
 
         # Handle rowcount: -1 means unknown, use parameter count as fallback
         rowcount = result.rowcount if result.rowcount >= 0 else 0  # noqa
-        if rowcount == 0 and isinstance(parameters, list):
+        if (
+            result.rowcount < 0
+            and isinstance(parameters, list)
+            and (operation == "insert" or (operation == "update" and not self.accurate_count))
+        ):
             # For INSERT/UPDATE without proper rowcount, use parameter count
             rowcount = len(parameters)
 
@@ -354,48 +369,37 @@ class BulkOperationHandler:
             successful_objects, success_count = await self._execute_batch_operation(
                 stmt, operation, data_batch, return_columns, exec_session
             )
-        elif error_handling == ErrorHandling.IGNORE:
-            # IGNORE: Process individually to skip errors
-            for _, data in enumerate(data_batch):
-                try:
-                    single_stmt = stmt.values([data]) if hasattr(stmt, "values") else stmt
-                    if return_columns and self.supports_returning(operation):
-                        single_stmt = single_stmt.returning(*return_columns)
-                        result = await exec_session.execute(single_stmt)
-                        rows = result.fetchall()
-                        if rows:
-                            current_return_fields = getattr(self, "_current_return_fields", None)
-                            successful_objects.extend(self.create_objects_from_rows(rows, current_return_fields))
-                            success_count += 1
-                    else:
-                        result = await exec_session.execute(single_stmt)
-                        if result.rowcount > 0:  # noqa
-                            success_count += 1
-                except Exception:  # noqa
-                    # Silently ignore errors
-                    pass
-
-        elif error_handling == ErrorHandling.COLLECT:
-            # Process individually to collect detailed errors
+        else:
+            # Each recoverable error is isolated from successful rows and the outer transaction.
             for i, data in enumerate(data_batch):
                 try:
-                    single_stmt = stmt.values([data]) if hasattr(stmt, "values") else stmt
-                    if return_columns and self.supports_returning(operation):
-                        single_stmt = single_stmt.returning(*return_columns)
-                        result = await exec_session.execute(single_stmt)
-                        rows = result.fetchall()
-                        if rows:
-                            current_return_fields = getattr(self, "_current_return_fields", None)
-                            successful_objects.extend(self.create_objects_from_rows(rows, current_return_fields))
-                            success_count += 1
-                    else:
-                        result = await exec_session.execute(single_stmt)
-                        if result.rowcount > 0:  # noqa
-                            success_count += 1
-                except Exception as e:
-                    failed_records.append(FailedRecord(i, data, e, _get_error_code(e)))
+                    async with await exec_session.begin_nested():
+                        objects, count = await self._execute_batch_operation(
+                            stmt, operation, [data], return_columns, exec_session
+                        )
+                    successful_objects.extend(objects)
+                    success_count += count
+                except Exception as error:
+                    if error_handling == ErrorHandling.COLLECT:
+                        failed_records.append(FailedRecord(i, data, error, _get_error_code(error)))
 
         return successful_objects, success_count, failed_records
+
+    async def execute_upsert(self, data_batch, resolution, match_fields, on_error, session):
+        """Apply the same recoverable-error boundaries to conflict-aware writes."""
+        handler = UpsertHandler(session)
+        if on_error == ErrorHandling.FAIL_FAST:
+            return await handler.execute_upsert_with_returning(self.table, data_batch, resolution, match_fields), []
+        rows, failures = [], []
+        for index, data in enumerate(data_batch):
+            try:
+                async with await session.begin_nested():
+                    stored = await handler.execute_upsert_with_returning(self.table, [data], resolution, match_fields)
+                rows.extend(stored)
+            except Exception as error:
+                if on_error == ErrorHandling.COLLECT:
+                    failures.append(FailedRecord(index, data, error, _get_error_code(error)))
+        return rows, failures
 
     async def handle_insert_fallback(self, insert_result, return_columns, session: AsyncSession | None = None):
         """Handle INSERT fallback for single record."""
@@ -403,9 +407,9 @@ class BulkOperationHandler:
         if hasattr(insert_result, "inserted_primary_key") and insert_result.inserted_primary_key:
             pk_columns = list(self.table.primary_key.columns)
             if pk_columns:
-                pk_col = pk_columns[0]
-                pk_value = insert_result.inserted_primary_key[0]
-                select_stmt = select(*return_columns).where(pk_col == pk_value)  # noqa
+                select_stmt = select(*return_columns).where(
+                    *(col == value for col, value in zip(pk_columns, insert_result.inserted_primary_key, strict=True))
+                )
                 result = await exec_session.execute(select_stmt)
                 current_return_fields = getattr(self, "_current_return_fields", None)
                 return self.create_objects_from_rows(result.fetchall(), current_return_fields)
@@ -420,131 +424,49 @@ class BulkOperationHandler:
         current_return_fields = getattr(self, "_current_return_fields", None)
         return self.create_objects_from_rows(rows, current_return_fields)
 
-    async def _handle_insert_fallback_batch(
-        self, data_batch: list, return_columns, session: AsyncSession | None = None
-    ):
-        """Handle INSERT fallback for batch operations to get accurate data including DB-generated fields."""
-        exec_session = session or self.session
-        objects = []
-
-        # For each inserted record, try to find it in the database
-        # This is expensive but ensures data accuracy
-        for data in data_batch:
-            # Build WHERE conditions based on the input data to find the inserted record
-            where_conditions = []
-            for key, value in data.items():
-                if key in self.table.columns and value is not None:
-                    where_conditions.append(self.table.c[key] == value)
-
-            if where_conditions:
-                # Try to find the record using the input data
-                select_stmt = select(*return_columns).where(*where_conditions)
-                result = await exec_session.execute(select_stmt)
-                rows = result.fetchall()
-
-                if rows:
-                    # Take the first match (there might be multiple if data isn't unique)
-                    current_return_fields = getattr(self, "_current_return_fields", None)
-                    objects.extend(self.create_objects_from_rows([rows[0]], current_return_fields))
-                else:
-                    # Fallback: create object from input data (missing DB-generated fields)
-                    objects.append(self.model_class.from_dict(data, validate=False))
-            else:
-                # No usable WHERE conditions, fallback to input data
-                objects.append(self.model_class.from_dict(data, validate=False))
-
-        return objects
-
     async def _execute_batch_operation(
         self, stmt, operation: str, data_batch: list, return_columns, session: AsyncSession
     ) -> tuple[list, int]:
         """Execute batch operation with unified logic for FAIL_FAST and IGNORE modes."""
-        # For UPDATE operations without RETURNING support, use fallback strategy
-        if operation == "update" and return_columns and not self.supports_returning(operation):
+        if operation == "update" and (
+            return_columns or (self.accurate_count and not self.dialect.supports_sane_multi_rowcount)
+        ):
             return await self._handle_update_without_returning(stmt, data_batch, return_columns, session)
-        else:
-            # Use unified execute_with_returning for consistent behavior
-            current_return_fields = getattr(self, "_current_return_fields", None)
-            successful_objects, success_count, used_returning = await self.execute_with_returning(
-                stmt, operation, return_columns, data_batch, session, current_return_fields
-            )
-            # Handle fallback for operations without RETURNING support
-            if return_columns and not used_returning and success_count > 0:
-                successful_objects = await self._handle_fallback_without_returning(
-                    operation, data_batch, return_columns, success_count, session
-                )
-            return successful_objects, success_count
+        if operation == "insert" and return_columns and not self.supports_returning(operation):
+            objects = []
+            for data in data_batch:
+                result = await session.execute(stmt, data)
+                objects.extend(await self.handle_insert_fallback(result, return_columns, session))
+            return objects, len(objects)
+        current_return_fields = self._current_return_fields
+        objects, count, _ = await self.execute_with_returning(
+            stmt, operation, return_columns, data_batch, session, current_return_fields
+        )
+        return objects, count
 
     async def _handle_update_without_returning(
         self, stmt, data_batch: list, return_columns, session: AsyncSession
     ) -> tuple[list, int]:
-        """Handle UPDATE operations without RETURNING support."""
-        # Execute update first
-        result = await session.execute(stmt, data_batch)
-        success_count = result.rowcount
-
-        # If rowcount is -1 (unknown), execute individually to get accurate count
-        if success_count < 0:  # noqa
-            success_count = 0
-            for data in data_batch:
-                individual_result = await session.execute(stmt, [data])
-                if individual_result.rowcount > 0:  # noqa
-                    success_count += individual_result.rowcount
-
-        # If successful, create objects with merged data
-        if success_count > 0:
-            successful_objects = []
-            for data in data_batch[:success_count]:
-                # Create object with merged data (input data takes precedence)
-                obj_data = {}
-                # Add all fields from return_columns with None as default
-                for col in return_columns:
-                    obj_data[col.name] = None
-
-                # For UPDATE operations, convert parameter names back to field names
-                for key, value in data.items():
-                    if key.startswith("match::"):
-                        field_name = key[7:]  # Remove "match::" prefix
-                        obj_data[field_name] = value
-                    elif key.startswith("update::"):
-                        field_name = key[8:]  # Remove "update::" prefix
-                        obj_data[field_name] = value
-                    else:
-                        obj_data[key] = value
-
-                current_return_fields = getattr(self, "_current_return_fields", None)
-                if current_return_fields:
-                    # Return only requested fields as dict
-                    filtered_dict = {f: obj_data.get(f) for f in current_return_fields}
-                    successful_objects.append(filtered_dict)
-                else:
-                    # Return full model object
-                    successful_objects.append(self.model_class.from_dict(obj_data, validate=False))
-        else:
-            successful_objects = []
-
-        return successful_objects, success_count
-
-    async def _handle_fallback_without_returning(
-        self, operation: str, data_batch: list, return_columns, success_count: int, session: AsyncSession
-    ) -> list:
-        """Handle fallback for operations without RETURNING support."""
-        import warnings
-
-        warnings.warn(
-            f"Database does not support {operation.upper()} RETURNING. "
-            f"return_objects=True will have significant performance impact. "
-            f"Consider using a database that supports RETURNING for better performance.",
-            UserWarning,
-            stacklevel=4,
-        )
-
-        if operation == "insert":
-            # For INSERT operations, use fallback to get accurate data including DB-generated fields
-            return await self._handle_insert_fallback_batch(data_batch[:success_count], return_columns, session)
-        else:
-            # For other operations, create objects from input data as approximation
-            return [self.model_class.from_dict(data, validate=False) for data in data_batch[:success_count]]
+        """Execute each update once and return only rows that actually matched."""
+        objects = []
+        count = 0
+        for data in data_batch:
+            if return_columns and self.dialect.update_returning:
+                result = await session.execute(stmt.returning(*return_columns), data)
+                rows = result.fetchall()
+                count += len(rows)
+                objects.extend(self.create_objects_from_rows(rows, self._current_return_fields))
+            else:
+                result = await session.execute(stmt, data)
+                matched = max(result.rowcount, 0)
+                count += matched
+                if return_columns and matched:
+                    conditions = [
+                        self.table.c[key[7:]] == value for key, value in data.items() if key.startswith("match::")
+                    ]
+                    stored = await session.execute(select(*return_columns).where(*conditions))
+                    objects.extend(self.create_objects_from_rows(stored.fetchall(), self._current_return_fields))
+        return objects, count
 
 
 # ========================================
@@ -615,7 +537,6 @@ async def bulk_create(
     async def operation_func(session_, batch_data):
         # Use unified UPSERT handler for conflict resolution
         if on_conflict != ConflictResolution.ERROR:
-            upsert_handler = UpsertHandler(session_)
             upsert_conflict = (
                 UpsertConflictResolution.IGNORE
                 if on_conflict == ConflictResolution.IGNORE
@@ -626,11 +547,8 @@ async def bulk_create(
             handler._current_return_fields = return_fields
 
             # Execute UPSERT with returning
-            batch_results = await upsert_handler.execute_upsert_with_returning(
-                manager._table,  # noqa
-                batch_data,
-                upsert_conflict,
-                conflict_fields,  # noqa
+            batch_results, failures = await handler.execute_upsert(
+                batch_data, upsert_conflict, conflict_fields, on_error, session_
             )
 
             # Convert results to model instances only if return_objects is True
@@ -641,10 +559,10 @@ async def bulk_create(
                         filtered_dict = {f: result_data.get(f) for f in return_fields}
                         operator_successful_objects.append(filtered_dict)
                     else:
-                        instance = manager._model_class.from_dict(result_data)  # noqa
+                        instance = manager._model_class._from_database(result_data, session_.db_name)  # noqa
                         operator_successful_objects.append(instance)
 
-            return operator_successful_objects, len(batch_results), []
+            return operator_successful_objects, len(batch_results), failures
         else:
             # Regular insert without conflict resolution
             stmt = insert(manager._table)  # noqa
@@ -727,9 +645,7 @@ async def bulk_update(
     session = manager._get_session(readonly=False)  # noqa
     handler = BulkOperationHandler(session, manager._table, manager._model_class, transaction_mode)  # noqa
 
-    # Fast path: use executemany for all databases when accurate_count=False
-    if not accurate_count:
-        return await _bulk_update_fast(manager, mappings, match_fields, batch_size, session)
+    handler.accurate_count = accurate_count
 
     # Build base statement
     where_conditions = [manager._table.c[field] == bindparam(f"match::{field}") for field in match_fields]  # noqa
@@ -738,18 +654,14 @@ async def bulk_update(
     async def operation_func(session_, batch_data):
         # Use unified UPSERT handler for bulk update with conflict resolution
         if on_conflict != ConflictResolution.ERROR:
-            upsert_handler = UpsertHandler(session_)
             upsert_conflict = UpsertConflictResolution.UPDATE
 
             # Store return_fields in handler for use in create_objects_from_rows
             handler._current_return_fields = return_fields
 
             # Execute UPSERT with returning
-            batch_results = await upsert_handler.execute_upsert_with_returning(
-                manager._table,  # noqa
-                batch_data,
-                upsert_conflict,
-                match_fields,  # noqa
+            batch_results, failures = await handler.execute_upsert(
+                batch_data, upsert_conflict, match_fields, on_error, session_
             )
 
             # Convert results to model instances only if return_objects is True
@@ -760,10 +672,10 @@ async def bulk_update(
                         filtered_dict = {field: result_data.get(field) for field in return_fields}
                         oper_successful_objects.append(filtered_dict)
                     else:
-                        instance = manager._model_class.from_dict(result_data)  # noqa
+                        instance = manager._model_class._from_database(result_data, session_.db_name)  # noqa
                         oper_successful_objects.append(instance)
 
-            return oper_successful_objects, len(batch_results), []
+            return oper_successful_objects, len(batch_results), failures
         else:
             # Regular update without conflict resolution
             update_values = {
@@ -928,46 +840,3 @@ async def bulk_delete(
         rollback_count,
         return_objects,
     )
-
-
-async def _bulk_update_fast(
-    manager, mappings: list[dict[str, Any]], match_fields: list[str], batch_size: int, session: AsyncSession
-) -> int:
-    """Fast bulk update using executemany (may return approximate count for PostgreSQL)."""
-    if not mappings:
-        return 0
-
-    # Build UPDATE statement
-    where_conditions = [manager._table.c[f] == bindparam(f"match::{f}") for f in match_fields]  # noqa
-    stmt = update(manager._table).where(*where_conditions)  # noqa
-
-    # Get update fields (exclude match fields)
-    update_values = {key: bindparam(f"update::{key}") for key in mappings[0].keys() if key not in match_fields}
-    if not update_values:
-        return 0
-
-    stmt = stmt.values(**update_values)
-
-    # Process in batches
-    total = 0
-    for i in range(0, len(mappings), batch_size):
-        batch = mappings[i : i + batch_size]
-
-        # Prepare parameter mappings
-        param_mappings = []
-        for mapping in batch:
-            param_dict = {}
-            for f in match_fields:
-                param_dict[f"match::{f}"] = mapping[f]
-            for key, value in mapping.items():
-                if key not in match_fields:
-                    param_dict[f"update::{key}"] = value
-            param_mappings.append(param_dict)
-
-        # Execute with executemany
-        result = await session.execute(stmt, param_mappings)
-        # PostgreSQL returns -1, use batch length as approximation
-        count = result.rowcount if result.rowcount >= 0 else len(batch)  # noqa
-        total += count
-
-    return total

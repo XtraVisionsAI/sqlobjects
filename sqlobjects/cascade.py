@@ -355,35 +355,30 @@ class CascadeExecutor:
     ) -> "ObjectModel":
         """Execute save operation with cascade handling."""
         if session is None:
-            session = get_session()
+            session = get_session(readonly=False)
 
-        # Save root instance first to get primary key
-        await instance._save_internal(validate=validate, session=session)  # noqa
-
-        # Process cascade relationships if needed
-        if hasattr(instance, "_state_manager"):
-            cascade_relationships = instance._state_manager.get_cascade_relationships()  # noqa
-            if cascade_relationships:
-                await self._process_cascade_relationships(instance, session)
-
+        async with session.transaction() as transaction:
+            await instance._save_internal(validate=validate, session=transaction)
+            if instance._state_manager.get_cascade_relationships():
+                await self._process_cascade_relationships(instance, transaction)
         return instance
 
     async def execute_delete_operation(
         self, target, cascade_strategy: str = "auto", session: "AsyncSession | None" = None
     ) -> int:
         """Execute delete operation with cascade handling."""
+        is_queryset = hasattr(target, "_table") and hasattr(target, "_model_class")
         if session is None:
-            session = get_session()
-
-        # Handle QuerySet deletion
-        if hasattr(target, "_table") and hasattr(target, "_model_class"):
-            return await self._execute_queryset_delete(target, cascade_strategy, session)
-
-        # Handle single instance deletion
-        if has_cascade_delete_relations(target.__class__):
-            await self._delete_related_objects(target, session)
-        await target._delete_internal(session=session)  # noqa
-        return 1
+            session = target._executor._get_session("delete") if is_queryset else target.get_session(readonly=False)
+        assert session is not None
+        async with session.transaction() as transaction:
+            if is_queryset:
+                target._validate_write_query()
+                return await self._execute_queryset_delete(target.using(transaction), cascade_strategy, transaction)
+            if has_cascade_delete_relations(target.__class__):
+                await self._delete_related_objects(target, transaction)
+            await target._delete_internal(session=transaction)
+            return 1
 
     @staticmethod
     async def execute_update_operation(queryset, values: dict, session: "AsyncSession | None" = None) -> int:
@@ -404,7 +399,7 @@ class CascadeExecutor:
         if not instances:
             return
         if session is None:
-            session = get_session()
+            session = get_session(readonly=False)
 
         # Filter valid instances
         valid_instances = [
@@ -440,7 +435,7 @@ class CascadeExecutor:
         if not instances:
             return
         if session is None:
-            session = get_session()
+            session = get_session(readonly=False)
         valid_instances = []
         for instance in instances:
             if not hasattr(instance, "save"):
@@ -464,7 +459,7 @@ class CascadeExecutor:
         if not instances:
             return
         if session is None:
-            session = get_session()
+            session = get_session(readonly=False)
         valid_instances = []
         for instance in instances:
             if not hasattr(instance, "delete"):
@@ -486,7 +481,7 @@ class CascadeExecutor:
         if not instances or not update_data:
             return
         if session is None:
-            session = get_session()
+            session = get_session(readonly=False)
         valid_instances = []
         for instance in instances:
             if not hasattr(instance, "save"):
@@ -529,18 +524,14 @@ class CascadeExecutor:
 
         batch_size = 50 if total_count > 100 else total_count
         deleted_count = 0
-        offset = 0
-
         while True:
-            batch = await queryset.offset(offset).limit(batch_size).all()
+            batch = await queryset.limit(batch_size).all()
             if not batch:
                 break
 
             for instance in batch:
-                await instance.using(session).delete(cascade=False)
+                await instance.using(session).delete(cascade=True)
                 deleted_count += 1
-
-            offset += batch_size
 
         return deleted_count
 

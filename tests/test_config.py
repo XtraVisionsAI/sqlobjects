@@ -21,8 +21,8 @@ class TestDatabaseConfig:
             "pool_config": {"pool_size": 10, "max_overflow": 0, "pool_pre_ping": True},
         },
         "mysql": {
-            "url": "mysql+asyncmy://test:test@localhost/tests",
-            "driver": "asyncmy",
+            "url": "mysql+aiomysql://test:test@localhost/tests",
+            "driver": "aiomysql",
             "env_var": "MYSQL_TEST_URL",
             "pool_config": {},
         },
@@ -54,12 +54,12 @@ async def _check_database_connection(db_type: str, url: str) -> bool:
         conn = await asyncpg.connect(native_url)
         await conn.close()
     elif db_type == "mysql":
-        import asyncmy  # type: ignore[reportMissingImports]
+        import aiomysql
 
         # 解析 SQLAlchemy URL
-        native_url = url.replace("mysql+asyncmy://", "mysql://")
+        native_url = url.replace("mysql+aiomysql://", "mysql://")
         parsed = urlparse(native_url)
-        conn = await asyncmy.connect(
+        conn = await aiomysql.connect(
             host=parsed.hostname or "localhost",
             port=parsed.port or 3306,
             user=parsed.username or "test",

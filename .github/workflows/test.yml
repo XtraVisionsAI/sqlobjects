@@ -1,0 +1,73 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  sqlite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen --group test --group dev
+      - run: uv run --no-sync ruff check --no-fix sqlobjects tests
+      - run: uv run --no-sync ruff format --check sqlobjects tests
+      - run: uv run --no-sync pyright --pythonpath .venv/bin/python
+      - run: uv run --no-sync pytest tests/unit tests/integration --db=sqlite
+
+  database-contracts:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [postgresql, mysql]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d tests"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_USER: test
+          MYSQL_PASSWORD: test
+          MYSQL_DATABASE: tests
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      POSTGRESQL_TEST_URL: postgresql+asyncpg://test:test@127.0.0.1:5432/tests
+      MYSQL_TEST_URL: mysql+aiomysql://test:test@127.0.0.1:3306/tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen --group test
+      - run: uv run --no-sync pytest tests/integration/test_orm_contracts.py --db=${{ matrix.database }}
+      - if: matrix.database == 'postgresql'
+        run: >-
+          uv run --no-sync pytest --db=postgresql
+          tests/integration/test_crud.py tests/integration/test_relationships.py
+          tests/integration/test_deferred_loading.py tests/integration/test_bulk_return_values.py
+          tests/integration/test_cascade_integration.py

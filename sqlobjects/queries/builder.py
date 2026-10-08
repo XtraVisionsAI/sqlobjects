@@ -325,129 +325,54 @@ class QueryBuilder:
         new_builder.is_reversed = True
         return new_builder
 
-    def _find_foreign_key_column(self, table, relation_name):
-        """Find foreign key column for relation."""
-        fk_column_name = f"{relation_name}_id"
-        if fk_column_name in table.c and table.c[fk_column_name].foreign_keys:
-            return table.c[fk_column_name]
-        return None
+    def _select_related_plan(self, base_table):
+        """Resolve each relationship once and allocate an alias per path."""
+        from ..fields.relations.utils import RelationshipAnalyzer
 
-    def _find_table_by_model_name(self, metadata, model_name):
-        """Find table by model name."""
-        # Try pluralized form first
-        table_name = f"{model_name}s"
-        if table_name in metadata.tables:
-            return metadata.tables[table_name]
-        # Try exact name
-        if model_name in metadata.tables:
-            return metadata.tables[model_name]
-        return None
-
-    def _find_reverse_foreign_key(self, target_table, source_table):
-        """Find reverse foreign key."""
-        source_table_name = source_table.name
-        if source_table_name.endswith("s"):
-            source_table_name = source_table_name[:-1]
-        source_fk_name = f"{source_table_name}_id"
-        if source_fk_name in target_table.c and target_table.c[source_fk_name].foreign_keys:
-            return target_table.c[source_fk_name]
-        return None
-
-    def _get_referenced_table(self, fk_column, metadata):
-        """Get referenced table from foreign key."""
-        fk = list(fk_column.foreign_keys)[0]
-        return fk.column.table
-
-    def _apply_select_related_joins(self, query, base_table):
-        """Apply JOIN clauses for select_related relationships."""
-        metadata = base_table.metadata
-
-        for relationship_path in self.relationships:
-            try:
-                path_parts = relationship_path.split("__")
-                current_table = base_table
-
-                for relation_name in path_parts:
-                    # Try forward relationship first
-                    fk_column = self._find_foreign_key_column(current_table, relation_name)
-
-                    if fk_column is not None:
-                        # Forward relationship
-                        referenced_table = self._get_referenced_table(fk_column, metadata)
-                        join_condition = fk_column == referenced_table.c.id
-                        query = query.outerjoin(referenced_table, join_condition)
-                        current_table = referenced_table
-                    else:
-                        # Try reverse relationship
-                        target_table = self._find_table_by_model_name(metadata, relation_name)
-                        if target_table is not None:
-                            reverse_fk = self._find_reverse_foreign_key(target_table, current_table)
-                            if reverse_fk is not None:
-                                join_condition = current_table.c.id == reverse_fk
-                                query = query.outerjoin(target_table, join_condition)
-                                current_table = target_table
-                                continue
-
-                        # No valid relationship found
-                        available_relations = [
-                            col.name[:-3] for col in current_table.c if col.name.endswith("_id") and col.foreign_keys
-                        ]
-                        raise ValueError(
-                            f"Invalid relationship '{relation_name}' in path '{relationship_path}'. "
-                            f"Available relationships: {available_relations}"
+        plan = {}
+        for path in sorted(self.relationships):
+            model, source = self.model_class, base_table
+            parts = path.split("__")
+            for index, name in enumerate(parts):
+                prefix = "__".join(parts[: index + 1])
+                if prefix in plan:
+                    target, info, _ = plan[prefix]
+                else:
+                    info = RelationshipAnalyzer.analyze_relationship(model, name)
+                    if not info:
+                        raise ValueError(f"Invalid relationship '{name}' on {model.__name__}")
+                    if info["type"] not in ("many_to_one", "one_to_one"):
+                        raise QueryError(
+                            f"select_related requires a single-valued relationship; use prefetch_related for '{path}'"
                         )
+                    target = info["related_model"].get_table().alias(f"sr_{prefix}")
+                    local, remote = (
+                        (info["foreign_key_fields"], info["ref_fields"])
+                        if info["type"] == "many_to_one"
+                        else (info["ref_fields"], info["foreign_key_fields"])
+                    )
+                    condition = and_(
+                        *(source.c[left] == target.c[right] for left, right in zip(local, remote, strict=True))
+                    )
+                    plan[prefix] = (target, info, condition)
+                model, source = info["related_model"], target
+        return plan
 
-            except ValueError:
-                raise
-            except Exception as e:
-                raise ValueError(f"Error processing relationship '{relationship_path}': {e}") from e
-
-        return query
-
-    def _get_next_table_in_path(self, current_table, relation_name, metadata):
-        """Get next table in relationship path."""
-        # Try forward relationship
-        fk_column = self._find_foreign_key_column(current_table, relation_name)
-        if fk_column:
-            return self._get_referenced_table(fk_column, metadata)
-
-        # Try reverse relationship
-        target_table = self._find_table_by_model_name(metadata, relation_name)
-        if target_table and self._find_reverse_foreign_key(target_table, current_table):
-            return target_table
-
-        return None
-
-    def _get_select_related_columns(self, base_table):
-        """Get columns from related tables for select_related."""
-        related_columns = []
-        metadata = base_table.metadata
-
-        for relationship_path in self.relationships:
-            try:
-                path_parts = relationship_path.split("__")
-                current_table = base_table
-
-                for i, relation_name in enumerate(path_parts):
-                    # Get next table
-                    next_table = self._get_next_table_in_path(current_table, relation_name, metadata)
-                    if next_table is None:
-                        break
-
-                    # Build path prefix for unique aliases
-                    path_prefix = "__".join(path_parts[: i + 1])
-
-                    # Add columns with unique aliases
-                    for column in next_table.c:
-                        alias = f"{path_prefix}__{column.name}"
-                        related_columns.append(column.label(alias))
-
-                    current_table = next_table
-
-            except Exception:
-                continue
-
-        return related_columns
+    def _get_select_related_columns(self, plan):
+        columns = []
+        for path, (target, info, _) in plan.items():
+            selected = {name[len(path) + 2 :] for name in self.selected_fields if name.startswith(path + "__")}
+            primary_keys = {col.name for col in info["related_model"].get_table().primary_key}
+            auto_deferred = info["related_model"]._get_field_cache().get("deferred_fields", set())
+            for col in target.c:
+                label = f"{path}__{col.name}"
+                if col.name not in primary_keys:
+                    if label in self.deferred_fields or (selected and col.name not in selected):
+                        continue
+                    if col.name in auto_deferred and col.name not in selected:
+                        continue
+                columns.append(col.label(label))
+        return columns
 
     def build(self, table, values_fields: tuple[str, ...] | None = None):
         """Build final SQLAlchemy query object from accumulated clauses.
@@ -481,6 +406,8 @@ class QueryBuilder:
             except Exception:  # noqa
                 pass
 
+        select_plan = self._select_related_plan(table) if self.relationships else {}
+
         # Collect all columns to select (base table + related tables)
         columns_to_select = []
 
@@ -512,19 +439,24 @@ class QueryBuilder:
                         columns_to_select.append(text(sql).label(field_name))
         # Handle field selection (only() method)
         elif self.selected_fields:
-            columns_to_select.extend([table.c[field] for field in self.selected_fields if field in table.c])
+            selected = self.selected_fields - self.deferred_fields
+            if not self.group_clauses:
+                selected.update(col.name for col in table.primary_key)
+            columns_to_select.extend(table.c[field] for field in table.c.keys() if field in selected)
         elif self.deferred_fields or auto_deferred_fields:
             # For defer() or auto-deferred fields, select all fields except deferred ones
             all_fields = set(table.columns.keys())
             combined_deferred = self.deferred_fields | auto_deferred_fields
             selected_fields = all_fields - combined_deferred
+            if not self.group_clauses:
+                selected_fields.update(col.name for col in table.primary_key)
             columns_to_select.extend([table.c[field] for field in selected_fields if field in table.c])
         else:
             columns_to_select.extend(table.c)
 
         # Add related table columns for select_related (only for select_related, not prefetch_related)
         if self.relationships and values_fields is None:
-            related_columns = self._get_select_related_columns(table)
+            related_columns = self._get_select_related_columns(select_plan)
             columns_to_select.extend(related_columns)
 
         # Create the base query
@@ -543,8 +475,10 @@ class QueryBuilder:
                 query = query.join(join_table, join_condition)
 
         # Apply select_related joins (only for select_related, not prefetch_related)
-        if self.relationships:
-            query = self._apply_select_related_joins(query, table)
+        if select_plan:
+            query = query.select_from(table)
+            for target, _, condition in select_plan.values():
+                query = query.outerjoin(target, condition)
 
         # Apply conditions
         if self.conditions:

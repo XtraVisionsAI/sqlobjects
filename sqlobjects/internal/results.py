@@ -51,7 +51,7 @@ class ResultProcessor:
                 objects.append(filtered_dict)
             else:
                 # Return full model instance
-                obj = model_class.from_dict(row_dict, validate=False)
+                obj = model_class._from_database(row_dict)
                 objects.append(obj)
 
         return objects

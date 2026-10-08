@@ -10,8 +10,9 @@ This module provides universal fixtures for the SQLObjects test suite:
 from datetime import datetime
 
 import pytest
+from sqlalchemy import inspect
 
-from sqlobjects.database import close_db, create_tables, init_db
+from sqlobjects.database import close_db, create_tables, get_database, init_db
 from sqlobjects.expressions import func
 from sqlobjects.fields import (
     BooleanColumn,
@@ -138,7 +139,7 @@ async def test_db(db_type):
 
     Environment variables for database URLs:
     - POSTGRESQL_TEST_URL (default: postgresql+asyncpg://test:test@localhost/tests)
-    - MYSQL_TEST_URL (default: mysql+asyncmy://test:test@localhost/tests)
+    - MYSQL_TEST_URL (default: mysql+aiomysql://test:test@localhost/tests)
     """
     config = TestDatabaseConfig.get_config(db_type)
 
@@ -271,15 +272,12 @@ async def clean_db(test_db):
     """
     yield
 
-    async with ctx_session() as db_session:
-        # Use SQLAlchemy's topological sort (reversed = child tables first)
-        metadata = User.__table__.metadata
-        for table in reversed(metadata.sorted_tables):
-            try:
-                await db_session.execute(table.delete())
-            except Exception:  # noqa
-                pass
-        await db_session.commit()
+    async with get_database().engine.begin() as connection:
+        # Unit tests can register model classes after the schema was created.
+        existing = set(await connection.run_sync(lambda conn: inspect(conn).get_table_names()))
+        for table in reversed(User.__table__.metadata.sorted_tables):
+            if table.name in existing:
+                await connection.execute(table.delete())
 
 
 @pytest.fixture

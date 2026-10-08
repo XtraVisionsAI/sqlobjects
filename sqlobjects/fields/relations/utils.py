@@ -172,14 +172,25 @@ class RelationshipAnalyzer:
     @staticmethod
     @lru_cache(maxsize=256)
     def analyze_relationship(model_class, relationship_name):
-        try:
-            if hasattr(model_class, relationship_name):
-                field_attr = getattr(model_class, relationship_name)
-                if hasattr(field_attr, "property"):
-                    return RelationshipAnalyzer._extract_relationship_info(model_class, field_attr.property)
-            return RelationshipAnalyzer._infer_reverse_relationship(model_class, relationship_name)
-        except Exception:  # noqa
-            return None
+        if hasattr(model_class, relationship_name):
+            field_attr = getattr(model_class, relationship_name)
+            if hasattr(field_attr, "property"):
+                return RelationshipAnalyzer._extract_relationship_info(model_class, field_attr.property)
+        # Preserve the conventional author_id -> author shortcut, using its actual
+        # foreign-key target rather than guessing a model or referenced column.
+        table = model_class.get_table()
+        column = table.c.get(f"{relationship_name}_id")
+        if column is not None and len(column.foreign_keys) == 1:
+            foreign_key = next(iter(column.foreign_keys))
+            related_model = model_class.__registry__.get_model_by_table(foreign_key.column.table.name)
+            if related_model is not None:
+                return {
+                    "type": "many_to_one",
+                    "related_model": related_model,
+                    "foreign_key_fields": [column.name],
+                    "ref_fields": [foreign_key.column.name],
+                }
+        return None
 
     @staticmethod
     def _extract_relationship_info(model_class, prop):
@@ -191,7 +202,31 @@ class RelationshipAnalyzer:
         if prop.secondary:
             m2m_def = getattr(prop, "m2m_definition", None)
             if not m2m_def:
-                return None
+                through = model_class.__registry__.tables.get(prop.secondary)
+                if through is None:
+                    raise ValueError(f"Unknown association table '{prop.secondary}'")
+
+                def referencing(table):
+                    return [
+                        (col.name, fk.column.name)
+                        for col in through.c
+                        for fk in col.foreign_keys
+                        if fk.column.table is table
+                    ]
+
+                left = referencing(model_class.get_table())
+                right = referencing(related_model.get_table())
+                if len(left) != 1 or len(right) != 1:
+                    raise ValueError("Ambiguous association table; supply an explicit M2MTable definition")
+                m2m_def = M2MTable(
+                    prop.secondary,
+                    model_class.__name__,
+                    related_model.__name__,
+                    left[0][0],
+                    right[0][0],
+                    left[0][1],
+                    right[0][1],
+                )
             return {
                 "type": "many_to_many",
                 "related_model": related_model,
@@ -314,7 +349,9 @@ class RelationshipAnalyzer:
             for subclass in ObjectModel.__subclasses__():
                 if hasattr(subclass, "__registry__"):
                     try:
-                        return subclass.__registry__.get_model(argument)
+                        model = subclass.__registry__.get_model(argument)
+                        if model is not None:
+                            return model
                     except Exception:
                         continue
 

@@ -3,7 +3,7 @@ from typing import TypeVar
 from sqlalchemy import and_, insert, select, update
 
 from .cascade import CascadeExecutor
-from .exceptions import PrimaryKeyError
+from .exceptions import DoesNotExist, PrimaryKeyError
 from .internal import SQLOperations
 from .metadata import ModelProcessor
 from .mixins import DataConversionMixin
@@ -133,7 +133,7 @@ class ModelMixin(DataConversionMixin, SignalMixin):
 
         Returns:
             Dictionary mapping dirty field names to their current values,
-            or all field data if no dirty fields are tracked
+            only fields changed since the last database load or save
         """
         from .fields.proxies import (
             DeferredObject,
@@ -143,8 +143,6 @@ class ModelMixin(DataConversionMixin, SignalMixin):
         )
 
         dirty_fields = self._state_manager.get_dirty_fields()
-        if not dirty_fields:
-            return self._get_all_data()
 
         data = {}
         for name in dirty_fields:
@@ -167,77 +165,49 @@ class ModelMixin(DataConversionMixin, SignalMixin):
                 setattr(self, col.name, pk_values[i])
 
     async def _save_internal(self, validate: bool = True, session=None):
-        """Internal save operation using UPSERT with fallback to query-then-save.
-
-        This method contains the core save logic that can be reused by both
-        the public save() method and the cascade executor without triggering
-        additional cascades or signals.
-
-        Args:
-            validate: Whether to run validation before saving
-            session: Database session to use (gets current session if None)
-
-        Returns:
-            Self for method chaining
-
-        Raises:
-            PrimaryKeyError: If save operation fails
-            ValidationError: If validation fails and validate=True
-        """
+        """Insert new objects and update persisted objects without overwriting unloaded fields."""
         if session is None:
-            session = self.get_session()
+            session = self.get_session(readonly=False)
         table = self.get_table()
-
+        persisted = self.is_from_database()
+        data = self._get_dirty_data() if persisted else self._get_all_data()
+        data = {name: value for name, value in data.items() if name in table.c}
         if validate:
-            self.validate_all_fields()
+            self.validate_all_fields(list(data))
+            data = self._get_dirty_data() if persisted else self._get_all_data()
+            data = {name: value for name, value in data.items() if name in table.c}
 
-        data = self._get_all_data()
-
-        # Try UPSERT using UpsertHandler
-        try:
-            from .objects.upsert import ConflictResolution, UpsertHandler
-
-            handler = UpsertHandler(session)
-            pk_columns = [col.name for col in table.primary_key.columns]
-
-            stmt = handler.get_upsert_statement(
-                table=table,
-                values=[data],
-                conflict_resolution=ConflictResolution.UPDATE,
-                match_fields=pk_columns,
-            )
-
-            result = await session.execute(stmt)
-            if result.inserted_primary_key:
-                self._set_primary_key_values(result.inserted_primary_key)
-            self._state_manager.clear_dirty_fields()
-            return self
-
-        except (ValueError, Exception):
-            # Fallback for unsupported databases or UPSERT failures
-            pass
-
-        # Fallback: query database to determine INSERT or UPDATE
-        try:
-            pk_conditions = self._build_pk_conditions()
-            existing = await session.execute(select(table).where(and_(*pk_conditions)))
-
-            if existing.first():
-                # Record exists, perform UPDATE
-                update_data = self._get_dirty_data()
-                if update_data:
-                    stmt = update(table).where(and_(*pk_conditions)).values(**update_data)
-                    await session.execute(stmt)
+        # Preserve detached-object save semantics without treating every save as an upsert.
+        pk = self._state_manager._get("persisted_pk", None) if persisted else None
+        if not persisted and self._has_primary_key_values():
+            pk = self._get_primary_key_values()
+            existing = await session.execute(select(table).where(*(table.c[k] == v for k, v in pk.items())))
+            persisted = existing.first() is not None
+        if persisted:
+            pk = pk or self._get_primary_key_values()
+            if not pk or any(value is None for value in pk.values()):
+                raise PrimaryKeyError("Cannot save a persisted instance without primary key values")
+            if data:
+                result = await session.execute(
+                    update(table).where(*(table.c[k] == v for k, v in pk.items())).values(**data)
+                )
+                if result.supports_sane_rowcount() and result.rowcount == 0:
+                    raise DoesNotExist(f"{type(self).__name__} no longer exists")
+        else:
+            stmt = insert(table).values(**data)
+            if session.bind.dialect.insert_returning:
+                result = await session.execute(stmt.returning(*table.columns))
+                for name, value in result.one()._mapping.items():
+                    setattr(self, name, value)
             else:
-                # Record does not exist, perform INSERT
-                stmt = insert(table).values(**data)
                 result = await session.execute(stmt)
                 if result.inserted_primary_key:
                     self._set_primary_key_values(result.inserted_primary_key)
-        except Exception as e:
-            raise PrimaryKeyError(f"Save operation failed: {e}") from e
 
-        # Clear dirty fields after successful save
+        self._state_manager.mark_from_database(True)
+        self._state_manager._set("persisted_pk", self._get_primary_key_values())
+        if self._state_manager.get_bound_session() is None:
+            self.using(session.db_name)
         self._state_manager.clear_dirty_fields()
         return self
 
@@ -263,7 +233,7 @@ class ModelMixin(DataConversionMixin, SignalMixin):
             ValidationError: If validation fails and validate=True
         """
         if session is None:
-            session = self.get_session()
+            session = self.get_session(readonly=False)
 
         # Determine if cascade should be used
         if cascade is None:
@@ -293,7 +263,7 @@ class ModelMixin(DataConversionMixin, SignalMixin):
         if not self._has_primary_key_values():
             raise PrimaryKeyError("Cannot delete instance without primary key values")
 
-        session = self.get_session()
+        session = self.get_session(readonly=False)
 
         # Auto-detect cascade need when not explicitly specified
         if cascade is None:
@@ -315,7 +285,7 @@ class ModelMixin(DataConversionMixin, SignalMixin):
         instance-level signals.
         """
         if session is None:
-            session = self.get_session()
+            session = self.get_session(readonly=False)
 
         table = self.get_table()
         pk_conditions = self._build_pk_conditions()
@@ -332,7 +302,7 @@ class ModelMixin(DataConversionMixin, SignalMixin):
             session: Database session to use
         """
         if session is None:
-            session = self.get_session()
+            session = self.get_session(readonly=False)
 
         table = self.get_table()
         pk_conditions = self._build_pk_conditions()
@@ -457,8 +427,11 @@ class ModelMixin(DataConversionMixin, SignalMixin):
         # Handle relationship field assignments
         if hasattr(self, "_get_relationship_fields") and name in self._get_relationship_fields():
             self._handle_relationship_assignment(name, value)
-        elif not name.startswith("_") and hasattr(self, "_state_manager"):
+        elif not name.startswith("_") and hasattr(self, "_state_manager") and name in self._get_field_names():
             self._state_manager.add_dirty_field(name)
+            self._state_manager.clear_cache_entry(name)
+            if name in self._state_manager.get_deferred_fields():
+                self._state_manager.add_loaded_deferred_field(name)
         super().__setattr__(name, value)
 
     def _handle_relationship_assignment(self, field_name: str, value):

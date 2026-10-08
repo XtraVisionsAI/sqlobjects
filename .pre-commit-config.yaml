@@ -8,6 +8,7 @@ repos:
           - sqlalchemy[asyncio]
           - pytest-asyncio
           - asyncpg
+          - aiomysql[rsa]
           - psutil
 
   - repo: https://github.com/astral-sh/ruff-pre-commit

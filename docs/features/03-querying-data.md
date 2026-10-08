@@ -717,9 +717,9 @@ users = await User.objects.prefetch_related("posts").all()
 
 # Advanced prefetch with custom queryset
 users = await User.objects.prefetch_related(
-    recent_posts=Post.objects.filter(
+    posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
-    ).order_by("-created_at").limit(5)
+    ).order_by("-created_at")
 ).all()
 ```
 

@@ -161,12 +161,12 @@ posts = await Post.objects.select_related("author").all()
 # Use prefetch_related for reverse foreign keys and many-to-many relationships
 users = await User.objects.prefetch_related("posts").all()
 for user in users:
-    posts = await user.posts.fetch()  # No additional queries
+    posts = await user.load_relation("posts")  # No additional queries
 
 # Many-to-many relationships
 posts = await Post.objects.prefetch_related("tags").all()
 for post in posts:
-    tags = await post.tags.fetch()  # No additional queries
+    tags = await post.load_relation("tags")  # No additional queries
 
 # Multiple prefetches
 users = await User.objects.prefetch_related("posts", "groups", "permissions").all()
@@ -177,37 +177,26 @@ users = await User.objects.prefetch_related("posts").all()
 
 ### Advanced Prefetch Configuration
 
+Configuration keys must name declared relationships. Custom querysets support
+filtering and ordering; per-parent LIMIT/OFFSET and arbitrary output aliases are
+not supported. A sliced queryset raises an error instead of truncating the entire
+prefetch result.
+
 ```python
-# Advanced prefetch with filtering and ordering
 users = await User.objects.prefetch_related(
-    published_posts=Post.objects.filter(Post.is_published == True)
-                               .order_by('-created_at')
-                               .limit(5)
+    posts=Post.objects.filter(Post.is_published == True).order_by('-created_at')
 ).all()
 
-# Multiple advanced configurations
+for user in users:
+    published_posts = await user.load_relation("posts")  # Cached filtered list
+
+# Mix simple and custom prefetches
 users = await User.objects.prefetch_related(
-    recent_posts=Post.objects.filter(
+    'profile',
+    posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=30)
-    ).order_by('-created_at'),
-    popular_posts=Post.objects.filter(Post.view_count > 1000)
-                             .order_by('-view_count')
-                             .limit(3)
-).all()
-
-# Mix simple and advanced prefetches
-users = await User.objects.prefetch_related(
-    'profile',  # Simple prefetch
-    recent_comments=Comment.objects.filter(
-        Comment.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
     ).order_by('-created_at')
 ).all()
-
-# Access prefetched data
-for user in users:
-    # Advanced prefetch results are directly accessible
-    recent_posts = user.recent_posts  # Filtered/ordered post list
-    popular_posts = user.popular_posts  # Popular post list
 ```
 
 ### Combining Loading Strategies
@@ -218,8 +207,8 @@ posts = await Post.objects.select_related("author").prefetch_related("tags", "co
 
 for post in posts:
     author = post.author  # From JOIN (select_related)
-    tags = await post.tags.all()  # From prefetch (prefetch_related)
-    comments = await post.comments.all()  # From prefetch
+    tags = await post.load_relation("tags")  # From prefetch
+    comments = await post.load_relation("comments")  # From prefetch
 ```
 
 ## Advanced Relationship Queries

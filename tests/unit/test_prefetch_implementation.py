@@ -226,7 +226,6 @@ class TestPrefetchHandler:
         try:
             handler = PrefetchHandler(mock_session)
             result = await handler.handle_prefetch_relationships(instances, prefetch_relationships)
-
             assert result == instances
             # Verify _update_cache was called with correct data
             user1._update_cache.assert_called_once_with("posts", [mock_post])
@@ -245,9 +244,8 @@ class TestPrefetchHandler:
 
         try:
             handler = PrefetchHandler(mock_session)
-            result = await handler.handle_prefetch_relationships(instances, prefetch_relationships)
-
-            assert result == instances
+            with pytest.raises(ValueError, match="Invalid relationship"):
+                await handler.handle_prefetch_relationships(instances, prefetch_relationships)
         finally:
             RelationshipAnalyzer.analyze_relationship = original_analyze
 

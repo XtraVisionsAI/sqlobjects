@@ -3,6 +3,9 @@
 This directory contains complete feature documentation for SQLObjects, organized by functionality to help users
 understand and implement specific capabilities.
 
+See [Persistence and query contracts](../design/06-orm-correctness.md) for precise
+save, partial-loading, bulk transaction, count, iterator and relationship semantics.
+
 ## Documentation Structure
 
 ### [01. Database Setup](01-database-setup.md)

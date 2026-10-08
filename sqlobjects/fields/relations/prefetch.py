@@ -9,54 +9,45 @@ class PrefetchHandler:
     def __init__(self, session):
         self.session = session
 
-    async def handle_prefetch_relationships(self, instances, prefetch_relationships):
-        if not instances or not prefetch_relationships:
+    async def handle_prefetch_relationships(self, instances, prefetch_relationships, configs=None):
+        if not instances:
             return instances
-
-        for relationship_name in prefetch_relationships:
-            relationship_info = RelationshipAnalyzer.analyze_relationship(instances[0].__class__, relationship_name)
-            if relationship_info:
-                await self._prefetch_single_relationship(instances, relationship_name, relationship_info)
-
+        for path in sorted(prefetch_relationships):
+            name, _, remainder = path.partition("__")
+            info = RelationshipAnalyzer.analyze_relationship(instances[0].__class__, name)
+            if not info:
+                raise ValueError(f"Invalid relationship '{name}'")
+            custom = (configs or {}).get(path) if not remainder else None
+            await self._prefetch_single_relationship(instances, name, info, custom)
+            if remainder:
+                related = []
+                for instance in instances:
+                    value = instance._state_manager.get_object_cache().get(name)
+                    related.extend(value if isinstance(value, list) else [value] if value is not None else [])
+                await self.handle_prefetch_relationships(
+                    related, {remainder}, {remainder: configs[path]} if configs and path in configs else None
+                )
         return instances
 
-    async def _prefetch_single_relationship(self, instances, relationship_name, relationship_info):
-        rel_type = relationship_info["type"]
-
-        if rel_type == "reverse_fk":
-            await self._prefetch_by_fields(
-                instances,
-                relationship_name,
-                relationship_info["related_model"],
-                relationship_info["ref_fields"],
-                relationship_info["foreign_key_fields"],
-                [],
-            )
-        elif rel_type == "one_to_one":
-            info = relationship_info
-            await self._prefetch_by_fields(
-                instances,
-                relationship_name,
-                info["related_model"],
-                info["ref_fields"],
-                info["foreign_key_fields"],
-                None,
-            )
-        elif rel_type == "many_to_one":
-            info = relationship_info
-            await self._prefetch_by_fields(
-                instances,
-                relationship_name,
-                info["related_model"],
-                info["foreign_key_fields"],
-                info["ref_fields"],
-                None,
-            )
-        elif rel_type == "many_to_many":
-            await self._prefetch_many_to_many(instances, relationship_name, relationship_info)
+    async def _prefetch_single_relationship(self, instances, relationship_name, relationship_info, queryset=None):
+        info = relationship_info
+        if queryset is not None and queryset._model_class is not info["related_model"]:
+            raise ValueError(f"Prefetch queryset model does not match relationship '{relationship_name}'")
+        if info["type"] == "many_to_many":
+            await self._prefetch_many_to_many(instances, relationship_name, info, queryset)
+            return
+        local, remote = (
+            (info["foreign_key_fields"], info["ref_fields"])
+            if info["type"] == "many_to_one"
+            else (info["ref_fields"], info["foreign_key_fields"])
+        )
+        empty = [] if info["type"] == "reverse_fk" else None
+        await self._prefetch_by_fields(
+            instances, relationship_name, info["related_model"], local, remote, empty, queryset
+        )
 
     async def _prefetch_by_fields(
-        self, instances, relationship_name, related_model, lookup_fields, group_fields, empty
+        self, instances, relationship_name, related_model, lookup_fields, group_fields, empty, queryset=None
     ):
         """Unified prefetch for FK-based relationships."""
         composite = len(lookup_fields) > 1
@@ -74,13 +65,21 @@ class PrefetchHandler:
                 inst._update_cache(relationship_name, [] if isinstance(empty, list) else empty)
             return
 
-        if composite:
-            cols = [getattr(related_model, f) for f in group_fields]
-            qs = related_model.objects.using(self.session).filter(tuple_(*cols).in_(lookup_values))
-        else:
-            qs = related_model.objects.using(self.session).filter(
-                getattr(related_model, group_fields[0]).in_(lookup_values)
+        qs = related_model.objects.using(self.session) if queryset is None else queryset
+        if queryset is not None and queryset._db_or_session is None:
+            qs = queryset.using(self.session)
+        if queryset is not None and (
+            queryset._builder.limits is not None or queryset._builder.offset_value is not None
+        ):
+            raise ValueError(
+                "Sliced prefetch querysets are not supported; a global limit would truncate related collections"
             )
+        if queryset is not None and queryset._builder.selected_fields:
+            qs = qs.only(*group_fields)
+        if composite:
+            qs = qs.filter(tuple_(*(getattr(related_model, f) for f in group_fields)).in_(lookup_values))
+        else:
+            qs = qs.filter(getattr(related_model, group_fields[0]).in_(lookup_values))
         related_objects = await qs.all()
 
         if isinstance(empty, list):
@@ -94,7 +93,7 @@ class PrefetchHandler:
             for inst in instances:
                 inst._update_cache(relationship_name, related_map.get(make_key(inst, lookup_fields)))
 
-    async def _prefetch_many_to_many(self, instances, relationship_name, relationship_info):
+    async def _prefetch_many_to_many(self, instances, relationship_name, relationship_info, queryset=None):
         """Prefetch many-to-many via through table."""
         related_model = relationship_info["related_model"]
         through_table = relationship_info["through_table"]
@@ -111,27 +110,27 @@ class PrefetchHandler:
                 inst._update_cache(relationship_name, [])
             return
 
-        through_model = self._find_through_model(through_table)
-        if not through_model:
-            return
+        from sqlalchemy import select
 
-        through_objects = await (
-            through_model.objects.using(self.session)
-            .filter(getattr(through_model, left_field).in_(instance_values))
-            .all()
+        table = instances[0].__class__.__registry__.tables[through_table]
+        result = await self.session.execute(
+            select(table.c[left_field], table.c[right_field]).where(table.c[left_field].in_(instance_values))
         )
-
+        through_objects = result.fetchall()
         related_values = [getattr(obj, right_field) for obj in through_objects]
         if not related_values:
             for inst in instances:
                 inst._update_cache(relationship_name, [])
             return
-
-        related_objects = await (
-            related_model.objects.using(self.session)
-            .filter(getattr(related_model, right_ref_field).in_(related_values))
-            .all()
-        )
+        qs = related_model.objects.using(self.session) if queryset is None else queryset
+        if queryset is not None:
+            if queryset._builder.limits is not None or queryset._builder.offset_value is not None:
+                raise ValueError("Sliced prefetch querysets are not supported")
+            if queryset._db_or_session is None:
+                qs = qs.using(self.session)
+            if queryset._builder.selected_fields:
+                qs = qs.only(right_ref_field)
+        related_objects = await qs.filter(getattr(related_model, right_ref_field).in_(related_values)).all()
 
         related_map = {getattr(obj, right_ref_field): obj for obj in related_objects}
 

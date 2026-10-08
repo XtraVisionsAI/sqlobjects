@@ -296,11 +296,12 @@ class TestErrorHandling:
         """Test creating object with duplicate unique field"""
         # Try to create user with existing username
         with pytest.raises(Exception):  # Database constraint error  # noqa: B017
-            await User.objects.using(session).create(
-                username="alice",  # Already exists
-                email="duplicate@example.com",
-                age=30,
-            )
+            async with await session.begin_nested():
+                await User.objects.using(session).create(
+                    username="alice",  # Already exists
+                    email="duplicate@example.com",
+                    age=30,
+                )
 
     async def test_invalid_field_values(self, session):
         """Test validation of invalid field values"""

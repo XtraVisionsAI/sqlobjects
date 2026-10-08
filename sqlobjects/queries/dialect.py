@@ -24,7 +24,7 @@ class BaseDialect(ABC):
     def get_upsert_statement(
         self,
         table: sa.Table,
-        data: dict[str, Any],
+        data: dict[str, Any] | list[dict[str, Any]],
         conflict_fields: list[str],
         update_fields: list[str],
     ) -> sa.sql.Insert:
@@ -66,7 +66,7 @@ class PostgreSQLDialect(BaseDialect):
     def get_upsert_statement(
         self,
         table: sa.Table,
-        data: dict[str, Any],
+        data: dict[str, Any] | list[dict[str, Any]],
         conflict_fields: list[str],
         update_fields: list[str],
     ) -> sa.sql.Insert:
@@ -120,7 +120,7 @@ class MySQLDialect(BaseDialect):
     def get_upsert_statement(
         self,
         table: sa.Table,
-        data: dict[str, Any],
+        data: dict[str, Any] | list[dict[str, Any]],
         conflict_fields: list[str],
         update_fields: list[str],
     ) -> sa.sql.Insert:
@@ -163,7 +163,7 @@ class SQLiteDialect(BaseDialect):
     def get_upsert_statement(
         self,
         table: sa.Table,
-        data: dict[str, Any],
+        data: dict[str, Any] | list[dict[str, Any]],
         conflict_fields: list[str],
         update_fields: list[str],
     ) -> sa.sql.Insert:

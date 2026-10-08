@@ -1,5 +1,6 @@
 import re
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar, Union
 
@@ -20,7 +21,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.sql.selectable import Subquery
 
-from .exceptions import DoesNotExist, MultipleObjectsReturned
+from .exceptions import DoesNotExist, MultipleObjectsReturned, QueryError
 from .expressions import (
     AggregateExpression,
     AllExpression,
@@ -449,6 +450,7 @@ class QuerySet(Generic[T]):
             # comments = await Comment.objects.select_related(Comment.post.author).all()
         """
         relationship_paths = [self._get_relationship_path(f) for f in fields]
+        self._validate_relationships(relationship_paths)
         new_builder = self._builder.add_relationships(*relationship_paths)
         return self._create_new_queryset(new_builder)
 
@@ -471,15 +473,14 @@ class QuerySet(Generic[T]):
 
             # Advanced prefetch with filtering and ordering
             users = await User.objects.prefetch_related(
-                published_posts=Post.objects.filter(Post.is_published == True)
+                posts=Post.objects.filter(Post.is_published == True)
                                            .order_by('-created_at')
-                                           .limit(5)
             ).all()
 
             # Mixed usage
             users = await User.objects.prefetch_related(
                 User.profile,  # Field expression
-                recent_posts=Post.objects.filter(
+                posts=Post.objects.filter(
                     Post.created_at >= datetime.now() - timedelta(days=30)
                 ).order_by('-created_at')
             ).all()
@@ -487,7 +488,7 @@ class QuerySet(Generic[T]):
         relationship_paths = [self._get_relationship_path(f) for f in fields]
 
         # Validate relationships using the same logic as select_related
-        self._validate_relationships(relationship_paths)
+        self._validate_relationships(relationship_paths + list(queryset_configs))
 
         new_builder = self._builder.add_prefetch_relationships(*relationship_paths)
         if queryset_configs:
@@ -503,30 +504,22 @@ class QuerySet(Generic[T]):
         Raises:
             ValueError: If any relationship path is invalid
         """
-        for relationship_path in relationship_paths:
-            # Basic format validation
-            if not relationship_path or not relationship_path.replace("_", "").replace("__", "").isalnum():
-                raise ValueError(f"Invalid relationship path format: '{relationship_path}'")
+        from .fields.relations.utils import RelationshipAnalyzer
 
-            # Check for obviously invalid patterns
-            if relationship_path.startswith("__") or relationship_path.endswith("__"):
-                raise ValueError(f"Invalid relationship path: '{relationship_path}'")
-
-            # Check for obviously non-existent relationships
-            path_parts = relationship_path.split("__")
-            first_part = path_parts[0]
-
-            # Check if it's obviously invalid (like "nonexistent_relation")
-            if first_part.startswith("nonexistent"):
-                available_relations = [
-                    col.name[:-3]
-                    for col in self._table.c  # noqa
-                    if col.name.endswith("_id") and col.foreign_keys  # noqa
-                ]
-                raise ValueError(
-                    f"Invalid relationship '{first_part}' in path '{relationship_path}'. "
-                    f"Available relationships: {available_relations}"
-                )
+        for path in relationship_paths:
+            model: Any = self._model_class
+            for name in path.split("__"):
+                info = RelationshipAnalyzer.analyze_relationship(model, name)
+                if not info:
+                    available = {
+                        col.name[:-3] for col in model.get_table().c if col.foreign_keys and col.name.endswith("_id")
+                    }
+                    available.update(getattr(model, "_relationships", {}))
+                    raise ValueError(
+                        f"Invalid relationship '{name}' in path '{path}' on {model.__name__}. "
+                        f"Available relationships: {sorted(available)}"
+                    )
+                model = info["related_model"]
 
     # Advanced query building
 
@@ -994,8 +987,11 @@ class QuerySet(Generic[T]):
     async def iterator(self, chunk_size: int = 1000) -> AsyncGenerator[T, None]:
         """Async iterator for processing large datasets in chunks."""
         query = self._builder.build(self._table)
-        async for item in self._executor.iterator(query, chunk_size):
-            yield item
+        async with aclosing(
+            self._executor.iterator(query, chunk_size, builder=self._builder, model_class=self._model_class)
+        ) as stream:
+            async for item in stream:
+                yield item
 
     async def raw(self, sql: str, params: dict | None = None) -> list[T]:
         """Execute raw SQL query and return model instances."""
@@ -1018,7 +1014,9 @@ class QuerySet(Generic[T]):
             filtered_data = {k: v for k, v in data.items() if k in table_columns}
 
             if filtered_data:
-                instances.append(self._model_class.from_dict(filtered_data))  # type: ignore[reportAttributeAccessIssue]
+                instances.append(
+                    self._model_class._from_database(filtered_data, session.db_name)  # type: ignore[reportAttributeAccessIssue]
+                )
 
         return instances
 
@@ -1241,6 +1239,7 @@ class QuerySet(Generic[T]):
     @emit_signals(Operation.UPDATE, is_bulk=True)
     async def update(self, **values) -> int:
         """Perform bulk update on objects matching query conditions."""
+        self._validate_write_query()
         from .cascade import CascadeExecutor
 
         executor = CascadeExecutor()
@@ -1262,8 +1261,25 @@ class QuerySet(Generic[T]):
         """
         from .cascade import CascadeExecutor
 
+        self._validate_write_query()
         executor = CascadeExecutor()
         return await executor.execute_delete_operation(self, cascade_strategy=cascade)
+
+    def _validate_write_query(self) -> None:
+        """Reject clauses that cannot safely be translated into a direct write."""
+        builder = self._builder
+        if builder.limits is not None or builder.offset_value is not None:
+            raise QueryError("Cannot update or delete a sliced queryset (limit/offset)")
+        if (
+            builder.group_clauses
+            or builder.having_conditions
+            or builder.distinct_fields
+            or builder.joins
+            or builder.relationships
+        ):
+            raise QueryError(
+                "Cannot update or delete a grouped, distinct or joined queryset; filter by primary keys instead"
+            )
 
     # ========================================
 

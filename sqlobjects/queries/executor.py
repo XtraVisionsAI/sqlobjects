@@ -1,5 +1,3 @@
-import asyncio
-import gc
 import logging
 import time
 from collections.abc import AsyncGenerator
@@ -108,27 +106,54 @@ class QueryExecutor:
 
         return result
 
-    async def iterator(self, query, chunk_size: int = 1000) -> AsyncGenerator[Any, None]:
-        """Async iterator for processing large datasets in chunks."""
-        offset = 0
-        processed_chunks = 0
+    async def iterator(
+        self, query, chunk_size: int = 1000, *, builder=None, model_class=None
+    ) -> AsyncGenerator[Any, None]:
+        """Stream the original query and hydrate each bounded partition."""
+        from ..session import AsyncSession
 
-        while True:
-            chunk_query = query.offset(offset).limit(chunk_size)
-            chunk = await self._execute_query(chunk_query, "all")
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        session = self._get_session("all")
+        owned = session.readonly or session.auto_commit
+        if owned and getattr(query, "_for_update_arg", None) is not None and session.bind.dialect.name != "sqlite":
+            from ..exceptions import TransactionError
 
-            if not isinstance(chunk, list) or not chunk:
-                break
+            raise TransactionError("select_for_update/select_for_share requires an explicit transaction")
+        if owned:
+            session = AsyncSession(session.db_name, readonly=False, auto_commit=False)
+        if (
+            builder
+            and (builder.prefetch_relationships or builder.prefetch_configs)
+            and session.bind.dialect.name == "mysql"
+        ):
+            from ..exceptions import QueryError
 
-            for item in chunk:
-                yield item
-
-            offset += len(chunk)
-            processed_chunks += 1
-
-            # Periodic memory cleanup
-            if processed_chunks % 10 == 0:
-                gc.collect()
+            raise QueryError("MySQL streaming cannot prefetch using the same connection; use explicit pagination")
+        result = None
+        try:
+            result = await session.stream(query.execution_options(yield_per=chunk_size))
+            async for rows in result.partitions(chunk_size):
+                instances = (
+                    [self._row_to_instance(row, model_class, db_or_session=session.db_name) for row in rows]
+                    if model_class
+                    else rows
+                )
+                if builder and model_class:
+                    loader = QueryExecutor(session)
+                    if builder.prefetch_relationships:
+                        await loader._handle_prefetch_relationships(instances, builder.prefetch_relationships)
+                    if builder.prefetch_configs:
+                        await loader._handle_prefetch(instances, builder.prefetch_configs)
+                for instance in instances:
+                    yield instance
+        finally:
+            try:
+                if result is not None:
+                    await result.close()
+            finally:
+                if owned:
+                    await session.close()
 
     async def explain(self, query, analyze: bool = False, verbose: bool = False) -> str:
         """Execute EXPLAIN for SQLAlchemy query object.
@@ -171,11 +196,7 @@ class QueryExecutor:
         from_table = froms[0] if froms else query.table
 
         if query_type == "count":
-            return (
-                select(func.count()).select_from(from_table).where(query.whereclause)
-                if query.whereclause is not None
-                else select(func.count()).select_from(from_table)
-            )
+            return select(func.count()).select_from(query.order_by(None).subquery())
         elif query_type == "exists":
             return select(exists(query))
         elif query_type == "update":
@@ -256,6 +277,11 @@ class QueryExecutor:
                 params = {}
             t0 = time.perf_counter()
 
+        if getattr(query, "_for_update_arg", None) is not None and session.bind.dialect.name != "sqlite":
+            if session.readonly or session.auto_commit:
+                from ..exceptions import TransactionError
+
+                raise TransactionError("select_for_update/select_for_share requires an explicit transaction")
         result = await session.execute(query)
 
         if _logging_active:
@@ -270,7 +296,13 @@ class QueryExecutor:
             if model_class:
                 return [
                     self._row_to_instance(
-                        row, model_class, deferred_fields, query_deferred, field_deferred, relationships
+                        row,
+                        model_class,
+                        deferred_fields,
+                        query_deferred,
+                        field_deferred,
+                        relationships,
+                        session.db_name,
                     )
                     for row in rows
                 ]
@@ -313,151 +345,50 @@ class QueryExecutor:
 
     @staticmethod
     def _row_to_instance(
-        row, model_class, deferred_fields=None, query_deferred=None, field_deferred=None, relationships=None
+        row,
+        model_class,
+        deferred_fields=None,
+        query_deferred=None,
+        field_deferred=None,
+        relationships=None,
+        db_or_session=None,
     ):
-        """Convert SQLAlchemy Row to model instance with deferred field support and relationships."""
-        # Convert Row to dictionary
-        data = dict(row._mapping)  # noqa
-
-        # Separate main model data from related model data and annotate fields
-        main_data = {}
-        related_data = {}
-        annotate_data = {}  # Store annotate fields
-
-        # Get all field names from model
-        all_fields = set(model_class._get_field_names())  # noqa
-
-        for key, value in data.items():
-            if "__" in key:
-                # This is a related field (e.g., "author__username")
-                relation_name, field_name = key.split("__", 1)
-                if relation_name not in related_data:
-                    related_data[relation_name] = {}
-                related_data[relation_name][field_name] = value
-            elif key in all_fields:
-                # This is a main model field
-                main_data[key] = value
+        """Hydrate model state and nested joined objects without construction defaults."""
+        data = dict(row._mapping) if hasattr(row, "_mapping") else row
+        main_data, related_data, annotations = {}, {}, {}
+        fields = set(model_class._get_field_names())
+        for name, value in data.items():
+            if name in fields:
+                main_data[name] = value
+            elif "__" in name:
+                relation, field = name.split("__", 1)
+                related_data.setdefault(relation, {})[field] = value
             else:
-                # This is an annotate field (not in model definition)
-                annotate_data[key] = value
-
-        # Calculate actual deferred fields based on what was loaded vs what should be deferred
-        loaded_fields = set(main_data.keys())
-
-        # Determine which fields should be deferred:
-        # 1. Fields explicitly deferred in query (.defer() calls)
-        # 2. Fields marked as deferred=True in field definitions (but only if not explicitly loaded)
-        actual_deferred_fields = set()
-
-        # Add query-level deferred fields (from .defer() calls)
-        if query_deferred:
-            actual_deferred_fields.update(query_deferred)
-
-        # Add field-level deferred fields (from field definitions) only if they weren't explicitly loaded
-        if field_deferred:
-            # Only defer field-level deferred fields if they weren't loaded in this query
-            for field in field_deferred:
-                if field not in loaded_fields:
-                    actual_deferred_fields.add(field)
-
-        # Remove deferred fields from main_data
-        for field in actual_deferred_fields:
-            main_data.pop(field, None)
-
-        # Create model instance
-        instance = model_class.from_dict(main_data, validate=False)
-
-        # Set deferred field state
-        instance._state_manager.set_deferred_fields(actual_deferred_fields)  # noqa
-        instance._state_manager.mark_from_database(True)  # noqa
-
-        # Attach annotate fields as dynamic attributes
-        for key, value in annotate_data.items():
-            setattr(instance, key, value)
-
-        # Create and attach related objects
-        if related_data and relationships:
-            for relation_name in relationships:
-                if relation_name in related_data:
-                    # Find the related model class
-                    related_model_class = QueryExecutor._find_related_model_class(model_class, relation_name)
-                    if related_model_class:
-                        # Create related instance
-                        related_instance = related_model_class.from_dict(related_data[relation_name], validate=False)
-                        # Attach to main instance
-                        setattr(instance, relation_name, related_instance)
-
+                annotations[name] = value
+        instance = model_class._from_database(main_data, db_or_session)
+        for name, value in annotations.items():
+            setattr(instance, name, value)
+        for name, values in related_data.items():
+            related_model = QueryExecutor._find_related_model_class(model_class, name)
+            if related_model is None:
+                raise ValueError(f"Cannot hydrate unknown relationship {model_class.__name__}.{name}")
+            pk = list(related_model.get_table().primary_key)
+            related = (
+                None
+                if pk and all(values.get(col.name) is None for col in pk)
+                else QueryExecutor._row_to_instance(values, related_model, db_or_session=db_or_session)
+            )
+            instance._update_cache(name, related)
         return instance
 
     async def _handle_prefetch(self, instances, prefetch_configs):
-        """Handle prefetch_related with custom QuerySet configurations."""
-        if not instances or not prefetch_configs:
-            return instances
+        from ..fields.relations.prefetch import PrefetchHandler
 
-        instance_ids = [instance.id for instance in instances if hasattr(instance, "id")]
-        if not instance_ids:
-            return instances
-
-        # Execute all prefetch queries concurrently
-        tasks = [
-            self._single_prefetch(field_name, queryset, instance_ids)
-            for field_name, queryset in prefetch_configs.items()
-        ]
-        prefetch_results = await asyncio.gather(*tasks)
-
-        # Associate results with instances
-        for field_name, related_objects in prefetch_results:
-            related_map = self._group_by_foreign_key(related_objects)
-            for instance in instances:
-                instance_id = getattr(instance, "id", None)
-                setattr(instance, field_name, related_map.get(instance_id, []))
-
+        if instances:
+            await PrefetchHandler(self._get_session("all")).handle_prefetch_relationships(
+                instances, prefetch_configs.keys(), prefetch_configs
+            )
         return instances
-
-    @staticmethod
-    async def _single_prefetch(field_name, queryset, instance_ids):
-        """Execute single prefetch query."""
-        # Assume foreign key field follows pattern: {model_name}_id
-        # This is a simplified implementation - in practice, you'd need relationship metadata
-        foreign_key_field = f"{queryset._model_class.__name__.lower()}_id"  # noqa
-
-        try:
-            # Try to find the foreign key column
-            if hasattr(queryset._table.c, foreign_key_field):  # noqa
-                fk_column = getattr(queryset._table.c, foreign_key_field)  # noqa
-            else:
-                # Fallback to common patterns
-                for col_name in queryset._table.c.keys():  # noqa
-                    if col_name.endswith("_id"):
-                        fk_column = queryset._table.c[col_name]  # noqa
-                        break
-                else:
-                    return field_name, []
-
-            related_objects = await queryset.filter(fk_column.in_(instance_ids)).all()
-            return field_name, related_objects
-        except Exception:  # noqa
-            # If prefetch fails, return empty list
-            return field_name, []
-
-    @staticmethod
-    def _group_by_foreign_key(related_objects):
-        """Group related objects by foreign key."""
-        grouped = {}
-        for obj in related_objects:
-            # Try to find the foreign key value
-            fk_value = None
-            for attr_name in dir(obj):
-                if attr_name.endswith("_id") and not attr_name.startswith("_"):
-                    fk_value = getattr(obj, attr_name, None)
-                    break
-
-            if fk_value is not None:
-                if fk_value not in grouped:
-                    grouped[fk_value] = []
-                grouped[fk_value].append(obj)
-
-        return grouped
 
     async def _handle_prefetch_relationships(self, instances, prefetch_relationships):
         """Handle prefetch_related relationships using PrefetchHandler.

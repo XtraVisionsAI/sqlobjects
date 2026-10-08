@@ -69,23 +69,20 @@ comments = await Comment.objects.select_related("post__author").all()
 
 ### Advanced prefetch_related
 
+Custom queryset keys must name declared relationships. Filtering and ordering are
+supported; sliced querysets and arbitrary output aliases are rejected.
+
 ```python
-# Custom QuerySet for filtering and ordering
 users = await User.objects.prefetch_related(
-    published_posts=Post.objects.filter(Post.is_published == True)
-                               .order_by('-created_at')
-                               .limit(5)
+    posts=Post.objects.filter(Post.is_published == True).order_by('-created_at')
 ).all()
 
-# Access prefetched data
 for user in users:
-    recent_posts = await user.published_posts.fetch()
+    published_posts = await user.load_relation("posts")
 
-# Multiple advanced prefetch configurations
 users = await User.objects.prefetch_related(
-    active_posts=Post.objects.filter(Post.status == "active"),
-    draft_posts=Post.objects.filter(Post.status == "draft"),
-    recent_comments=Comment.objects.order_by('-created_at').limit(10)
+    posts=Post.objects.filter(Post.status == "active"),
+    comments=Comment.objects.order_by('-created_at')
 ).all()
 ```
 
@@ -131,7 +128,7 @@ posts = await Post.objects.select_related(Post.author).all()
 
 # Good: Filtered prefetch
 users = await User.objects.prefetch_related(
-    recent_posts=Post.objects.filter(
+    posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
     ).order_by('-created_at')
 ).all()
@@ -349,7 +346,7 @@ posts = await Post.objects.select_related("author").defer(
 
 # Filter prefetched relationships
 users = await User.objects.prefetch_related(
-    recent_posts=Post.objects.filter(
+    posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
     ).order_by('-created_at').limit(10)
 ).all()
@@ -477,11 +474,11 @@ posts = await Post.objects.select_related("author").prefetch_related("comments",
 
 # Advanced prefetch with filtering
 users = await User.objects.prefetch_related(
-    recent_posts=Post.objects.filter(
+    posts=Post.objects.filter(
         Post.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
-    ).order_by('-created_at').limit(5)
+    ).order_by('-created_at')
 ).all()
 
 for user in users:
-    recent_posts = await user.recent_posts.fetch()
+    recent_posts = await user.load_relation("posts")
 ```

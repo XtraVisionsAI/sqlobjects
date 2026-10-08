@@ -401,7 +401,8 @@ class TestBulkOperationErrorHandling:
 
         # Should handle constraint violation gracefully
         with pytest.raises(Exception):  # Database constraint error expected  # noqa: B017
-            await User.objects.using(session).bulk_update(update_mappings, match_fields=["id"])
+            async with await session.begin_nested():
+                await User.objects.using(session).bulk_update(update_mappings, match_fields=["id"])
 
     async def test_bulk_operation_transaction_rollback(self, isolated_session):
         """Test bulk operations rollback on transaction failure"""

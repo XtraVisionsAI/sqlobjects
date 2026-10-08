@@ -55,7 +55,7 @@ dev = [
     "setuptools>=82.0.0",
 ]
 test = [
-    "aiomysql>=0.3.2",
+    "aiomysql[rsa]>=0.3.2",
     "aiosqlite>=0.22.1",
     "asyncpg>=0.31.0",
     "pytest>=9.0.2",

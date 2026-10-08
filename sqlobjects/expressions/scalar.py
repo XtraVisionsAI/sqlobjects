@@ -26,7 +26,9 @@ class CountExpression(QueryExpression[int]):
 
     def get_query(self):
         """Return SQLAlchemy query object."""
-        return self._builder.build(self._builder.model_class.get_table())
+        table = self._builder.model_class.get_table()
+        base = self._builder.build(table).order_by(None).correlate_except(table)
+        return select(func.count()).select_from(base.subquery())
 
     async def execute(self) -> int:
         """Execute count query and return integer result.
@@ -47,8 +49,7 @@ class CountExpression(QueryExpression[int]):
         Returns:
             SQL string for the count operation
         """
-        base_query = self._builder.build(self._builder.model_class.get_table())
-        return str(base_query.compile(compile_kwargs={"literal_binds": True}))
+        return str(self.get_query().compile(compile_kwargs={"literal_binds": True}))
 
     def scalar_subquery(self):
         """Convert to scalar subquery for use in comparisons.
@@ -56,12 +57,7 @@ class CountExpression(QueryExpression[int]):
         Returns:
             SQLAlchemy scalar subquery expression
         """
-        query = select(func.count()).select_from(self._builder.model_class.get_table())
-
-        if hasattr(self._builder, "conditions") and self._builder.conditions:
-            query = query.where(and_(*self._builder.conditions))
-
-        return query.scalar_subquery()
+        return self.get_query().scalar_subquery()
 
 
 class ExistsExpression(QueryExpression[bool]):

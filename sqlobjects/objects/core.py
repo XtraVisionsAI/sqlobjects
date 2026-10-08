@@ -4,11 +4,12 @@ This module provides the core ObjectsManager functionality including
 session management, query building, and single record operations.
 """
 
+from contextlib import aclosing
 from typing import Any, Generic, Literal, overload
 
 from sqlalchemy import insert, text
 
-from ..exceptions import DoesNotExist, MultipleObjectsReturned
+from ..exceptions import DoesNotExist, IntegrityError, MultipleObjectsReturned
 from ..queryset import QuerySet, T, TableLike
 from ..session import AsyncSession, get_session
 from ..signals import Operation, emit_signals
@@ -453,8 +454,9 @@ class ObjectsManager(Generic[T]):
         Yields:
             Model instances one by one
         """
-        async for obj in self.filter().iterator(chunk_size):
-            yield obj
+        async with aclosing(self.filter().iterator(chunk_size)) as stream:
+            async for obj in stream:
+                yield obj
 
     def get_item(self, key):
         """Create get_item expression that can be executed or used as subquery.
@@ -492,21 +494,25 @@ class ObjectsManager(Generic[T]):
             self._validate_field_names(**defaults)
 
         try:
-            # Try to get existing object
-            conditions = [self._table.c[field] == value for field, value in lookup.items()]
-            obj = await self.filter(*conditions).get()
-            return obj, False
+            return await self.filter(**lookup).get(), False
         except DoesNotExist:
-            # Create new object with lookup fields + defaults
-            create_data = lookup.copy()
-            if defaults:
-                # defaults override lookup values if there's conflict
-                create_data.update(defaults)
-
-            # Create instance and use save() method to trigger signals
-            obj = self._model_class.from_dict(create_data, validate=False)  # type: ignore[reportAttributeAccessIssue]
-            await obj.using(self._get_session(readonly=False)).save(validate=validate)
-            return obj, True
+            pass
+        create_data = {**lookup, **(defaults or {})}
+        session = self._get_session(readonly=False)
+        async with session.transaction() as transaction:
+            try:
+                async with await transaction.begin_nested():
+                    obj = await self.using(transaction).create(validate=validate, **create_data)
+                # Keep the database origin, not an internally owned session after it closes.
+                obj.using(self._db_or_session or session.db_name)  # type: ignore[reportAttributeAccessIssue]
+                return obj, True
+            except IntegrityError as error:
+                try:
+                    obj = await self.using(transaction).filter(**lookup).get()
+                    obj.using(self._db_or_session or session.db_name)  # type: ignore[reportAttributeAccessIssue]
+                    return obj, False
+                except DoesNotExist:
+                    raise error from None
 
     async def update_or_create(
         self, defaults: dict[str, Any] | None = None, validate: bool = True, **lookup
@@ -529,29 +535,23 @@ class ObjectsManager(Generic[T]):
         if defaults:
             self._validate_field_names(**defaults)
 
-        try:
-            # Try to get existing object
-            conditions = [self._table.c[field] == value for field, value in lookup.items()]
-            obj = await self.filter(*conditions).get()
-
-            # Update existing object with defaults using save() method
+        session = self._get_session(readonly=False)
+        async with session.transaction() as transaction:
+            manager = self.using(transaction)
+            try:
+                obj = await manager.select_for_update().filter(**lookup).get()
+            except DoesNotExist:
+                obj, created = await manager.get_or_create(defaults=defaults, validate=validate, **lookup)
+                if created:
+                    obj.using(self._db_or_session or session.db_name)  # type: ignore[reportAttributeAccessIssue]
+                    return obj, True
+                obj = await manager.select_for_update().filter(**lookup).get()
+            for key, value in (defaults or {}).items():
+                setattr(obj, key, value)
             if defaults:
-                for key, value in defaults.items():
-                    setattr(obj, key, value)
-                await obj.using(self._get_session(readonly=False)).save(validate=validate)  # type: ignore[reportAttributeAccessIssue]
-
+                await obj.save(validate=validate, session=transaction)  # type: ignore[reportAttributeAccessIssue]
+            obj.using(self._db_or_session or session.db_name)  # type: ignore[reportAttributeAccessIssue]
             return obj, False
-        except DoesNotExist:
-            # Create new object with lookup fields + defaults
-            create_data = lookup.copy()
-            if defaults:
-                # defaults override lookup values if there's conflict
-                create_data.update(defaults)
-
-            # Create instance and use save() method to trigger signals
-            obj = self._model_class.from_dict(create_data, validate=False)  # type: ignore[reportAttributeAccessIssue]
-            await obj.using(self._get_session(readonly=False)).save(validate=validate)
-            return obj, True
 
     async def in_bulk(self, id_list: list[Any] | None = None, field_name: str = "pk") -> dict[Any, T]:
         """Get multiple objects as a dictionary mapping field values to objects.
@@ -588,23 +588,24 @@ class ObjectsManager(Generic[T]):
         Returns:
             Created model instance
         """
-        try:
-            obj = self._model_class.from_dict(kwargs, validate=False)  # type: ignore[reportAttributeAccessIssue]
-            # Execute database operation directly, don't call obj.save() to avoid duplicate signals
-            if validate:
-                obj.validate_all_fields()
-
-            stmt = insert(self._table).values(**obj._get_all_data())  # noqa
-            session = self._get_session(readonly=False)
+        obj = self._model_class.from_dict(kwargs, validate=False)  # type: ignore[reportAttributeAccessIssue]
+        if validate:
+            obj.validate_all_fields()
+        stmt = insert(self._table).values(**obj._get_all_data())
+        session = self._get_session(readonly=False)
+        if session.bind.dialect.insert_returning:
+            result = await session.execute(stmt.returning(*self._table.columns))
+            for name, value in result.one()._mapping.items():
+                setattr(obj, name, value)
+        else:
             result = await session.execute(stmt)
-
-            # Set primary key values from result
             if result.inserted_primary_key:
-                obj._set_primary_key_values(result.inserted_primary_key)  # noqa
-
-            return obj
-        except Exception as e:
-            raise RuntimeError(f"Failed to create {self._model_class.__name__}: {e}") from e
+                obj._set_primary_key_values(result.inserted_primary_key)
+        obj._state_manager.mark_from_database(True)
+        obj._state_manager._set("persisted_pk", obj._get_primary_key_values())
+        obj._state_manager.clear_dirty_fields()
+        obj.using(self._db_or_session or session.db_name)
+        return obj
 
     # QuerySet shortcut methods
 

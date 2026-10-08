@@ -2,14 +2,14 @@ import contextvars
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import CursorResult, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncResult
 
 from .database.manager import get_database, get_default
-from .exceptions import convert_sqlalchemy_error
+from .exceptions import TransactionError, convert_sqlalchemy_error
 
 
 __all__ = ["AsyncSession", "ctx_session", "ctx_sessions", "get_session", "has_session"]
@@ -41,6 +41,7 @@ class AsyncSession:
         self.auto_commit = auto_commit and not readonly  # readonly sessions never auto-commit
         self._conn: AsyncConnection | None = None
         self._trans = None
+        self._rollback_only = False
 
     @property
     def db_name(self) -> str:
@@ -71,7 +72,12 @@ class AsyncSession:
         Supports both SQLAlchemy statement objects and raw SQL strings.
         Raw SQL strings are automatically wrapped with text().
         """
+        if self._rollback_only:
+            raise TransactionError("Transaction failed; roll it back before executing more statements")
+        if self.readonly and getattr(statement, "is_dml", False):
+            raise TransactionError("Cannot execute a write using a readonly session")
         await self._ensure_connection()
+        assert self._conn is not None
 
         # Auto-wrap string SQL with text()
         if isinstance(statement, str):
@@ -79,13 +85,13 @@ class AsyncSession:
 
         # Auto-begin transaction for non-readonly sessions
         if not self.readonly and self._trans is None:
-            self._trans = await self._conn.begin()  # type: ignore
+            self._trans = await self._conn.begin()
 
         try:
-            result = await self._conn.execute(statement, parameters)  # type: ignore
+            result = await self._conn.execute(statement, parameters)
 
             # Auto-commit for implicit sessions
-            if self.auto_commit:
+            if self.auto_commit and not self._conn.in_nested_transaction():
                 await self.commit()
 
             # Buffer rows before closing so the connection can be returned to the pool.
@@ -102,7 +108,7 @@ class AsyncSession:
         finally:
             # Auto-close connection for implicit sessions to prevent resource leaks
             # This covers both auto_commit write sessions and readonly sessions
-            if self.auto_commit or self.readonly:
+            if (self.auto_commit or self.readonly) and self._conn and not self._conn.in_nested_transaction():
                 await self.close()
 
     async def stream(self, statement: Any, parameters: Any = None) -> AsyncResult[Any]:
@@ -114,6 +120,8 @@ class AsyncSession:
         Note: stream() is not supported with auto_commit=True sessions.
         Use explicit sessions (ctx_session) for streaming operations.
         """
+        if self._rollback_only:
+            raise TransactionError("Transaction failed; roll it back before executing more statements")
         if self.auto_commit:
             raise ValueError(
                 "stream() not supported with auto_commit=True. Use ctx_session() or explicit session management."
@@ -136,6 +144,8 @@ class AsyncSession:
 
     async def commit(self):
         """Commit transaction if exists and not readonly."""
+        if self._rollback_only:
+            raise TransactionError("Cannot commit a failed transaction; roll it back")
         if self._trans and not self.readonly:
             await self._trans.commit()
             self._trans = None
@@ -145,6 +155,18 @@ class AsyncSession:
         if self._trans and not self.readonly:
             await self._trans.rollback()
             self._trans = None
+        self._rollback_only = False
+
+    @asynccontextmanager
+    async def transaction(self):
+        """Join an explicit transaction, or own a transaction for a compound operation."""
+        if self.readonly:
+            raise TransactionError("A write transaction requires a writable session")
+        if self.auto_commit:
+            async with ctx_session(self.db_name) as session:
+                yield session
+        else:
+            yield self
 
     async def close(self):
         """Close session and cleanup resources."""
@@ -166,10 +188,20 @@ class AsyncSession:
 
     async def begin_nested(self):
         """Begin nested transaction (savepoint)."""
+        if self._rollback_only or self.readonly:
+            raise TransactionError("Cannot create a savepoint in a failed or readonly session")
         await self._ensure_connection()
         if not self._trans:
             self._trans = await self._conn.begin()  # type: ignore
-        return await self._conn.begin_nested()  # type: ignore
+        assert self._conn is not None
+        # SQLite legacy mode may have a logical transaction but no physical BEGIN yet.
+        if self._conn.dialect.name == "sqlite":
+            sync_connection = self._conn.sync_connection
+            assert sync_connection is not None
+            driver = cast(Any, sync_connection.connection.driver_connection)
+            if not driver.in_transaction:
+                await self._conn.exec_driver_sql("BEGIN")
+        return await self._conn.begin_nested()
 
     async def _ensure_connection(self):
         """Ensure connection is available with health check."""
@@ -183,7 +215,10 @@ class AsyncSession:
 
     async def _handle_exception(self, exc: Exception):
         """Handle exceptions with unified error processing."""
-        await self.rollback()
+        if self.auto_commit and not (self._conn and self._conn.in_nested_transaction()):
+            await self.rollback()
+        elif not (self._conn and self._conn.in_nested_transaction()):
+            self._rollback_only = True
 
         # Log detailed error for debugging when echo is enabled
         if hasattr(self.bind, "echo") and getattr(self.bind, "echo", False):
@@ -195,7 +230,7 @@ class AsyncSession:
 
         if isinstance(exc, SQLAlchemyError):
             raise convert_sqlalchemy_error(exc) from exc
-        raise
+        raise exc
 
     async def __aenter__(self) -> "AsyncSession":
         """Async context manager entry."""
@@ -349,8 +384,10 @@ async def ctx_session(db_name: str | None = None, *, join_ambient: bool = False)
         raise
     finally:
         # Cleanup
-        await session.close()
-        _SessionContextManager.reset_session(token)
+        try:
+            await session.close()
+        finally:
+            _SessionContextManager.reset_session(token)
 
 
 @asynccontextmanager

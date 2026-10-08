@@ -167,13 +167,13 @@ class BaseMixin:
 class SessionMixin(BaseMixin):
     """Session management - Layer 1."""
 
-    def get_session(self) -> AsyncSession:
+    def get_session(self, readonly: bool = True) -> AsyncSession:
         """Get the effective session for database operations.
 
         Returns:
             AsyncSession instance for database operations
         """
-        return get_session(self._state_manager.get_bound_session())
+        return get_session(self._state_manager.get_bound_session(), readonly=readonly)
 
     def using(self, db_or_session: str | AsyncSession):
         """Return self bound to specific database/connection.
@@ -419,7 +419,7 @@ class DeferredLoadingMixin(ValidationMixin):
             Loaded relationship data
         """
         proxy = getattr(self, field_name)
-        return await proxy.fetch()
+        return await proxy.fetch() if hasattr(proxy, "fetch") else proxy
 
     async def load_relations(self, *field_names: str) -> dict[str, Any]:
         """Load multiple relationship fields.
@@ -527,7 +527,7 @@ class FieldCacheMixin(DeferredLoadingMixin):
         field_cache = model_class._get_field_cache()  # noqa
 
         # Handle deferred fields
-        deferred_fields = field_cache.get("deferred_fields", set())
+        deferred_fields = self._deferred_fields
         if isinstance(deferred_fields, set) and name in deferred_fields:
             if (
                 name in self._deferred_fields
@@ -655,6 +655,24 @@ class DataConversionMixin(FieldCacheMixin):
                         continue
 
         return result
+
+    @classmethod
+    def _from_database(cls, data: dict[str, Any], db_or_session=None):
+        """Hydrate stored values without applying Python construction defaults."""
+        instance = cls.__new__(cls)
+        BaseMixin.__init__(instance)
+        fields = set(cls._get_field_names())
+        for name, value in data.items():
+            if name in fields:
+                setattr(instance, name, value)
+        instance._state_manager.set_deferred_fields(fields - data.keys())
+        instance._state_manager.mark_from_database(True)
+        instance._state_manager.set_bound_session(db_or_session)
+        instance._state_manager._set(
+            "persisted_pk", {col.name: data[col.name] for col in cls.get_table().primary_key if col.name in data}
+        )
+        instance._state_manager.clear_dirty_fields()
+        return instance
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], validate: bool = True):

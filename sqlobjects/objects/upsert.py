@@ -50,7 +50,7 @@ class UpsertHandler:
         # Use DialectHandler to generate statement
         return self.dialect.get_upsert_statement(
             table=table,
-            data=values[0],
+            data=values[0] if len(values) == 1 else values,
             conflict_fields=match_fields or [],
             update_fields=update_fields,
         )
@@ -65,14 +65,42 @@ class UpsertHandler:
         """Execute UPSERT and return affected rows."""
         if not values:
             return []
+        match_fields = match_fields or []
 
-        stmt = self.get_upsert_statement(table, values, conflict_resolution, match_fields)
-
-        if self.dialect.supports_returning():
+        # A matching key lets us restore input order after a multi-row RETURNING.
+        can_match = bool(match_fields) and all(
+            all(field in value and value[field] is not None for field in match_fields) for value in values
+        )
+        if (
+            self.dialect.supports_returning()
+            and can_match
+            and len({tuple(v[f] for f in match_fields) for v in values}) == len(values)
+        ):
+            stmt = self.get_upsert_statement(table, values, conflict_resolution, match_fields)
             stmt = stmt.returning(*table.columns)  # noqa
             result = await self.session.execute(stmt)
-            return [dict(row._mapping) for row in result.fetchall()]  # noqa
-        else:
-            # For databases without RETURNING support
+            rows = {tuple(row._mapping[f] for f in match_fields): dict(row._mapping) for row in result.fetchall()}
+            return [rows[key] for value in values if (key := tuple(value[f] for f in match_fields)) in rows]
+
+        rows = []
+        for value in values:
+            stmt = self.get_upsert_statement(table, [value], conflict_resolution, match_fields)
+            if self.dialect.supports_returning():
+                result = await self.session.execute(stmt.returning(*table.columns))
+                rows.extend(dict(row._mapping) for row in result.fetchall())
+                continue
             result = await self.session.execute(stmt)
-            return values[: result.rowcount] if result.rowcount and result.rowcount > 0 else []
+            if result.rowcount <= 0:
+                continue
+            # Fetch actual stored values; affected-row counts are not input offsets.
+            keys: dict[str, Any] = {field: value[field] for field in match_fields if field in value}
+            if not keys:
+                primary_key = result.inserted_primary_key
+                if primary_key is not None:
+                    keys = dict(zip((col.name for col in table.primary_key), primary_key, strict=True))
+            if not keys or any(v is None for v in keys.values()):
+                raise ValueError("UPSERT without RETURNING requires conflict fields or a generated primary key")
+            stored = await self.session.execute(sa.select(table).where(*(table.c[k] == v for k, v in keys.items())))
+            row = stored.one()
+            rows.append(dict(row._mapping))
+        return rows
