@@ -13,14 +13,15 @@
 ### Commit callbacks
 
 - `after_*` signals describe operation completion, not transaction commit.
-- Use `await context.on_commit(callback)` for external effects from an instance
+- Use `await context.on_commit(callback)` for external effects from an instance or bulk
   signal, or `await session.on_commit(callback)` / `await on_commit(callback)`
   from `sqlobjects.session` in application code.
 - Pass a callable. Sync functions and awaitable return values run inline after
   successful commit, in registration order. Rollback discards pending callbacks,
   including those registered in a rolled-back savepoint.
-- Outside a transaction registration executes immediately. Registering from
-  `before_*` therefore requires an explicit surrounding write transaction.
+- Manager `create()`, bulk methods and QuerySet writes provide transaction
+  boundaries for their hooks. For direct instance `save()`, use `ctx_session()`
+  when registering from `before_*`. Outside a transaction registration executes immediately.
 - `robust=True` logs ordinary callback errors and continues. Callback errors never
   undo an already committed transaction; cancellation is not swallowed.
 - Open a new session for database work in callbacks. Use an outbox if delivery
@@ -71,6 +72,10 @@ class User(ObjectModel):
 
 ### Instance-level Signals
 
+`objects.create()` emits save/create instance hooks around an INSERT, including
+when a primary key is supplied. Before hooks run before validation and SQL;
+after hooks see the persisted instance. Sync handlers may return an awaitable.
+
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext
@@ -119,6 +124,17 @@ class User(ObjectModel):
 ```
 
 ### Bulk Operation Signals
+
+Manager bulk methods emit class hooks once per batch, with no instance hooks.
+Create/update also emit generic bulk-save hooks. Before counts are input sizes;
+after counts match each batch's successful result count. Empty input emits no
+hooks. QuerySet update/delete hooks run once per call; before counts are unknown,
+and only QuerySet update supplies uniform `update_data`.
+
+Use `context.session` for work in the batch transaction and `context.on_commit()`
+for effects after its commit. Hook failures propagate even with `IGNORE` or
+`COLLECT`; earlier committed batches remain stored. See the
+[full signal contract](../features/06-validation-signals.md#bulk-operation-signals).
 
 ```python
 class User(ObjectModel):

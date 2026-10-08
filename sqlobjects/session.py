@@ -12,9 +12,10 @@ from typing import Any, cast
 from sqlalchemy import CursorResult, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncResult, AsyncTransaction
+from sqlalchemy.sql import ClauseElement, visitors
 
 from .database.manager import get_database, get_default
-from .exceptions import TransactionError, convert_sqlalchemy_error
+from .exceptions import QueryError, TransactionError, convert_sqlalchemy_error
 
 
 __all__ = ["AsyncSession", "ctx_session", "ctx_sessions", "get_session", "has_session", "on_commit"]
@@ -114,6 +115,16 @@ class AsyncSession:
         # Return engine if no connection yet
         return get_database(self._db_name).engine
 
+    def _validate_statement_dialect(self, statement: Any) -> None:
+        if not isinstance(statement, ClauseElement) or self.bind.dialect.name == "postgresql":
+            return
+        # Check nested SELECTs too: counts, scalar subqueries and CTEs must not
+        # silently lose DISTINCT ON when SQLAlchemy compiles another dialect.
+        if any(getattr(part, "_distinct_on", ()) for part in visitors.iterate(statement)):
+            raise QueryError(
+                "distinct(*fields) requires PostgreSQL; use distinct() with values()/values_list() instead"
+            )
+
     async def execute(self, statement: Any, parameters: Any = None) -> CursorResult[Any]:
         """Execute statement with automatic transaction management.
 
@@ -125,6 +136,7 @@ class AsyncSession:
             raise TransactionError("Transaction failed; roll it back before executing more statements")
         if self.readonly and getattr(statement, "is_dml", False):
             raise TransactionError("Cannot execute a write using a readonly session")
+        self._validate_statement_dialect(statement)
         await self._ensure_connection()
         assert self._conn is not None
 
@@ -178,6 +190,7 @@ class AsyncSession:
                 "stream() not supported with auto_commit=True. Use ctx_session() or explicit session management."
             )
 
+        self._validate_statement_dialect(statement)
         await self._ensure_connection()
 
         # Auto-wrap string SQL with text()

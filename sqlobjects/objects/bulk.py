@@ -14,11 +14,19 @@ from sqlalchemy import bindparam, insert, select, update
 from ..cascade import has_cascade_delete_relations
 from ..internal import ResultProcessor
 from ..session import AsyncSession, ctx_session
+from ..signals import Operation, SignalContext
 from .upsert import ConflictResolution as UpsertConflictResolution
 from .upsert import UpsertHandler
 
 
 T = TypeVar("T")
+
+
+class _BulkSignalError(Exception):
+    """Keep application hook failures out of the record-error collection policy."""
+
+    def __init__(self, original: Exception):
+        self.original = original
 
 
 def _get_error_code(exception: Exception) -> str:
@@ -172,6 +180,7 @@ class BulkOperationHandler:
         operation_func,
         transaction_mode: TransactionMode,
         on_error: ErrorHandling,
+        operation: Operation,
     ):
         """Execute bulk operation with unified batch processing logic."""
         if batch_size <= 0:
@@ -180,13 +189,13 @@ class BulkOperationHandler:
             async with ctx_session(self.session.db_name) as transaction:
                 handler = BulkOperationHandler(transaction, self.table, self.model_class, TransactionMode.INHERIT)
                 return await handler.execute_bulk_operation(
-                    data, batch_size, operation_func, TransactionMode.INHERIT, on_error
+                    data, batch_size, operation_func, TransactionMode.INHERIT, on_error, operation
                 )
         if transaction_mode != TransactionMode.BATCH and self.session.auto_commit:
             async with self.session.transaction() as transaction:
                 handler = BulkOperationHandler(transaction, self.table, self.model_class, transaction_mode)
                 return await handler.execute_bulk_operation(
-                    data, batch_size, operation_func, transaction_mode, on_error
+                    data, batch_size, operation_func, transaction_mode, on_error, operation
                 )
 
         all_successful_objects = []
@@ -195,14 +204,38 @@ class BulkOperationHandler:
         batch_count = 0
         failed_batches = 0
         rollback_count = 0
+        batch_completed = False
+
+        async def emit(timing, context):
+            try:
+                await self.model_class._emit_bulk_signal(timing, context)
+            except Exception as error:
+                raise _BulkSignalError(error) from error
+
+        async def execute_signaled_batch(transaction, batch):
+            nonlocal batch_completed
+            context = SignalContext(
+                operation=Operation.DELETE if operation == Operation.DELETE else Operation.SAVE,
+                actual_operation=operation,
+                session=transaction,
+                model_class=self.model_class,
+                affected_count=len(batch),
+            )
+            await emit("before", context)
+            result = await operation_func(transaction, batch)
+            context.affected_count = result[1]
+            await emit("after", context)
+            batch_completed = True
+            return result
 
         for i in range(0, len(data), batch_size):
+            batch_completed = False
             batch = data[i : i + batch_size]
             batch_count += 1
 
             try:
                 successful_objects, success_count, failed_records = await self.transaction_manager.execute_batch(
-                    operation_func, batch
+                    execute_signaled_batch, batch
                 )
                 for failed in failed_records:
                     failed.index += i
@@ -212,7 +245,13 @@ class BulkOperationHandler:
                 total_success_count += success_count
                 all_failed_records.extend(failed_records)
 
+            except _BulkSignalError as error:
+                raise error.original from error
             except Exception as e:
+                # Commit failures and post-commit callback errors are not row
+                # failures. In particular, committed data cannot be rolled back.
+                if batch_completed:
+                    raise
                 failed_batches += 1
                 rollback_count += 1
                 if on_error == ErrorHandling.FAIL_FAST:
@@ -578,7 +617,9 @@ async def bulk_create(
         batch_count,
         failed_batches,
         rollback_count,
-    ) = await handler.execute_bulk_operation(processed_objects, batch_size, operation_func, transaction_mode, on_error)
+    ) = await handler.execute_bulk_operation(
+        processed_objects, batch_size, operation_func, transaction_mode, on_error, Operation.CREATE
+    )
 
     return handler.build_result(
         successful_objects,
@@ -710,7 +751,9 @@ async def bulk_update(
         batch_count,
         failed_batches,
         rollback_count,
-    ) = await handler.execute_bulk_operation(mappings, batch_size, operation_func, transaction_mode, on_error)
+    ) = await handler.execute_bulk_operation(
+        mappings, batch_size, operation_func, transaction_mode, on_error, Operation.UPDATE
+    )
 
     return handler.build_result(
         successful_objects,
@@ -827,7 +870,9 @@ async def bulk_delete(
         batch_count,
         failed_batches,
         rollback_count,
-    ) = await handler.execute_bulk_operation(ids, batch_size, operation_func, transaction_mode, on_error)
+    ) = await handler.execute_bulk_operation(
+        ids, batch_size, operation_func, transaction_mode, on_error, Operation.DELETE
+    )
 
     return handler.build_result(
         successful_objects,

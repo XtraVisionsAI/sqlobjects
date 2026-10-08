@@ -2,10 +2,9 @@
 
 The ORM uses SQLAlchemy Core for SQL and connection management. These contracts
 define the behavior of its model and QuerySet APIs. Regression coverage lives in
-`tests/integration/test_orm_contracts.py` and
-`tests/integration/test_commit_callbacks.py`, with execution logging covered by
-`tests/integration/test_query_logging_contracts.py`. All three run against SQLite,
-PostgreSQL and MySQL in CI.
+`tests/integration/test_orm_contracts.py`, `test_commit_callbacks.py`,
+`test_query_logging_contracts.py`, `test_distinct_contracts.py` and
+`test_signal_contracts.py`. These run against SQLite, PostgreSQL and MySQL in CI.
 
 ## Persisted and partial objects
 
@@ -121,6 +120,28 @@ callbacks do not provide a distributed commit boundary. These semantics follow
 [Django's commit callback contracts](https://docs.djangoproject.com/en/5.2/topics/db/transactions/#performing-actions-after-commit),
 with async callback support and explicit session ownership.
 
+### Signal execution
+
+Manager `create()` emits instance save/create hooks around an INSERT even when
+the caller supplies a primary key. Before hooks can change values before
+validation; after hooks see the persisted object. It joins an explicit writable
+transaction or owns one spanning hooks and SQL. QuerySet update/delete hooks use
+the same transaction and database binding as the write; unsupported write clauses
+are rejected before any hook runs.
+
+Manager bulk hooks run once per batch inside its actual transaction or savepoint.
+Create/update emit generic bulk-save hooks followed by operation-specific hooks;
+bulk methods do not emit instance hooks. Before counts describe batch input;
+after counts match that batch's successful result. Empty input emits no hooks.
+QuerySet before counts remain unknown, and its after count is the returned count.
+
+Hook errors propagate under every error policy and roll back owned transactions
+or savepoints. Callers control rollback when joining an explicit transaction.
+Commit-callback errors also propagate, without reclassifying committed records
+as failed input. These boundaries let `context.on_commit()` track all four bulk
+transaction modes correctly. See the [signal guide](../features/06-validation-signals.md)
+for context fields and direct instance-save behavior.
+
 ## Bulk results
 
 UPSERT processes every input row. When RETURNING can be matched by unique conflict
@@ -138,6 +159,16 @@ for those drivers. PostgreSQL and SQLite conflict handling and MySQL's
 
 `count()` counts the result of the composed query, including grouping, distinctness
 and slicing. Scalar count subqueries use the same query shape.
+
+`distinct()` applies ordinary SQL DISTINCT to the selected columns, including
+projected values and rows duplicated by joins. Its enabled state survives cloning
+even with no field arguments. `distinct(*fields)` requires known model columns
+and PostgreSQL's DISTINCT ON. SQLite/MySQL reject it before execution, including
+inside counts, existence checks, streaming, subqueries, CTEs and EXPLAIN. This follows
+[Django's distinction between ordinary DISTINCT and PostgreSQL DISTINCT ON](https://docs.djangoproject.com/en/5.2/ref/models/querysets/#distinct).
+`aggregate()` rejects a distinct QuerySet because its current query reconstruction
+cannot preserve that clause; use an explicit SQL subquery for aggregation after
+deduplication. Ordinary QuerySet `count()` remains supported.
 
 `iterator()` streams the original query in bounded partitions and yields models,
 preserving ordering, LIMIT, OFFSET and deferred fields. If iteration can stop
@@ -221,17 +252,18 @@ Local verification on 2026-10-08 used Python 3.12, SQLAlchemy 2.0.44 and Alembic
 
 | Database | Scope | Result |
 | --- | --- | --- |
-| SQLite | Unit and integration suite | 608 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
-| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, CRUD, relationships, deferred fields, bulk results, cascades and signals | 251 passed. |
-| MySQL 8.4 | Contracts, commit callbacks, query logging and migrations with aiomysql and its RSA authentication extra | 110 passed; one executemany RETURNING test skipped because this backend does not support it. |
+| SQLite | Unit and integration suite | 650 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
+| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, CRUD, relationships, deferred fields, bulk results, cascades and signals | 288 passed. |
+| MySQL 8.4 | Contracts, commit callbacks, query logging, migrations, DISTINCT and signal contracts with aiomysql and its RSA authentication extra | 152 passed; one executemany RETURNING test skipped because this backend does not support it. |
 
 The 10 migration integration tests also pass with Alembic 1.16.5 on SQLite.
 
 Ruff lint and formatting passed. Pyright reported zero errors and three existing
-unnecessary-ignore warnings. SQLite retains two existing DISTINCT ON dialect
-warnings. The workflow definitions were checked locally; hosted CI results will
+unnecessary-ignore warnings. SQLite no longer emits DISTINCT ON dialect warnings.
+The workflow definitions were checked locally; hosted CI results will
 be available after the changes are pushed.
 
-Further work from the ORM review includes realistic performance benchmarks,
-batched data-migration tooling and broader driver/version coverage. These are separate
-from the persistence and query corrections described here.
+Further work from the ORM review includes database event API alignment, dynamic
+relationship queries, aggregation over composed queries, realistic performance
+benchmarks, batched data-migration tooling and broader driver/version coverage.
+These are separate from the persistence and query corrections described here.

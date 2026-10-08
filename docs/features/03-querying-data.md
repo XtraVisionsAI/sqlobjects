@@ -688,9 +688,12 @@ print(plan)
 ObjectsManager provides direct access to all QuerySet methods:
 
 ```python
-# Distinct operations
-unique_departments = await User.objects.distinct("department").all()
+# Unique projected values (all supported databases)
+unique_departments = await User.objects.order_by("department").distinct().values_list("department", flat=True)
 all_distinct = await User.objects.distinct().all()
+
+# PostgreSQL only: select one user per department, ordered by id within each group
+department_users = await User.objects.order_by("department", "id").distinct("department").all()
 
 # Exclude filtering
 non_deleted = await User.objects.exclude(User.is_deleted == True).all()
@@ -722,6 +725,23 @@ users = await User.objects.prefetch_related(
     ).order_by("-created_at")
 ).all()
 ```
+
+`distinct()` compares the selected columns. Selecting full models includes their
+primary keys, so use `values()` or `values_list()` to deduplicate a subset of
+columns. Ordering must be compatible with the selected columns on the target
+database.
+
+`distinct(*fields)` uses PostgreSQL's `DISTINCT ON`; any ordering must start with
+the distinct fields. Unknown field names raise `QueryError`. On SQLite and MySQL,
+field-specific distinct raises `QueryError` before SQL execution, including when
+nested inside a count, subquery or CTE. Use ordinary `distinct()` with a projection
+for portable unique values. Both forms reject QuerySet `update()` and `delete()`.
+They also reject `aggregate()`, whose current implementation cannot preserve
+QuerySet deduplication. Use an explicit SQL subquery when aggregating deduplicated
+rows; to count distinct values of a single column, use an aggregate expression
+such as `func.count(User.department.distinct())` on a QuerySet without `distinct()`.
+QuerySet `count()` supports both forms directly. EXPLAIN enforces the same
+PostgreSQL requirement as query execution.
 
 ## Date and Time Queries
 

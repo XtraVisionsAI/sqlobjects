@@ -233,13 +233,28 @@ def emit_signals(operation: Operation, is_bulk: bool = False):
 
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            # Extract self/cls and session from arguments
             self_or_cls = args[0]
-            session = _extract_session(self_or_cls, dict(signature.bind_partial(*args, **kwargs).arguments))
+            arguments = signature.bind_partial(*args, **kwargs)
+            session = _extract_session(self_or_cls, arguments.arguments)
+
+            if is_bulk and hasattr(self_or_cls, "_executor"):
+                # QuerySet write signals share the same transaction as the SQL.
+                self_or_cls._validate_write_query()
+                async with session.transaction() as transaction:
+                    arguments.arguments[next(iter(signature.parameters))] = self_or_cls.using(transaction)
+                    return await invoke(arguments, transaction)
+            return await invoke(arguments, session)
+
+        async def invoke(arguments, session):
+            self_or_cls = arguments.args[0]
 
             # Create signal context with original operation
             context = _create_signal_context(
-                operation=operation, session=session, self_or_cls=self_or_cls, is_bulk=is_bulk, kwargs=kwargs
+                operation=operation,
+                session=session,
+                self_or_cls=self_or_cls,
+                is_bulk=is_bulk,
+                kwargs=arguments.arguments,
             )
 
             # For SAVE operations, determine actual CREATE/UPDATE type
@@ -252,20 +267,10 @@ def emit_signals(operation: Operation, is_bulk: bool = False):
             # Emit pre signal
             await _emit_pre_signal(self_or_cls, context, is_bulk)
 
-            try:
-                # Execute original method
-                result = await func(*args, **kwargs)
-
-                # Update context with result if needed
-                _update_context_with_result(context, result)
-
-                # Emit post signal
-                await _emit_post_signal(self_or_cls, context, is_bulk)
-
-                return result
-
-            except Exception:
-                raise
+            result = await func(*arguments.args, **arguments.kwargs)
+            _update_context_with_result(context, result)
+            await _emit_post_signal(self_or_cls, context, is_bulk)
+            return result
 
         return wrapper  # type: ignore
 
@@ -313,6 +318,8 @@ def _extract_session(self_or_cls, kwargs) -> Any:
         return session_attr() if callable(session_attr) else session_attr
     elif hasattr(self_or_cls, "_get_session"):
         return self_or_cls._get_session(readonly=False)  # noqa
+    elif hasattr(self_or_cls, "_executor"):
+        return self_or_cls._executor._get_session("update")  # noqa
 
     # Fallback to default session
     return get_session(readonly=False)
@@ -333,7 +340,9 @@ def _create_signal_context(operation: Operation, session, self_or_cls, is_bulk: 
     """
     if is_bulk:
         # Bulk operation context - support ObjectsManager and QuerySet
-        if hasattr(self_or_cls, "_model"):
+        if hasattr(self_or_cls, "_model_class"):
+            model_class = self_or_cls._model_class  # noqa
+        elif hasattr(self_or_cls, "_model"):
             model_class = self_or_cls._model  # noqa
         elif hasattr(self_or_cls, "__table__"):
             model_class = self_or_cls.__class__
@@ -430,29 +439,26 @@ async def _emit_signal(target, timing: str, context: SignalContext) -> None:
         save_signal_name = f"{timing}_{bulk_prefix}save"
         save_handler = getattr(target, save_signal_name, None)
         if save_handler and callable(save_handler):
-            if inspect.iscoroutinefunction(save_handler):
-                await save_handler(context)
-            else:
-                save_handler(context)
+            result = save_handler(context)
+            if inspect.isawaitable(result):
+                await result
 
         # Then emit specific CREATE/UPDATE signal
         specific_signal_name = f"{timing}_{bulk_prefix}{context.actual_operation.value}"
         specific_handler = getattr(target, specific_signal_name, None)
         if specific_handler and callable(specific_handler):
-            if inspect.iscoroutinefunction(specific_handler):
-                await specific_handler(context)
-            else:
-                specific_handler(context)
+            result = specific_handler(context)
+            if inspect.isawaitable(result):
+                await result
     else:
         # For non-SAVE operations, emit the specific signal
         signal_name = f"{timing}_{bulk_prefix}{context.operation.value}"
         handler = getattr(target, signal_name, None)
 
         if handler and callable(handler):
-            if inspect.iscoroutinefunction(handler):
-                await handler(context)
-            else:
-                handler(context)
+            result = handler(context)
+            if inspect.isawaitable(result):
+                await result
 
 
 def _update_context_with_result(context: SignalContext, result):

@@ -817,7 +817,8 @@ class QuerySet(Generic[T]):
         """Create aggregation expression that can be executed or used as subquery.
 
         Returns a single row aggregated over all matching rows. Incompatible
-        with group_by() — for per-group aggregation use
+        with distinct(); use an explicit SQL subquery for aggregation after
+        QuerySet deduplication. Also incompatible with group_by() — for per-group aggregation use
         ``annotate(...).group_by(...).values(*group_fields, *aliases)``.
 
         Args:
@@ -827,7 +828,7 @@ class QuerySet(Generic[T]):
             AggregateExpression that can be awaited or used in comparisons
 
         Raises:
-            QueryError: If the queryset has GROUP BY clauses
+            QueryError: If the queryset has DISTINCT or GROUP BY clauses
 
         Examples:
             # Direct execution
@@ -837,9 +838,9 @@ class QuerySet(Generic[T]):
             avg_age = User.objects.aggregate(avg_age=User.age.avg())
             older_users = await User.objects.filter(User.age > avg_age).all()
         """
+        if self._builder.is_distinct:
+            raise QueryError("aggregate() cannot preserve QuerySet distinctness; use an explicit SQL subquery instead")
         if self._builder.group_clauses:
-            from .exceptions import QueryError
-
             raise QueryError(
                 "aggregate() returns a single row and ignores GROUP BY. "
                 "Use .annotate(...).group_by(...).values(*group_fields, *aggregate_aliases) "
@@ -1273,7 +1274,7 @@ class QuerySet(Generic[T]):
         if (
             builder.group_clauses
             or builder.having_conditions
-            or builder.distinct_fields
+            or builder.is_distinct
             or builder.joins
             or builder.relationships
         ):

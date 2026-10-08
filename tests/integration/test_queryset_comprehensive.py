@@ -98,9 +98,9 @@ class TestQuerySetAdvancedOperations:
     async def test_distinct_and_aggregation(self, session):
         """Test distinct and aggregation methods"""
         # Distinct values
-        distinct_ages = User.objects.distinct("age")
-        results = await distinct_ages.using(session).all()
-        assert len(results) == 3
+        distinct_ages = User.objects.distinct().order_by("age")
+        results = await distinct_ages.using(session).values_list("age", flat=True)
+        assert results == [25, 30, 35]
 
         # Aggregation (terminal method)
         stats = await User.objects.using(session).aggregate(

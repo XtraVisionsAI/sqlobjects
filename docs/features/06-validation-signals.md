@@ -286,6 +286,14 @@ collector.raise_if_errors()  # Raise ValidationError if any errors exist
 
 ### Signal Types
 
+`objects.create()` emits instance hooks in this order: `before_save`,
+`before_create`, `after_save`, `after_create`. It always inserts, including when a
+primary key is supplied. Before hooks may change the instance before validation
+and SQL; after hooks see the persisted instance. It joins an explicit transaction
+or owns one spanning all hooks and the insert. A hook failure propagates and
+rolls back an owned transaction; callers manage rollback of explicit transactions.
+Handlers may be synchronous, asynchronous, or return an awaitable.
+
 ```python
 from sqlobjects.model import ObjectModel
 from sqlobjects.signals import SignalContext, Operation
@@ -338,6 +346,27 @@ class User(ObjectModel):  # Built-in signal functionality
 ```
 
 ### Bulk Operation Signals
+
+Manager `bulk_create()`, `bulk_update()` and `bulk_delete()` emit class hooks once
+per batch, without individual instance hooks. Create and update emit the generic
+`before_bulk_save` / `after_bulk_save` before their corresponding operation hook.
+`actual_operation` describes the requested bulk API, even when conflict handling
+updates an existing row during `bulk_create()`. Empty input emits no hooks.
+
+Before hooks receive the batch input size in `affected_count`. After hooks receive
+the batch's successful affected-row count, with the same counting guarantees as
+`BulkResult.success_count`; missing targets and collected failures can reduce it.
+QuerySet `update()` and `delete()` emit their matching class hooks once per call;
+their before count is unknown (`None`) and their after count is the returned count.
+Only QuerySet `update()` supplies uniform field values in `update_data`.
+
+Each context carries the session that executes that batch or QuerySet write.
+`context.on_commit()` follows its transaction mode: independent/batch commits can
+dispatch callbacks before an outer transaction ends, while savepoint release
+waits for root commit. Hook errors propagate even under `IGNORE` or `COLLECT`.
+They roll back owned transactions or batch savepoints; earlier committed batches
+remain stored. Commit and commit-callback errors also propagate rather than being
+reported as failed input rows.
 
 ```python
 class User(ObjectModel):
@@ -471,9 +500,11 @@ async with ctx_session():
 
 Pass a callable, not a coroutine object. Capture the values the callback needs at
 registration time. Callback errors cannot roll back a committed transaction;
-`robust=True` logs ordinary errors and continues to later callbacks. Without an
-explicit transaction, registration executes immediately, so callbacks registered
-from a `before_*` signal require an enclosing `ctx_session()` to defer the effect.
+`robust=True` logs ordinary errors and continues to later callbacks. Manager
+`create()`, bulk methods and QuerySet writes provide transaction boundaries for
+their hooks. A direct instance `save()` can use a per-statement auto-commit session;
+wrap it in `ctx_session()` before registering callbacks from `before_*` hooks.
+Outside an explicit or operation-owned transaction, registration executes immediately.
 Database updates that must be atomic with the original operation belong inside
 its transaction, not in an after-commit callback.
 

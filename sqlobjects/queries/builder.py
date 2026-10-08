@@ -41,6 +41,7 @@ class QueryBuilder:
         self.selected_fields: set[str] = set()
         self.deferred_fields: set[str] = set()
         self.distinct_fields: list[str] = []
+        self.is_distinct = False
         self.annotations: dict[str, Any] = {}
         self.group_clauses: list[Any] = []
         self.having_conditions: list[Any] = []
@@ -212,6 +213,7 @@ class QueryBuilder:
         """
         new_builder = self.copy()
         new_builder.distinct_fields = list(fields)
+        new_builder.is_distinct = True
         return new_builder
 
     def add_annotations(self, **kwargs):
@@ -512,12 +514,11 @@ class QueryBuilder:
             query = query.where(and_(*extra_conditions))
 
         # Apply distinct
-        if self.distinct_fields:
-            columns = [table.c[field] for field in self.distinct_fields if field in table.c]
-            if columns:
-                query = query.distinct(*columns)
-            else:
-                query = query.distinct()
+        if self.is_distinct:
+            unknown = [field for field in self.distinct_fields if field not in table.c]
+            if unknown:
+                raise QueryError(f"Unknown DISTINCT field(s): {unknown}")
+            query = query.distinct(*(table.c[field] for field in self.distinct_fields))
 
         # Apply annotations (values mode already selected the requested ones)
         if self.annotations and values_fields is None:
@@ -659,6 +660,7 @@ class QueryBuilder:
         new_builder.selected_fields = self.selected_fields.copy()
         new_builder.deferred_fields = self.deferred_fields.copy()
         new_builder.distinct_fields = self.distinct_fields.copy()
+        new_builder.is_distinct = self.is_distinct
         new_builder.annotations = self.annotations.copy()
         new_builder.group_clauses = self.group_clauses.copy()
         new_builder.having_conditions = self.having_conditions.copy()

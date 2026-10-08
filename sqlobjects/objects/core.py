@@ -12,7 +12,7 @@ from sqlalchemy import insert, text
 from ..exceptions import DoesNotExist, IntegrityError, MultipleObjectsReturned
 from ..queryset import QuerySet, T, TableLike
 from ..session import AsyncSession, get_session
-from ..signals import Operation, emit_signals
+from ..signals import Operation, SignalContext
 from .bulk import BulkResult, ConflictResolution, ErrorHandling, TransactionMode
 
 
@@ -577,7 +577,6 @@ class ObjectsManager(Generic[T]):
         objects = await queryset.all()
         return {getattr(obj, actual_field): obj for obj in objects}
 
-    @emit_signals(Operation.SAVE)
     async def create(self, validate: bool = True, **kwargs) -> T:
         """Create a new object with the given field values.
 
@@ -589,22 +588,29 @@ class ObjectsManager(Generic[T]):
             Created model instance
         """
         obj = self._model_class.from_dict(kwargs, validate=False)  # type: ignore[reportAttributeAccessIssue]
-        if validate:
-            obj.validate_all_fields()
-        stmt = insert(self._table).values(**obj._get_all_data())
         session = self._get_session(readonly=False)
-        if session.bind.dialect.insert_returning:
-            result = await session.execute(stmt.returning(*self._table.columns))
-            for name, value in result.one()._mapping.items():
-                setattr(obj, name, value)
-        else:
-            result = await session.execute(stmt)
-            if result.inserted_primary_key:
-                obj._set_primary_key_values(result.inserted_primary_key)
-        obj._state_manager.mark_from_database(True)
-        obj._state_manager._set("persisted_pk", obj._get_primary_key_values())
-        obj._state_manager.clear_dirty_fields()
-        obj.using(self._db_or_session or session.db_name)
+        async with session.transaction() as transaction:
+            context = SignalContext(
+                Operation.SAVE, transaction, self._model_class, instance=obj, actual_operation=Operation.CREATE
+            )
+            await obj._emit_signal("before", context)
+            if validate:
+                obj.validate_all_fields()
+            # create() always INSERTs, even when a primary key was supplied.
+            stmt = insert(self._table).values(**obj._get_all_data())
+            if transaction.bind.dialect.insert_returning:
+                result = await transaction.execute(stmt.returning(*self._table.columns))
+                for name, value in result.one()._mapping.items():
+                    setattr(obj, name, value)
+            else:
+                result = await transaction.execute(stmt)
+                if result.inserted_primary_key:
+                    obj._set_primary_key_values(result.inserted_primary_key)
+            obj._state_manager.mark_from_database(True)
+            obj._state_manager._set("persisted_pk", obj._get_primary_key_values())
+            obj._state_manager.clear_dirty_fields()
+            obj.using(self._db_or_session or transaction.db_name)
+            await obj._emit_signal("after", context)
         return obj
 
     # QuerySet shortcut methods
@@ -779,7 +785,6 @@ class ObjectsManager(Generic[T]):
         conflict_fields: list[str] | None = None,
     ) -> BulkResult[dict[str, Any]]: ...
 
-    @emit_signals(Operation.SAVE, is_bulk=True)
     async def bulk_create(
         self,
         objects: list[dict[str, Any]],
@@ -866,7 +871,6 @@ class ObjectsManager(Generic[T]):
         conflict_fields: list[str] | None = None,
     ) -> BulkResult[dict[str, Any]]: ...
 
-    @emit_signals(Operation.SAVE, is_bulk=True)
     async def bulk_update(
         self,
         mappings: list[dict[str, Any]],
@@ -949,7 +953,6 @@ class ObjectsManager(Generic[T]):
         on_error: ErrorHandling = ErrorHandling.FAIL_FAST,
     ) -> BulkResult[dict[str, Any]]: ...
 
-    @emit_signals(Operation.DELETE, is_bulk=True)
     async def bulk_delete(
         self,
         ids: list[Any],

@@ -172,6 +172,7 @@ class QueryExecutor:
         dialect = DialectHandler.create(session)
 
         # Compile query to SQL
+        session._validate_statement_dialect(query)
         compiled = query.compile(dialect=session.bind.dialect, compile_kwargs={"literal_binds": True})
         sql_str = str(compiled)
 
@@ -188,14 +189,16 @@ class QueryExecutor:
     @staticmethod
     def _build_query_by_type(query, query_type: str, **kwargs):
         """Build query based on execution type."""
-        froms = query.get_final_froms()
-        from_table = froms[0] if froms else query.table
-
         if query_type == "count":
             return select(func.count()).select_from(query.order_by(None).subquery())
         elif query_type == "exists":
             return select(exists(query))
-        elif query_type == "update":
+        if query_type not in {"update", "delete", "values", "values_list", "aggregate"} or kwargs.get("prebuilt"):
+            return query
+
+        froms = query.get_final_froms()
+        from_table = froms[0] if froms else query.table
+        if query_type == "update":
             table = from_table
             update_query = update(table).values(**kwargs.get("values", {}))
             if query.whereclause is not None:
@@ -208,10 +211,6 @@ class QueryExecutor:
                 delete_query = delete_query.where(query.whereclause)
             return delete_query
         elif query_type in ("values", "values_list"):
-            if kwargs.get("prebuilt"):
-                # Query was already built with the exact requested fields
-                # (including annotations and GROUP BY) — execute as-is
-                return query
             fields = kwargs.get("fields", [])
             if fields:
                 table = from_table
