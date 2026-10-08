@@ -1,7 +1,9 @@
+import asyncio
 import contextvars
+import inspect
 import logging
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, text
@@ -18,6 +20,14 @@ logger = logging.getLogger("sqlobjects.session")
 
 # Explicit session management (highest priority)
 _explicit_sessions: contextvars.ContextVar[dict[str, "AsyncSession"]] = contextvars.ContextVar("explicit_sessions")
+
+
+def _current_task() -> asyncio.Task[Any] | None:
+    """Allow session construction and context inspection outside an event loop."""
+    try:
+        return asyncio.current_task()
+    except RuntimeError:
+        return None
 
 
 class AsyncSession:
@@ -42,6 +52,26 @@ class AsyncSession:
         self._conn: AsyncConnection | None = None
         self._trans = None
         self._rollback_only = False
+        self._owner_task = _current_task()
+        self._closed = False
+
+    def _usable_in_current_task(self) -> bool:
+        return not self._closed and (
+            self._owner_task is None or self._owner_task is _current_task() or self._owner_task.done()
+        )
+
+    def _check_owner(self) -> None:
+        """Reject concurrent sharing before touching a connection or transaction."""
+        if self._closed:
+            raise TransactionError("Session is closed; open a new ctx_session()")
+        task = _current_task()
+        if self._owner_task is None or self._owner_task.done():
+            # Sequential handoff is safe once the previous task has finished.
+            self._owner_task = task
+        elif self._owner_task is not task:
+            raise TransactionError(
+                "Session belongs to another asyncio task; open a separate ctx_session() in each task"
+            )
 
     @property
     def db_name(self) -> str:
@@ -72,6 +102,7 @@ class AsyncSession:
         Supports both SQLAlchemy statement objects and raw SQL strings.
         Raw SQL strings are automatically wrapped with text().
         """
+        self._check_owner()
         if self._rollback_only:
             raise TransactionError("Transaction failed; roll it back before executing more statements")
         if self.readonly and getattr(statement, "is_dml", False):
@@ -109,7 +140,7 @@ class AsyncSession:
             # Auto-close connection for implicit sessions to prevent resource leaks
             # This covers both auto_commit write sessions and readonly sessions
             if (self.auto_commit or self.readonly) and self._conn and not self._conn.in_nested_transaction():
-                await self.close()
+                await self._release_connection()
 
     async def stream(self, statement: Any, parameters: Any = None) -> AsyncResult[Any]:
         """Execute statement and return streaming result.
@@ -120,6 +151,7 @@ class AsyncSession:
         Note: stream() is not supported with auto_commit=True sessions.
         Use explicit sessions (ctx_session) for streaming operations.
         """
+        self._check_owner()
         if self._rollback_only:
             raise TransactionError("Transaction failed; roll it back before executing more statements")
         if self.auto_commit:
@@ -144,6 +176,7 @@ class AsyncSession:
 
     async def commit(self):
         """Commit transaction if exists and not readonly."""
+        self._check_owner()
         if self._rollback_only:
             raise TransactionError("Cannot commit a failed transaction; roll it back")
         if self._trans and not self.readonly:
@@ -152,6 +185,7 @@ class AsyncSession:
 
     async def rollback(self):
         """Rollback transaction if exists and not readonly."""
+        self._check_owner()
         if self._trans and not self.readonly:
             await self._trans.rollback()
             self._trans = None
@@ -160,6 +194,7 @@ class AsyncSession:
     @asynccontextmanager
     async def transaction(self):
         """Join an explicit transaction, or own a transaction for a compound operation."""
+        self._check_owner()
         if self.readonly:
             raise TransactionError("A write transaction requires a writable session")
         if self.auto_commit:
@@ -170,6 +205,17 @@ class AsyncSession:
 
     async def close(self):
         """Close session and cleanup resources."""
+        if self._closed:
+            return
+        self._check_owner()
+        try:
+            await self._release_connection()
+        finally:
+            self._closed = True
+            self._owner_task = None
+
+    async def _release_connection(self):
+        """Release resources without ending a reusable implicit session's lifetime."""
         if self._trans:
             try:
                 await self._trans.rollback()
@@ -188,6 +234,7 @@ class AsyncSession:
 
     async def begin_nested(self):
         """Begin nested transaction (savepoint)."""
+        self._check_owner()
         if self._rollback_only or self.readonly:
             raise TransactionError("Cannot create a savepoint in a failed or readonly session")
         await self._ensure_connection()
@@ -205,6 +252,7 @@ class AsyncSession:
 
     async def _ensure_connection(self):
         """Ensure connection is available with health check."""
+        self._check_owner()
         if self._conn is None or self._conn.closed:
             engine = get_database(self._db_name).engine
             self._conn = await engine.connect()
@@ -234,6 +282,7 @@ class AsyncSession:
 
     async def __aenter__(self) -> "AsyncSession":
         """Async context manager entry."""
+        self._check_owner()
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -248,7 +297,16 @@ class AsyncSession:
     def __getattr__(self, name: str) -> Any:
         """Proxy AsyncConnection methods."""
         if self._conn and hasattr(self._conn, name):
-            return getattr(self._conn, name)
+            self._check_owner()
+            attribute = getattr(self._conn, name)
+            if inspect.iscoroutinefunction(attribute):
+
+                async def guarded(*args, **kwargs):
+                    self._check_owner()
+                    return await attribute(*args, **kwargs)
+
+                return guarded
+            return attribute
         raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
 
@@ -289,7 +347,9 @@ class _SessionContextManager:
         try:
             explicit_sessions = _explicit_sessions.get({})
             if name in explicit_sessions:
-                return explicit_sessions[name]
+                session = explicit_sessions[name]
+                session._check_owner()
+                return session
         except LookupError:
             pass
 
@@ -356,7 +416,7 @@ async def ctx_session(db_name: str | None = None, *, join_ambient: bool = False)
     """
     name = db_name or get_default()
 
-    if join_ambient and has_session(name):
+    if join_ambient and name in _explicit_sessions.get({}):
         yield get_session(name, readonly=False)
         return
 
@@ -378,7 +438,7 @@ async def ctx_session(db_name: str | None = None, *, join_ambient: bool = False)
         yield session
         # Auto-commit on successful exit
         await session.commit()
-    except Exception:
+    except BaseException:
         # Auto-rollback on exception
         await session.rollback()
         raise
@@ -422,7 +482,7 @@ async def ctx_sessions(*db_names: str) -> AsyncGenerator[dict[str, AsyncSession]
         for session in sessions.values():
             await session.commit()
 
-    except Exception:
+    except BaseException:
         # Auto-rollback all sessions on exception
         for session in sessions.values():
             await session.rollback()
@@ -430,11 +490,14 @@ async def ctx_sessions(*db_names: str) -> AsyncGenerator[dict[str, AsyncSession]
 
     finally:
         # Cleanup all sessions
-        for session in sessions.values():
-            await session.close()
-        # Reset tokens in reverse order
-        for token in reversed(tokens):
-            _SessionContextManager.reset_session(token)
+        try:
+            async with AsyncExitStack() as cleanup:
+                for session in sessions.values():
+                    cleanup.push_async_callback(session.close)
+        finally:
+            # Reset tokens even if closing a connection fails.
+            for token in reversed(tokens):
+                _SessionContextManager.reset_session(token)
 
 
 def get_session(
@@ -456,6 +519,7 @@ def get_session(
         - Create a new AsyncSession with specified parameters if no explicit session
     """
     if isinstance(db_or_name, AsyncSession):
+        db_or_name._check_owner()
         return db_or_name
     return _SessionContextManager.get_session(db_or_name, readonly, auto_commit)
 
@@ -472,6 +536,6 @@ def has_session(db_name: str | None = None) -> bool:
     name = db_name or get_default()
     try:
         explicit_sessions = _explicit_sessions.get({})
-        return name in explicit_sessions
+        return name in explicit_sessions and explicit_sessions[name]._usable_in_current_task()
     except LookupError:
         return False

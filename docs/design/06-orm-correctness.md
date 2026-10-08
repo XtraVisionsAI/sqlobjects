@@ -59,6 +59,29 @@ reports input indexes across batches. Independent connections can block on locks
 held by an outer transaction; avoid writing those rows in an independent batch.
 SQLite also limits concurrent writers at database level.
 
+### Async task ownership and cleanup
+
+An open session belongs to its owning asyncio task. Copying a ContextVar into a
+child task does not clone its connection or transaction. ORM operations through
+an inherited or explicitly passed parent session raise `TransactionError` before
+touching the database. Each concurrent worker must open its own `ctx_session()`;
+`join_ambient=True` cannot join another live task's transaction. These independent
+transactions are not rolled back with the parent.
+
+`has_session()` reports only a usable session for the current task. Sequential
+handoff is supported after the previous owner task has finished, but a session
+closed by its context manager remains closed. Implicit per-statement connection
+release keeps the session object reusable for sequential operations.
+
+Cancellation rolls back active context/request transactions. Session context
+tokens are restored even when cleanup raises, and multi-database cleanup attempts
+to close every session. Timeouts inside a transaction should use
+`asyncio.timeout()`, since `wait_for()` creates a different task for a coroutine.
+Low-level SQLAlchemy connections, result cursors and transaction handles exposed
+by the API must also stay in their owning task.
+
+This follows the [SQLAlchemy guidance on one session per concurrent task](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html#using-asyncsession-with-concurrent-tasks).
+
 `get_or_create()` isolates creation with a savepoint and retries the lookup after
 an integrity conflict. Database uniqueness on the lookup fields is required for
 concurrent uniqueness. Unrelated integrity errors propagate. `update_or_create()`
@@ -122,16 +145,16 @@ Local verification on 2026-10-08 used Python 3.12 and SQLAlchemy 2.0.44:
 
 | Database | Scope | Result |
 | --- | --- | --- |
-| SQLite | Unit and integration suite | 524 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
-| PostgreSQL 16 | Contracts, CRUD, relationships, deferred fields, bulk results and cascades | 160 passed. |
-| MySQL 8.4 | Contract suite with aiomysql and its RSA authentication extra | 33 passed. |
+| SQLite | Unit and integration suite | 544 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
+| PostgreSQL 16 | Contracts, CRUD, relationships, deferred fields, bulk results and cascades | 180 passed. |
+| MySQL 8.4 | Contract suite with aiomysql and its RSA authentication extra | 53 passed. |
 
 Ruff lint and formatting passed. Pyright reported zero errors and three existing
 unnecessary-ignore warnings. SQLite retains two existing DISTINCT ON dialect
 warnings. The workflow definitions were checked locally; hosted CI results will
 be available after the changes are pushed.
 
-Further work from the ORM review includes task-safe session ownership,
-commit callbacks, Alembic examples, unified query instrumentation, realistic
+Further work from the ORM review includes commit callbacks, Alembic examples,
+unified query instrumentation, realistic
 performance benchmarks and broader driver/version coverage. These are separate
 from the persistence and query corrections described here.

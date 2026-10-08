@@ -151,17 +151,31 @@ async with ctx_session() as session:
 
 ### Independent Transactions
 
+Each worker must open its own session. Copying a context does not copy the session
+or connection it contains. Inherited parent sessions cannot be used or joined from
+another live asyncio task; SQLObjects raises `TransactionError` before issuing SQL.
+
 ```python
 import asyncio
-import contextvars
 
-# Each task has independent transaction
-tasks = [
-    asyncio.create_task(process_user(user_id), context=contextvars.copy_context())
-    for user_id in user_ids
-]
-await asyncio.gather(*tasks, return_exceptions=True)
+async def process_user(user_id):
+    async with ctx_session():
+        user = await User.objects.get(id=user_id)
+        user.is_active = True
+        await user.save()
+
+await asyncio.gather(*(process_user(user_id) for user_id in user_ids))
 ```
+
+Workers commit independently. To keep operations in one transaction, await them
+sequentially in its owning task. For a timeout in that transaction, use
+`asyncio.timeout()`; `asyncio.wait_for()` schedules a coroutine in another task.
+
+After `close()` or context-manager exit, a session cannot be reopened. Background
+work must create a fresh `ctx_session()` even if it inherited a request's context.
+An implicit session's automatic connection release does not close the session
+object, so sequential calls on it remain supported. An explicitly managed session
+may be handed off only after its previous owning task has finished.
 
 ## Database Events
 

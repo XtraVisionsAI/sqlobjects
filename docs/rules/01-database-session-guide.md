@@ -88,6 +88,17 @@ if has_session("analytics"):
 
 ## Best Practices
 
+### Async task ownership
+
+- Open a separate `ctx_session()` inside each `asyncio.gather()` / `create_task()` worker.
+- A copied ContextVar still references the parent's session; using or joining it
+  from another live task raises `TransactionError`.
+- Keep operations in one transaction sequential in its owning task. Use
+  `asyncio.timeout()` for time limits without creating a different task.
+- `has_session()` reports only an open session usable by the current task.
+- A closed session cannot be reused. Background work must open a new context.
+- Cancellation rolls back request/context transactions and releases their connections.
+
 ### ✅ Do
 
 - **Use context managers** for explicit transaction control

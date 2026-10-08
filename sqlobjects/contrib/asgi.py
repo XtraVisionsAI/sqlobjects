@@ -54,10 +54,12 @@ class SessionMiddleware:
             await self.app(scope, receive, send)
             if not self.readonly:
                 await session.commit()
-        except Exception:
+        except BaseException:
             if not self.readonly:
                 await session.rollback()
             raise
         finally:
-            await session.close()
-            _SessionContextManager.reset_session(token)
+            try:
+                await session.close()
+            finally:
+                _SessionContextManager.reset_session(token)

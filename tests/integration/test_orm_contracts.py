@@ -8,12 +8,13 @@ import pytest
 from sqlalchemy import event, select
 
 from sqlobjects import ConflictResolution, ErrorHandling, TransactionMode
+from sqlobjects.contrib.asgi import SessionMiddleware
 from sqlobjects.database import close_db, create_tables, drop_tables, init_db
 from sqlobjects.exceptions import DoesNotExist, IntegrityError, QueryError, TransactionError
 from sqlobjects.fields import Column, IntegerColumn, StringColumn, foreign_key, identity, relationship
 from sqlobjects.model import ObjectModel
 from sqlobjects.queryset import QuerySet
-from sqlobjects.session import ctx_session
+from sqlobjects.session import AsyncSession, ctx_session, ctx_sessions, get_session, has_session
 from tests.test_config import TestDatabaseConfig
 
 
@@ -398,3 +399,211 @@ class TestQueryContracts:
     async def test_invalid_relationship_is_an_error(self):
         with pytest.raises((ValueError, QueryError)):
             await ContractParent.objects.prefetch_related("typo").all()
+
+
+@pytest.mark.usefixtures("contract_db")
+class TestSessionTaskContracts:
+    @pytest.mark.parametrize(
+        "operation",
+        [
+            "execute",
+            "stream",
+            "commit",
+            "rollback",
+            "close",
+            "begin_nested",
+            "transaction",
+            "ambient",
+            "explicit",
+            "saved_scalar",
+        ],
+    )
+    async def test_child_cannot_use_parent_session(self, operation):
+        async with ctx_session() as parent:
+            await ContractRecord.objects.create(name="parent")
+            saved_scalar = parent.scalar
+
+            async def child():
+                assert not has_session()
+                with pytest.raises(TransactionError, match="another asyncio task"):
+                    if operation == "ambient":
+                        get_session()
+                    elif operation == "explicit":
+                        get_session(parent)
+                    elif operation == "saved_scalar":
+                        await saved_scalar(select(ContractRecord.get_table()))
+                    elif operation == "transaction":
+                        async with parent.transaction():
+                            pytest.fail("Child joined its parent's transaction")
+                    elif operation in ("execute", "stream"):
+                        await getattr(parent, operation)(select(ContractRecord.get_table()))
+                    else:
+                        await getattr(parent, operation)()
+
+            await asyncio.create_task(child())
+            assert parent.in_transaction
+            await ContractRecord.objects.create(name="after")
+        assert set(await ContractRecord.objects.values_list("name", flat=True)) == {"parent", "after"}
+
+    async def test_child_cannot_join_parent_ambient_transaction(self):
+        async with ctx_session():
+
+            async def child():
+                with pytest.raises(TransactionError, match="another asyncio task"):
+                    async with ctx_session(join_ambient=True):
+                        pytest.fail("Child joined its parent's transaction")
+
+            await asyncio.create_task(child())
+
+    async def test_children_can_own_independent_sessions(self):
+        with pytest.raises(ValueError, match="parent rollback"):
+            async with ctx_session() as parent:
+
+                async def child(index):
+                    assert not has_session()
+                    async with ctx_session() as own:
+                        assert own is not parent
+                        assert get_session() is own
+                        await ContractRecord.objects.create(name=f"child-{index}")
+                    assert not has_session()
+                    return own
+
+                sessions = await asyncio.gather(*(child(index) for index in range(3)))
+                assert len({id(session) for session in sessions}) == 3
+                assert get_session() is parent
+                raise ValueError("parent rollback")
+        assert await ContractRecord.objects.count() == 3
+
+    async def test_background_task_cannot_reopen_closed_parent(self, contract_db):
+        ready = asyncio.Event()
+        async with ctx_session() as parent:
+
+            async def child():
+                await ready.wait()
+                assert not has_session()
+                with pytest.raises(TransactionError, match="closed"):
+                    await ContractRecord.objects.count()
+                async with ctx_session():
+                    await ContractRecord.objects.create(name="own-session")
+
+            task = asyncio.create_task(child())
+        ready.set()
+        await task
+        with pytest.raises(TransactionError, match="closed"):
+            await parent.execute(select(ContractRecord.get_table()))
+        await parent.close()  # Idempotent cleanup.
+        assert await ContractRecord.objects.count() == 1
+        assert contract_db.engine.pool.checkedout() == 0
+
+    async def test_explicit_session_can_be_handed_off_after_task_finishes(self):
+        async def first_owner():
+            session = AsyncSession("default", readonly=False, auto_commit=False)
+            await ContractRecord.objects.using(session).create(name="handoff")
+            return session
+
+        session = await asyncio.create_task(first_owner())
+        try:
+            await session.commit()
+        finally:
+            await session.close()
+        assert await ContractRecord.objects.count() == 1
+
+    async def test_implicit_session_releases_connection_but_remains_reusable(self, contract_db):
+        session = get_session(readonly=False)
+        try:
+            await ContractRecord.objects.using(session).create(name="first")
+            assert contract_db.engine.pool.checkedout() == 0
+            await ContractRecord.objects.using(session).create(name="second")
+            assert contract_db.engine.pool.checkedout() == 0
+        finally:
+            await session.close()
+        assert await ContractRecord.objects.count() == 2
+
+    @pytest.mark.parametrize("multiple", [False, True])
+    async def test_cancellation_rolls_back_and_clears_context(self, contract_db, multiple):
+        written = asyncio.Event()
+        restored = []
+
+        async def worker():
+            try:
+                context = ctx_sessions("default") if multiple else ctx_session()
+                async with context:
+                    await ContractRecord.objects.create(name="cancelled")
+                    written.set()
+                    await asyncio.Event().wait()
+            finally:
+                restored.append(not has_session())
+
+        task = asyncio.create_task(worker())
+        try:
+            await asyncio.wait_for(written.wait(), timeout=10)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert restored == [True]
+        assert await ContractRecord.objects.count() == 0
+        assert contract_db.engine.pool.checkedout() == 0
+
+    async def test_cancelled_middleware_request_rolls_back(self, contract_db):
+        written = asyncio.Event()
+        restored = []
+
+        async def app(scope, receive, send):
+            await ContractRecord.objects.create(name="request")
+            written.set()
+            await asyncio.Event().wait()
+
+        async def request():
+            try:
+                await SessionMiddleware(app)({"type": "http"}, None, None)
+            finally:
+                restored.append(not has_session())
+
+        task = asyncio.create_task(request())
+        try:
+            await asyncio.wait_for(written.wait(), timeout=10)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert restored == [True]
+        assert await ContractRecord.objects.count() == 0
+        assert contract_db.engine.pool.checkedout() == 0
+
+    async def test_multi_session_close_failure_still_restores_outer(self, contract_db, monkeypatch):
+        sessions: dict[str, AsyncSession] = {}
+        async with ctx_session() as outer:
+            with pytest.raises(RuntimeError, match="close failure"):
+                async with ctx_sessions("default", "unused") as sessions:
+                    await sessions["default"].execute("SELECT 1")
+                    close = sessions["unused"].close
+
+                    async def fail_close():
+                        await close()
+                        raise RuntimeError("close failure")
+
+                    monkeypatch.setattr(sessions["unused"], "close", fail_close)
+            assert get_session() is outer
+            assert not has_session("unused")
+            with pytest.raises(TransactionError, match="closed"):
+                await sessions["default"].execute("SELECT 1")
+        assert contract_db.engine.pool.checkedout() == 0
+
+    async def test_middleware_close_failure_still_clears_context(self, contract_db, monkeypatch):
+        async def app(scope, receive, send):
+            await ContractRecord.objects.create(name="committed")
+            session = get_session()
+            close = session.close
+
+            async def fail_close():
+                await close()
+                raise RuntimeError("close failure")
+
+            monkeypatch.setattr(session, "close", fail_close)
+
+        with pytest.raises(RuntimeError, match="close failure"):
+            await SessionMiddleware(app)({"type": "http"}, None, None)
+        assert not has_session()
+        assert await ContractRecord.objects.count() == 1
+        assert contract_db.engine.pool.checkedout() == 0
