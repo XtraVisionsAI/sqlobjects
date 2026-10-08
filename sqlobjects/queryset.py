@@ -626,8 +626,10 @@ class QuerySet(Generic[T]):
         for field in fields:
             if isinstance(field, str):
                 processed_fields.append(field)
-            elif hasattr(field, "resolve"):  # SQLAlchemy expressions
+            elif isinstance(field, ColumnElement) or hasattr(field, "resolve"):
                 processed_fields.append(field)
+            elif hasattr(field, "__clause_element__"):
+                processed_fields.append(field.__clause_element__())
             else:  # Field expressions
                 processed_fields.append(self._get_field_name(field))
 
@@ -821,9 +823,9 @@ class QuerySet(Generic[T]):
     def aggregate(self, **kwargs) -> AggregateExpression:
         """Create aggregation expression that can be executed or used as subquery.
 
-        Returns a single row aggregated after filtering, distinct() and slicing.
-        Incompatible with group_by() — for per-group aggregation use
-        ``annotate(...).group_by(...).values(*group_fields, *aliases)``.
+        Returns a single row aggregated after filtering, grouping, distinct() and
+        slicing. For grouped input, reference grouping keys or annotation aliases;
+        use ``values(*group_fields, *aliases)`` to return each group's results.
 
         Args:
             **kwargs: Aggregation expressions with aliases
@@ -832,7 +834,7 @@ class QuerySet(Generic[T]):
             AggregateExpression that can be awaited or used in comparisons
 
         Raises:
-            QueryError: If the queryset has GROUP BY, HAVING or row-lock clauses
+            QueryError: If the queryset has row locking or HAVING without GROUP BY
 
         Examples:
             # Direct execution
@@ -842,14 +844,8 @@ class QuerySet(Generic[T]):
             avg_age = User.objects.aggregate(avg_age=User.age.avg())
             older_users = await User.objects.filter(User.age > avg_age).all()
         """
-        if self._builder.group_clauses:
-            raise QueryError(
-                "aggregate() returns a single row and ignores GROUP BY. "
-                "Use .annotate(...).group_by(...).values(*group_fields, *aggregate_aliases) "
-                "for per-group aggregation."
-            )
-        if self._builder.having_conditions:
-            raise QueryError("aggregate() does not support HAVING; use .annotate(...).having(...).values(...) instead")
+        if self._builder.having_conditions and not self._builder.group_clauses:
+            raise QueryError("aggregate() requires group_by() when using HAVING")
         if self._builder.lock_mode:
             raise QueryError("aggregate() does not support row locking; lock model rows in a transaction first")
         return AggregateExpression(self._builder, kwargs, self._executor)

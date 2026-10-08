@@ -147,7 +147,7 @@ usernames = await User.objects.values_list("username", flat=True).all()
 普通 DISTINCT 之后使用 JOIN 列或标量子查询作为聚合输入，需要先通过 `annotate()`
 显式投影该输入；这会将输入纳入去重键，避免聚合时悄悄改变哪些行是重复行。
 `distinct(*fields)` 仍仅支持 PostgreSQL。
-`aggregate()` 不接受 GROUP BY、HAVING 或行锁；分组结果使用下文的 values 模式。
+`aggregate()` 可以汇总 GROUP BY 后的组；HAVING 要求显式指定 group_by()，行锁仍不受支持。
 
 ### 基础聚合
 
@@ -275,7 +275,7 @@ active_users = User.objects.filter(
 
 按组聚合使用 **values 模式**：用 `annotate()` 声明聚合表达式，用 `group_by()`
 分组，再在 `values()` 中列出分组列和聚合别名——每组返回一个 dict。
-`aggregate()` 只做单行聚合，与 `group_by()` 组合会抛出 `QueryError`。
+`aggregate()` 返回一个汇总字典，与 `group_by()` 组合时汇总分组后的结果。
 
 ```python
 # 带有 having 子句的分组
@@ -298,6 +298,31 @@ monthly_stats = await Sale.objects.annotate(
     func.extract("month", Sale.created_at)
 ).values("year", "month", "total_sales", "avg_sale")
 ```
+
+### 汇总分组结果
+
+```python
+from sqlalchemy import column
+from sqlobjects.expressions import func
+
+per_department = User.objects.annotate(member_count=func.count()).group_by("department")
+summary = await per_department.aggregate(
+    departments=func.count(),
+    total_members=func.sum(column("member_count")),
+    average_members=func.avg(column("member_count")),
+)
+```
+
+这里的 COUNT 计算组数。内层查询只投影分组键和注解，外层查询再对各组汇总。
+WHERE、JOIN、HAVING、DISTINCT、分页和 CTE 都会保留；例如先
+`having(func.count() > 1).order_by("-member_count").limit(10)`，即可汇总人数最多的十个符合条件的部门。
+排序支持注解别名和 `-别名`；分组支持模型列、SQLAlchemy 表达式和注解别名。
+
+外层聚合直接引用的模型字段必须是分组键。需要汇总其他字段时，先通过 `annotate()`
+计算组内统计值，再用 `column("注解别名")` 引用。注解本身必须是合法的分组 SQL，
+别名不能覆盖模型字段名。`only()` / `defer()` 不改变分组边界。
+空输入的 COUNT 为 0，SUM / AVG 为 None，可用 `func.coalesce()` 设置默认值。
+标量子查询、SQL 生成及 EXPLAIN 使用相同的分组查询。
 
 ### 手动连接和锁定
 

@@ -602,19 +602,16 @@ class QueryBuilder:
             order_clauses = []
             for field in self.ordering:
                 if isinstance(field, str):
-                    if field.startswith("-"):
-                        field_name = field[1:]
-                        if field_name in table.c:
-                            if self.is_reversed:
-                                order_clauses.append(asc(table.c[field_name]))
-                            else:
-                                order_clauses.append(desc(table.c[field_name]))
+                    descending = field.startswith("-")
+                    field_name = field[1:] if descending else field
+                    if field_name in table.c:
+                        order_column = table.c[field_name]
+                    elif field_name in self.annotations:
+                        expr = self.annotations[field_name]
+                        order_column = expr.resolve(table) if hasattr(expr, "resolve") else expr
                     else:
-                        if field in table.c:
-                            if self.is_reversed:
-                                order_clauses.append(desc(table.c[field]))
-                            else:
-                                order_clauses.append(asc(table.c[field]))
+                        continue
+                    order_clauses.append(desc(order_column) if descending != self.is_reversed else asc(order_column))
                 elif hasattr(field, "resolve"):
                     order_clauses.append(field.resolve(table))
                 else:

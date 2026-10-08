@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import false, select
 from sqlalchemy.sql import visitors
-from sqlalchemy.sql.elements import ColumnClause
+from sqlalchemy.sql.elements import BindParameter, ColumnClause, ColumnElement
 from sqlalchemy.sql.selectable import ScalarSelect
 
 from ..exceptions import QueryError
@@ -29,12 +29,18 @@ class AggregateExpression(QueryExpression[dict[str, Any]]):
         """Build the aggregate over the QuerySet's filtered, deduplicated, sliced rows."""
         builder = self._builder
         table = builder.model_class.get_table()
-        if builder.is_none_query:
+        empty = builder.is_none_query
+        grouped = bool(builder.group_clauses)
+        if empty or grouped:
             builder = builder.copy()
             builder.is_none_query = False
-            query = builder.build(table).where(false())
+        grouping_keys = []
+        if grouped:
+            query, grouping_keys = self._build_grouped_input(builder, table)
         else:
             query = builder.build(table)
+        if empty:
+            query = query.where(false())
         expressions = {
             alias: expr.resolve(table) if hasattr(expr, "resolve") else expr
             for alias, expr in self._aggregations.items()
@@ -43,7 +49,7 @@ class AggregateExpression(QueryExpression[dict[str, Any]]):
         if not sliced and not builder.distinct_fields:
             query = query.order_by(None)
 
-        if not (sliced or builder.is_distinct or builder.annotations or builder.extra_columns):
+        if not (grouped or sliced or builder.is_distinct or builder.annotations or builder.extra_columns):
             return query.with_only_columns(
                 *(expr.label(alias) for alias, expr in expressions.items())
             ).correlate_except(table)
@@ -54,6 +60,16 @@ class AggregateExpression(QueryExpression[dict[str, Any]]):
 
         def project_input(element: Any, **kw: Any):
             nonlocal query
+            if (
+                grouped
+                and isinstance(element, ColumnElement)
+                and not isinstance(element, BindParameter)
+                and not element._is_singleton_constant
+            ):
+                for key, alias in grouping_keys:
+                    if element.compare(key):
+                        inputs[element] = query.selected_columns[alias]
+                        return element
             if not isinstance(element, (ColumnClause, ScalarSelect)):
                 return None
             if isinstance(element, ColumnClause) and element.table is None:
@@ -67,6 +83,8 @@ class AggregateExpression(QueryExpression[dict[str, Any]]):
             else:
                 projected = query.selected_columns.corresponding_column(element)
                 if projected is None:
+                    if grouped:
+                        raise QueryError("aggregate() over grouped rows requires a grouping key or an annotation alias")
                     # Adding a joined column to ordinary DISTINCT would change
                     # which rows are duplicates. Require an explicit annotation.
                     if (
@@ -95,6 +113,45 @@ class AggregateExpression(QueryExpression[dict[str, Any]]):
             visitors.replacement_traverse(expr, {}, replace_input).label(alias) for alias, expr in expressions.items()
         ]
         return select(*aggregates).select_from(source)
+
+    @staticmethod
+    def _build_grouped_input(builder, table):
+        """Project grouping keys and annotations without adding model-row fields."""
+        aliases = list(builder.annotations)
+        shadowed = set(aliases) & set(table.c.keys())
+        if shadowed:
+            raise QueryError(f"Grouped aggregate annotation aliases shadow model columns: {sorted(shadowed)}")
+        fields = aliases + list(builder.extra_columns)
+        grouping_keys = []
+        used = set(fields) | set(table.c.keys())
+        for index, field in enumerate(builder.group_clauses):
+            if isinstance(field, str):
+                if field in table.c:
+                    expression = table.c[field]
+                elif field in builder.annotations:
+                    expression = builder.annotations[field]
+                else:
+                    raise QueryError(f"Unknown aggregate grouping key: {field!r}")
+            else:
+                expression = field
+            if hasattr(expression, "resolve"):
+                expression = expression.resolve(table)
+            elif hasattr(expression, "__clause_element__"):
+                expression = expression.__clause_element__()
+            if not isinstance(expression, ColumnElement):
+                raise QueryError("Aggregate grouping keys must be columns, expressions or annotation aliases")
+            alias = f"_sqlobjects_group_{index}"
+            while alias in used:
+                alias += "_"
+            used.add(alias)
+            builder.annotations[alias] = expression
+            fields.append(alias)
+            grouping_keys.append((expression, alias))
+            if isinstance(expression, BindParameter) or expression._is_singleton_constant:
+                # MySQL interprets GROUP BY 1 as a select-list ordinal. Refer to
+                # the projected constant by alias to preserve one constant group.
+                builder.group_clauses[index] = alias
+        return builder.build(table, values_fields=tuple(fields)), grouping_keys
 
     async def execute(self) -> dict[str, Any]:
         """Execute exactly the statement used by SQL rendering and EXPLAIN."""

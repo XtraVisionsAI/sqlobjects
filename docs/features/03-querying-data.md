@@ -191,8 +191,9 @@ of the deduplication key; silently adding it could change which rows are unique.
 Use an explicit SQL subquery for a different deduplication key. `distinct(*fields)`
 remains PostgreSQL-only and retains its ordering when choosing each row.
 
-`aggregate()` rejects GROUP BY, HAVING and row locking. Use the grouped values
-API below for per-group results, and lock model rows separately in a transaction.
+`aggregate()` can summarize grouped rows as described below. HAVING requires an
+explicit `group_by()`; row locking is still rejected. Lock model rows separately
+in a transaction.
 
 ### Annotations
 
@@ -301,8 +302,8 @@ active_users = User.objects.filter(
 
 Per-group aggregation uses **values mode**: declare the aggregates with
 `annotate()`, group with `group_by()`, then list the grouping columns and
-aggregate aliases in `values()` — each group becomes one dict. `aggregate()`
-is single-row only and raises `QueryError` when combined with `group_by()`.
+aggregate aliases in `values()` — each group becomes one dict. To summarize all
+those groups into one dictionary, finish with `aggregate()` instead.
 
 ```python
 # Grouping with having clause
@@ -326,6 +327,47 @@ monthly_stats = await Sale.objects.annotate(
     func.extract("month", Sale.created_at)
 ).values("year", "month", "total_sales", "avg_sale")
 ```
+
+### Aggregating the grouped results
+
+Use annotation aliases to calculate an aggregate over per-group statistics:
+
+```python
+from sqlalchemy import column
+from sqlobjects.expressions import func
+
+per_department = User.objects.annotate(member_count=func.count()).group_by("department")
+summary = await per_department.aggregate(
+    departments=func.count(),
+    total_members=func.sum(column("member_count")),
+    average_members=func.avg(column("member_count")),
+)
+```
+
+Here `departments` counts groups. Grouping is explicit; `annotate()` does not
+infer the grouping keys. The inner query selects grouping keys and annotations,
+then the outer query aggregates those rows. It preserves WHERE, JOIN, HAVING,
+DISTINCT, ordering needed for LIMIT/OFFSET, and CTE dependencies. For example:
+
+```python
+largest = await per_department.having(func.count() > 1).order_by("-member_count").limit(10).aggregate(
+    average_members=func.avg(column("member_count"))
+)
+```
+
+This averages the ten largest departments with more than one member. String
+ordering accepts annotation aliases, including `-alias` and `reverse()`.
+Grouping accepts model columns, SQLAlchemy expressions and annotation aliases.
+A grouping expression can also be referenced inside the outer aggregate.
+
+Direct model-column inputs must be grouping keys. For example,
+`group_by("department").aggregate(total=func.sum(User.salary))` raises `QueryError`:
+first annotate the salary sum for each department, then aggregate its alias.
+Annotation expressions must themselves be valid grouped SQL, and their aliases
+must not shadow model column names. `only()` / `defer()` remain hydration hints
+and do not change group boundaries. Empty grouped inputs return SQL defaults:
+COUNT is zero and SUM/AVG are null; wrap with `func.coalesce()` for another default.
+Scalar subqueries, SQL rendering and EXPLAIN use the same grouped statement.
 
 ### Manual Joins and Locking
 

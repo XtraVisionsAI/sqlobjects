@@ -485,23 +485,22 @@ class TestGroupByAnnotateSemantics:
         assert "GROUP BY" not in str(query)
 
 
-class TestAggregateGroupByGuard:
-    """Test aggregate() rejects GROUP BY querysets."""
+class TestAggregateGroupBySemantics:
+    """Test aggregate() summarizes grouped rows without expanding the groups."""
 
-    def test_aggregate_with_group_by_raises(self):
-        """aggregate() after group_by() must raise instead of ignoring groups."""
-        from sqlobjects.exceptions import QueryError
-
+    def test_aggregate_with_group_by_uses_a_derived_table(self):
         qs = QueryTestUser.objects.group_by("username")
-        with pytest.raises(QueryError, match=r"ignores GROUP BY.*values"):
-            qs.aggregate(cnt=func.count())
+        sql = qs.aggregate(cnt=func.count()).get_sql()
+        assert "GROUP BY" in sql
+        assert "FROM (SELECT" in sql
+        assert "count(*)" in sql
+        assert "query_test_users.age" not in sql
 
-    def test_manager_aggregate_with_group_by_raises(self):
-        """Manager chain group_by().aggregate() must raise the same error."""
+    def test_aggregate_rejects_raw_columns_outside_group_by(self):
         from sqlobjects.exceptions import QueryError
 
-        with pytest.raises(QueryError, match="ignores GROUP BY"):
-            QueryTestUser.objects.group_by("username").aggregate(cnt=func.count())
+        with pytest.raises(QueryError, match="grouping key or an annotation"):
+            QueryTestUser.objects.group_by("username").aggregate(total=func.sum(QueryTestUser.age)).get_query()
 
     def test_aggregate_without_group_by_unaffected(self):
         """Plain aggregate() still returns an awaitable expression."""

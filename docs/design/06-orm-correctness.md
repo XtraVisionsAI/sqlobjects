@@ -5,8 +5,8 @@ define the behavior of its model and QuerySet APIs. Regression coverage lives in
 `tests/integration/test_orm_contracts.py`, `test_commit_callbacks.py`,
 `test_query_logging_contracts.py`, `test_distinct_contracts.py`,
 `test_signal_contracts.py`, `test_database_events.py`,
-`test_dynamic_relationships.py`, `test_aggregate_contracts.py` and
-`test_schema_naming.py`. These run against SQLite, PostgreSQL and MySQL in CI.
+`test_dynamic_relationships.py`, `test_aggregate_contracts.py`,
+`test_grouped_aggregation.py` and `test_schema_naming.py`. These run against SQLite, PostgreSQL and MySQL in CI.
 
 ## Persisted and partial objects
 
@@ -180,8 +180,20 @@ already be projected; adding them implicitly would change the deduplication key.
 Scalar inputs keep their local query scope, and correlated aggregate subqueries
 work across the supported backends. Projection of only a scalar expression now
 retains the model's FROM clause. Empty inputs preserve SQL aggregate defaults.
-GROUP BY, HAVING and row-lock queries are rejected by `aggregate()`; use the
-grouped values API or explicit SQL for these shapes.
+Explicit GROUP BY queries can now be summarized by `aggregate()`. A derived table
+selects only grouping keys and annotations, preserving HAVING, DISTINCT, slices
+and CTEs. Outer aggregates reference grouping keys or annotation aliases; direct
+model fields outside the grouping keys are rejected. Empty inputs keep SQL
+aggregate defaults. The grouped values API still returns individual group rows.
+HAVING without explicit grouping and row locking remain unsupported.
+
+Native SQLAlchemy grouping expressions now retain their expression and source
+table instead of being reduced to a field name. Ordering by annotation aliases
+also works, so slices select the intended groups. Constant groups use projected
+aliases to avoid MySQL treating numeric literals as select-list ordinals.
+Annotations cannot shadow model columns in grouped terminal aggregation.
+This extends the [Django-style aggregation of annotations](https://docs.djangoproject.com/en/5.2/topics/db/aggregation/#aggregating-annotations)
+while keeping SQLObjects' explicit `group_by()` API.
 
 This follows [Django's filtered aggregation and annotation composition](https://docs.djangoproject.com/en/5.2/topics/db/aggregation/)
 and uses [SQLAlchemy's derived-table and scalar-subquery APIs](https://docs.sqlalchemy.org/en/20/tutorial/data_select.html#subqueries-and-ctes).
@@ -356,9 +368,9 @@ Local verification on 2026-10-08 used Python 3.12, SQLAlchemy 2.0.44 and Alembic
 
 | Database | Scope | Result |
 | --- | --- | --- |
-| SQLite | Unit and integration suite | 739 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
-| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events, dynamic relationships, aggregation, schema naming, CRUD, relationships, deferred fields, bulk results, cascades and signals | 359 passed. |
-| MySQL 8.4 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events and dynamic relationships, aggregation and schema naming with aiomysql and its RSA authentication extra | 223 passed; one executemany RETURNING test skipped because this backend does not support it. |
+| SQLite | Unit and integration suite | 765 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
+| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events, dynamic relationships, aggregation including grouped inputs, schema naming, CRUD, relationships, deferred fields, bulk results, cascades and signals | 385 passed. |
+| MySQL 8.4 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events and dynamic relationships, aggregation including grouped inputs and schema naming with aiomysql and its RSA authentication extra | 249 passed; one executemany RETURNING test skipped because this backend does not support it. |
 
 The 10 migration integration tests also pass with Alembic 1.16.5 on SQLite.
 
@@ -367,7 +379,6 @@ unnecessary-ignore warnings. SQLite no longer emits DISTINCT ON dialect warnings
 The workflow definitions were checked locally; hosted CI results will
 be available after the changes are pushed.
 
-Further work from the ORM review includes aggregation over grouped queries,
-realistic performance benchmarks, batched data-migration tooling and broader
-driver/version coverage. These are separate from the persistence and query
+Further work from the ORM review includes realistic performance benchmarks,
+batched data-migration tooling and broader driver/version coverage. These are separate from the persistence and query
 corrections described here.

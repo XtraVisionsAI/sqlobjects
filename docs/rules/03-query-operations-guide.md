@@ -120,13 +120,30 @@ in column comparisons. Empty inputs keep SQL defaults (COUNT zero, SUM/AVG null)
 For annotation inputs use `func.sum(sqlalchemy.column("alias"))`. After ordinary
 DISTINCT, joined/scalar inputs must already be projected through `annotate()`;
 adding an unselected input would change deduplication and raises `QueryError`.
-Field-specific DISTINCT remains PostgreSQL-only. GROUP BY, HAVING and row-lock
-clauses cannot be passed to `aggregate()`; use grouped values or explicit SQL.
+Field-specific DISTINCT remains PostgreSQL-only. With `group_by()`, `aggregate()`
+summarizes the resulting group rows, preserving HAVING and slices. Use grouping
+keys or `sqlalchemy.column("annotation_alias")` as outer aggregate inputs; raw
+model fields outside GROUP BY raise `QueryError`. Annotation aliases must not
+shadow model columns. HAVING without explicit grouping and row locking are rejected.
 
 ### Grouping
 
-Grouped aggregation returns **one row per group**, not model instances — use
-values-mode: list the grouping columns and aggregate aliases in `.values()`.
+Use `values()` to return individual groups. Use `aggregate()` to summarize them:
+
+```python
+from sqlalchemy import column
+
+summary = await User.objects.annotate(member_count=func.count()).group_by("department").aggregate(
+    departments=func.count(), average_members=func.avg(column("member_count"))
+)
+```
+
+`departments` counts groups. Order by an annotation alias (for example
+`order_by("-member_count")`) before slicing to aggregate the selected groups.
+Grouping expressions retain their SQL and table identity.
+
+For **one row per group**, use values-mode: list the grouping columns and
+aggregate aliases in `.values()`.
 
 ```python
 # Group by with aggregation → list[dict], one dict per group
