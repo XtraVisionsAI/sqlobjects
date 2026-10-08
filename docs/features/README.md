@@ -112,6 +112,17 @@ Extend SQLObjects with custom database-specific field types.
 - Best practices for custom types
 - Type registry API reference
 
+### [09. Schema Migrations](09-migrations.md)
+
+Evolve existing schemas with Alembic and async database connections.
+
+**Core Topics:**
+
+- Isolated application registries and table ownership
+- Autogenerate, upgrade, downgrade and schema checks
+- Historical data backfills and SQLite batch operations
+- Offline SQL and sharing an existing async connection
+
 ## Getting Started
 
 If you're new to SQLObjects, we recommend following this learning path:

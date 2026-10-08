@@ -19,8 +19,8 @@ jobs:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --frozen --group test --group dev
-      - run: uv run --no-sync ruff check --no-fix sqlobjects tests
-      - run: uv run --no-sync ruff format --check sqlobjects tests
+      - run: uv run --no-sync ruff check --no-fix sqlobjects tests examples/migrations
+      - run: uv run --no-sync ruff format --check sqlobjects tests examples/migrations
       - run: uv run --no-sync pyright --pythonpath .venv/bin/python
       - run: uv run --no-sync pytest tests/unit tests/integration --db=sqlite
 
@@ -68,6 +68,7 @@ jobs:
           uv run --no-sync pytest --db=${{ matrix.database }}
           tests/integration/test_orm_contracts.py tests/integration/test_commit_callbacks.py
           tests/integration/test_query_logging_contracts.py
+          tests/integration/test_migrations.py
       - if: matrix.database == 'postgresql'
         run: >-
           uv run --no-sync pytest --db=postgresql

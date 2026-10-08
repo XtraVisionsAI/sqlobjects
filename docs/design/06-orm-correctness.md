@@ -188,6 +188,27 @@ implemented using the underlying
 [SQLAlchemy dialect and connection events](https://docs.sqlalchemy.org/en/20/core/events.html)
 so every ORM entry point shares the same recording path.
 
+## Schema migrations
+
+An explicit `__registry__ = ModelRegistry(...)` on a model or abstract base is
+honored and inherited. Previously the metaclass silently replaced it with the
+shared registry, leaking application tables into the wrong migration metadata.
+The default shared registry remains available when no explicit one is supplied.
+
+The optional `migrations` extra installs Alembic. The
+[runnable example](../../examples/migrations/README.md) uses an async environment,
+an isolated registry, an ownership filter and a dedicated version table. Two
+historical revisions demonstrate schema creation and a required field backfill,
+including SQLite batch operations with offline SQL support. It supports the CLI
+and a caller-supplied connection through `run_sync()`.
+
+`tests/integration/test_migrations.py` checks populated upgrades, downgrades,
+generated revisions, ownership filtering, real default changes, ORM writes and
+offline SQL. SQLite/MySQL Identity differences are filtered without suppressing
+actual server-default changes. Alembic 1.16.5 and the lockfile version are both
+tested locally on SQLite; the lockfile version is also exercised on PostgreSQL
+and MySQL in CI.
+
 ## Verification and remaining work
 
 CI runs the SQLite unit/integration suite, the cross-database contract suite and
@@ -196,19 +217,21 @@ checks. Some older tests are not portable: index-only test models include invali
 PostgreSQL DDL, and performance tests use fixed timing ratios. They are not part
 of the cross-database contract job.
 
-Local verification on 2026-10-08 used Python 3.12 and SQLAlchemy 2.0.44:
+Local verification on 2026-10-08 used Python 3.12, SQLAlchemy 2.0.44 and Alembic 1.20.0:
 
 | Database | Scope | Result |
 | --- | --- | --- |
-| SQLite | Unit and integration suite | 592 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
-| PostgreSQL 16 | Contracts, commit callbacks, query logging, CRUD, relationships, deferred fields, bulk results, cascades and signals | 241 passed. |
-| MySQL 8.4 | Contracts, commit callbacks and query logging with aiomysql and its RSA authentication extra | 100 passed; one executemany RETURNING test skipped because this backend does not support it. |
+| SQLite | Unit and integration suite | 608 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
+| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, CRUD, relationships, deferred fields, bulk results, cascades and signals | 251 passed. |
+| MySQL 8.4 | Contracts, commit callbacks, query logging and migrations with aiomysql and its RSA authentication extra | 110 passed; one executemany RETURNING test skipped because this backend does not support it. |
+
+The 10 migration integration tests also pass with Alembic 1.16.5 on SQLite.
 
 Ruff lint and formatting passed. Pyright reported zero errors and three existing
 unnecessary-ignore warnings. SQLite retains two existing DISTINCT ON dialect
 warnings. The workflow definitions were checked locally; hosted CI results will
 be available after the changes are pushed.
 
-Further work from the ORM review includes Alembic examples, realistic
-performance benchmarks and broader driver/version coverage. These are separate
+Further work from the ORM review includes realistic performance benchmarks,
+batched data-migration tooling and broader driver/version coverage. These are separate
 from the persistence and query corrections described here.

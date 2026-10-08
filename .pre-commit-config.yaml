@@ -5,6 +5,7 @@ repos:
     hooks:
       - id: pyright
         additional_dependencies:
+          - alembic>=1.16.5
           - sqlalchemy[asyncio]
           - pytest-asyncio
           - asyncpg

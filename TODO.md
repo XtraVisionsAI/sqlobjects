@@ -49,6 +49,9 @@ await log_query_performance(enable=True)
 
 ## 数据迁移增强
 
+已提供 [Alembic 集成与可运行示例](docs/features/09-migrations.md)，支持自动生成、
+异步升级/降级、离线 SQL 和小规模数据回填。以下原生 API 仍为规划：
+
 ### 自动迁移生成
 
 ```python
@@ -78,7 +81,7 @@ await migrate_data_in_batches(
 
 - 高级聚合函数 (ArrayAgg, JsonAgg)
 - 索引建议功能
-- 自动迁移生成
+- 原生迁移管理 API（Alembic 自动生成已支持）
 
 ### 低优先级
 

@@ -37,6 +37,9 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.44",
 ]
 
+[project.optional-dependencies]
+migrations = ["alembic>=1.16.5"]
+
 [project.scripts]
 sqlobjects-install-rules = "sqlobjects._install_rules:main"
 
@@ -55,6 +58,7 @@ dev = [
     "setuptools>=82.0.0",
 ]
 test = [
+    "alembic>=1.16.5",
     "aiomysql[rsa]>=0.3.2",
     "aiosqlite>=0.22.1",
     "asyncpg>=0.31.0",
@@ -93,7 +97,7 @@ version_files = ["sqlobjects/__init__.py:__version__"]
 update_changelog_on_bump = true
 
 [tool.pyright]
-include = ["sqlobjects", "tests"]
+include = ["sqlobjects", "tests", "examples/migrations"]
 exclude = ["**/__pycache__"]
 pythonVersion = "3.12"
 reportMissingImports = "error"

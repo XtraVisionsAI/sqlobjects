@@ -37,6 +37,23 @@ manager1 = User.objects  # New ObjectsManager instance
 manager2 = User.objects  # Another new ObjectsManager instance
 ```
 
+## Application registries
+
+Models share the default registry unless their base declares an explicit one:
+
+```python
+from sqlobjects.metadata import ModelRegistry
+
+class AppModel(ObjectModel):
+    __abstract__ = True
+    __registry__ = ModelRegistry()
+```
+
+Subclasses inherit this registry, keeping their tables and relationships isolated
+from other applications. An explicit registry must be a `ModelRegistry` instance.
+It is also SQLAlchemy `MetaData`, suitable for Alembic's `target_metadata` after
+all model modules have been imported. See [schema migrations](09-migrations.md).
+
 ## Field Types
 
 ### String Fields

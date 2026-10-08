@@ -356,7 +356,8 @@ See our [TODO.md](TODO.md) for planned features:
 - **Database management**: connection health checks, dynamic default-database switching, connection-pool monitoring
 - **Advanced SQL**: additional aggregate functions (array / JSON aggregation)
 - **Query optimization**: index suggestions and slow-query analysis tools
-- **Migrations**: model-diff migration generation and batched data-migration tooling
+- **Migrations**: native migration orchestration and batched data-migration tooling;
+  [Alembic autogeneration and async execution](docs/features/09-migrations.md) are available now.
 
 Already implemented: window functions, CTEs (including recursive), `EXPLAIN`
 query analysis, cascade operations, SQL logging, and high-performance bulk

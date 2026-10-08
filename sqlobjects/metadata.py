@@ -314,7 +314,11 @@ class ModelProcessor(type):
         # Check if this directly inherits from ObjectModel
         direct_objectmodel_bases = [base for base in bases if base.__name__ == "ObjectModel"]
 
-        if direct_objectmodel_bases:
+        if "__registry__" in namespace:
+            registry = namespace["__registry__"]
+            if not isinstance(registry, ModelRegistry):
+                raise TypeError("__registry__ must be a ModelRegistry instance")
+        elif direct_objectmodel_bases:
             # Direct ObjectModel inheritance - use ObjectModel's shared registry
             objectmodel_base = direct_objectmodel_bases[0]
             if not hasattr(objectmodel_base, "__registry__"):
