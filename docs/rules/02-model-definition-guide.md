@@ -315,6 +315,13 @@ class User(ObjectModel):
         ]
 ```
 
+Index order, expressions, sort direction, collation and dialect options are part
+of an index definition. Keep both composite orders when both query patterns need
+them. Use SQLAlchemy `Index` in `Config.indexes` for expressions. Deduplication
+removes equivalent definitions; a unique index only replaces a plain index with
+matching expressions and options. Conditional DDL indexes are preserved.
+See [index definitions](../features/02-model-definition.md#index-definitions-and-deduplication).
+
 ## Troubleshooting
 
 ### Field Not in Constructor

@@ -365,6 +365,33 @@ class Product(ObjectModel):
         ]
 ```
 
+#### Index definitions and deduplication
+
+Index column order matters: `(name, price)` and `(price, name)` remain separate
+indexes. SQLObjects also preserves function expressions, repeated columns, sort
+direction, collation, literal values and dialect options such as PostgreSQL
+`INCLUDE`, operator classes and MySQL prefix lengths. Use SQLAlchemy `Index` for
+expression indexes in `Config.indexes`:
+
+```python
+from sqlalchemy import Index, column as sql_column, func
+
+# Inside Config.indexes:
+Index("idx_lower_name", func.lower(sql_column("name")))
+Index("idx_price_desc", sql_column("price").desc())
+```
+
+Equivalent definitions with the same uniqueness are deduplicated, preferring
+explicit names. A full unique index replaces a plain index only when their
+ordered expressions and dialect options match. Partial indexes cannot replace
+full indexes. Indexes using `ddl_if()` or expressions without a generic SQL
+compiler are retained without evaluating their DDL conditions. The database
+dialect still determines which expressions and options it supports.
+
+Existing databases may be missing indexes discarded by earlier deduplication.
+Review the [index migration guidance](09-migrations.md#restore-previously-discarded-indexes)
+when upgrading.
+
 #### Automatic schema names
 
 SQLObjects generates names for unnamed CHECK, UNIQUE and foreign key constraints,

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Union, cast
 
 from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, UniqueConstraint
 from sqlalchemy import MetaData as SqlAlchemyMetaData
+from sqlalchemy.exc import CompileError
 from sqlalchemy.sql.elements import conv
 
 from .fields import ColumnAttribute
@@ -613,8 +614,17 @@ class ModelProcessor(type):
 
     @classmethod
     def _post_process_table_indexes(mcs, table, table_name: str) -> None:
-        def col_sig(idx):
-            return tuple(sorted(col.name for col in idx.columns)) if idx.columns else None
+        def expression_sig(idx):
+            # Index.columns loses expression structure and repeated columns.
+            # Preserve expression order, sort direction, collation and literals.
+            # Expression keys also select PostgreSQL operator classes.
+            return tuple(
+                (
+                    str(expr.compile(compile_kwargs={"literal_binds": True, "include_table": False})),
+                    getattr(expr, "key", None),
+                )
+                for expr in idx.expressions
+            )
 
         def dialect_sig(idx):
             # Dialect kwargs (postgresql_where / postgresql_using / mysql_using, etc.)
@@ -632,21 +642,30 @@ class ModelProcessor(type):
             )
 
         def is_partial(idx):
-            return any(k.endswith("_where") for k, _ in dialect_sig(idx))
+            return any(k.endswith("_where") and value is not None for k, value in idx.dialect_kwargs.items())
 
-        full_sig_map: dict[tuple, list] = {}  # (cols, unique, dialect_sig) -> indexes
-        col_map: dict[tuple, list] = {}  # cols -> indexes
+        full_sig_map: dict[tuple, list] = {}  # (expressions, unique, options) -> indexes
+        shape_map: dict[tuple, list] = {}  # (expressions, options) -> indexes
 
         for idx in list(table.indexes):
-            cs = col_sig(idx)
-            if cs is None:
+            # Conditional DDL can produce different schemas per dialect or
+            # callback result. Keep it intact instead of evaluating callbacks.
+            if getattr(idx, "_ddl_if", None) is not None:
                 continue
-            full_sig_map.setdefault((cs, getattr(idx, "unique", False), dialect_sig(idx)), []).append(idx)
-            col_map.setdefault(cs, []).append(idx)
+            try:
+                expressions, options = expression_sig(idx), dialect_sig(idx)
+            except CompileError:
+                # Backend-only/custom expressions may have no generic compiler.
+                # Failing to prove equivalence must never remove an index.
+                continue
+            if not expressions:
+                continue
+            full_sig_map.setdefault((expressions, idx.unique, options), []).append(idx)
+            shape_map.setdefault((expressions, options), []).append(idx)
 
         to_remove: set = set()
 
-        # Remove exact duplicates (same columns, unique flag, and dialect kwargs):
+        # Remove exact duplicates (same expressions, unique flag, and options):
         # prefer explicit names over generated names. Sort by name
         # so the kept index is deterministic regardless of set iteration order.
         for indexes in full_sig_map.values():
@@ -662,10 +681,11 @@ class ModelProcessor(type):
                 keep = explicit[0] if explicit else sorted(indexes, key=lambda i: i.name or "")[0]
                 to_remove.update(i for i in indexes if i is not keep)
 
-        # Remove full-table non-unique when a full-table unique exists on same columns.
+        # A full-table unique index can replace a plain index only when its
+        # ordered expressions AND options match (including access method/INCLUDE).
         # Partial indexes (unique or not) never participate: a partial unique index
         # only covers rows matching its predicate and cannot replace a full index.
-        for indexes in col_map.values():
+        for indexes in shape_map.values():
             if any(getattr(i, "unique", False) and not is_partial(i) for i in indexes):
                 to_remove.update(i for i in indexes if not getattr(i, "unique", False) and not is_partial(i))
 

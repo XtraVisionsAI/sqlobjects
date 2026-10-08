@@ -347,6 +347,29 @@ class Product(ObjectModel):
         ]
 ```
 
+#### 索引定义与去重
+
+索引列的顺序具有意义：`(name, price)` 和 `(price, name)` 会保留为不同索引。
+SQLObjects 也会保留函数表达式、重复列、排序方向、排序规则、字面量值，以及
+PostgreSQL `INCLUDE`、运算符类和 MySQL 前缀长度等数据库选项。
+表达式索引可以直接使用 SQLAlchemy `Index`，放入 `Config.indexes`：
+
+```python
+from sqlalchemy import Index, column as sql_column, func
+
+# 放入 Config.indexes：
+Index("idx_lower_name", func.lower(sql_column("name")))
+Index("idx_price_desc", sql_column("price").desc())
+```
+
+定义等价且唯一性相同的索引会去重，优先保留显式名称。只有有序表达式和数据库选项均相同，
+全表唯一索引才会替代普通索引；部分索引不能替代全表索引。
+带 `ddl_if()` 条件或无法使用通用 SQL 编译器编译的索引会保留，模型注册不会执行 DDL 条件回调。
+数据库是否支持对应表达式和选项，仍由其方言决定。
+
+已有数据库可能缺少被旧版去重逻辑丢弃的索引。升级时请参考
+[索引迁移说明](../../docs/features/09-migrations.md#restore-previously-discarded-indexes)。
+
 #### 自动约束和索引名称
 
 SQLObjects 为未命名的 CHECK、UNIQUE、外键约束、字段索引以及

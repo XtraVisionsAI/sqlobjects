@@ -75,6 +75,7 @@ jobs:
           tests/integration/test_aggregate_contracts.py
           tests/integration/test_grouped_aggregation.py
           tests/integration/test_schema_naming.py
+          tests/integration/test_index_contracts.py
       - if: matrix.database == 'postgresql'
         run: >-
           uv run --no-sync pytest --db=postgresql

@@ -93,6 +93,20 @@ SQLite and MySQL use their own integer autoincrement behavior. PostgreSQL Identi
 changes and ordinary server-default changes still participate in comparison.
 Generate and review revisions against your deployment dialect.
 
+## Restore previously discarded indexes
+
+Earlier index deduplication compared sorted column names. It could discard a
+reversed composite index, an expression index (including a unique one), or a
+plain index whose dialect options differed from a unique index on the same
+columns. These definitions now remain in model metadata.
+
+Updating metadata does not add missing indexes to existing tables. Inspect the
+database's actual index definitions and review a migration to create any missing
+indexes. Expression-index reflection and autogenerate support vary by dialect;
+write explicit `create_index` operations when needed. Before adding a restored
+unique expression index, check existing rows for conflicts with that expression.
+See [index definitions](02-model-definition.md#index-definitions-and-deduplication).
+
 ## Changes to generated schema names
 
 SQLObjects now bounds its automatic constraint and index names to 63 UTF-8 bytes.

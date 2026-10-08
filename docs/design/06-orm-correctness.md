@@ -6,7 +6,8 @@ define the behavior of its model and QuerySet APIs. Regression coverage lives in
 `test_query_logging_contracts.py`, `test_distinct_contracts.py`,
 `test_signal_contracts.py`, `test_database_events.py`,
 `test_dynamic_relationships.py`, `test_aggregate_contracts.py`,
-`test_grouped_aggregation.py` and `test_schema_naming.py`. These run against SQLite, PostgreSQL and MySQL in CI.
+`test_grouped_aggregation.py`, `test_schema_naming.py` and `test_index_contracts.py`.
+These run against SQLite, PostgreSQL and MySQL in CI.
 
 ## Persisted and partial objects
 
@@ -332,6 +333,31 @@ actual server-default changes. Alembic 1.16.5 and the lockfile version are both
 tested locally on SQLite; the lockfile version is also exercised on PostgreSQL
 and MySQL in CI.
 
+## Preserve index definitions
+
+Index deduplication compares ordered SQL expressions, their keys, literal values,
+uniqueness and dialect options. Reversing composite columns, changing a function,
+sort direction or collation, or using different access methods, operator classes,
+included columns or prefix lengths must retain separate indexes. Expression keys
+matter because PostgreSQL selects operator classes by key, including labels.
+A full unique index only replaces a plain index with the same expressions and
+options; partial indexes never replace full indexes.
+
+Conditional DDL indexes are preserved without evaluating callbacks during model
+registration. Custom expressions without a generic compiler are also retained.
+Equivalent unconditional definitions still deduplicate deterministically, with
+explicit names preferred. Previously this process compared sorted column names,
+which could silently remove functional uniqueness enforcement.
+
+This follows the expression and ordering semantics documented by
+[SQLAlchemy](https://docs.sqlalchemy.org/en/20/core/constraints.html#indexes) and
+[Django](https://docs.djangoproject.com/en/5.2/ref/models/indexes/), and
+[PostgreSQL's multicolumn index behavior](https://www.postgresql.org/docs/current/indexes-multicolumn.html).
+Unit tests cover definition identity and conservative retention; integration
+tests inspect actual indexes, enforce functional uniqueness, execute ORM queries
+and drop/recreate indexes on all three databases. Existing schemas may need a
+[migration to restore missing indexes](../features/09-migrations.md#restore-previously-discarded-indexes).
+
 ## Portable generated schema names
 
 SQLObjects bounds its generated CHECK, UNIQUE, foreign key and index names to
@@ -368,9 +394,9 @@ Local verification on 2026-10-08 used Python 3.12, SQLAlchemy 2.0.44 and Alembic
 
 | Database | Scope | Result |
 | --- | --- | --- |
-| SQLite | Unit and integration suite | 765 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
-| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events, dynamic relationships, aggregation including grouped inputs, schema naming, CRUD, relationships, deferred fields, bulk results, cascades and signals | 385 passed. |
-| MySQL 8.4 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events and dynamic relationships, aggregation including grouped inputs and schema naming with aiomysql and its RSA authentication extra | 249 passed; one executemany RETURNING test skipped because this backend does not support it. |
+| SQLite | Unit and integration suite | 790 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
+| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events, dynamic relationships, aggregation including grouped inputs, schema naming, index definitions, CRUD, relationships, deferred fields, bulk results, cascades and signals | 389 passed. |
+| MySQL 8.4 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events and dynamic relationships, aggregation including grouped inputs, schema naming and index definitions with aiomysql and its RSA authentication extra | 253 passed; one executemany RETURNING test skipped because this backend does not support it. |
 
 The 10 migration integration tests also pass with Alembic 1.16.5 on SQLite.
 
