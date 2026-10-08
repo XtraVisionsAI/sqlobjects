@@ -136,6 +136,19 @@ usernames = await User.objects.values_list("username", flat=True).all()
 
 ## 聚合
 
+`aggregate()` 在筛选、JOIN、DISTINCT 和 LIMIT/OFFSET 之后聚合输入行，返回一个字典。
+因此 `order_by("-age").limit(10).aggregate(avg_age=func.avg(User.age))` 计算年龄最大的
+十条记录的平均年龄。`only()` / `defer()` 不限制聚合使用的字段。
+空输入保留数据库默认值：COUNT 为 0，SUM / AVG / MIN / MAX 为 None。
+
+执行、SQL 生成、标量子查询和 EXPLAIN 使用同一条聚合语句。
+`scalar_subquery()` 要求只有一个聚合表达式；单字段聚合也可直接用于列比较。
+通过 `sqlalchemy.column("注解别名")` 可以聚合已有注解。
+普通 DISTINCT 之后使用 JOIN 列或标量子查询作为聚合输入，需要先通过 `annotate()`
+显式投影该输入；这会将输入纳入去重键，避免聚合时悄悄改变哪些行是重复行。
+`distinct(*fields)` 仍仅支持 PostgreSQL。
+`aggregate()` 不接受 GROUP BY、HAVING 或行锁；分组结果使用下文的 values 模式。
+
 ### 基础聚合
 
 ```python
@@ -251,7 +264,7 @@ count = await User.objects.skip_default_ordering().count()
 # 子查询创建
 avg_age = User.objects.aggregate(
     avg_age=func.avg(User.age)
-).subquery(query_type="scalar")
+).scalar_subquery()
 
 active_users = User.objects.filter(
     User.is_active == True
@@ -445,15 +458,15 @@ results = await User.objects.raw(
 # 标量子查询用于单值比较
 avg_salary = User.objects.aggregate(
     avg_salary=func.avg(User.salary)
-).subquery(query_type="scalar")
+).scalar_subquery()
 
 high_earners = await User.objects.filter(
     User.salary > avg_salary
 ).all()
 
 # 多个标量子查询
-max_age = User.objects.aggregate(max_age=func.max(User.age)).subquery(query_type="scalar")
-min_age = User.objects.aggregate(min_age=func.min(User.age)).subquery(query_type="scalar")
+max_age = User.objects.aggregate(max_age=func.max(User.age)).scalar_subquery()
+min_age = User.objects.aggregate(min_age=func.min(User.age)).scalar_subquery()
 
 users = await User.objects.filter(
     (User.age == max_age) | (User.age == min_age)

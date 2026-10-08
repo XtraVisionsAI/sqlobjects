@@ -58,12 +58,25 @@ class TestDistinctContracts:
         with pytest.raises(QueryError, match="missing"):
             await ContractRecord.objects.distinct(*fields).all()
 
-    @pytest.mark.parametrize("fields", [(), ("value",)])
-    async def test_aggregate_rejects_distinctness_it_cannot_preserve(self, fields):
-        with pytest.raises(QueryError, match="distinctness"):
-            ContractRecord.objects.distinct(*fields).aggregate(total=func.sum(ContractRecord.value))
+    async def test_aggregate_preserves_distinct_rows(self):
+        await seed(4)
+        assert await ContractRecord.objects.distinct().aggregate(total=func.sum(ContractRecord.value)) == {"total": 2}
 
-    @pytest.mark.parametrize("evaluation", ["all", "count", "exists", "iterator", "subquery", "cte", "explain"])
+    @pytest.mark.parametrize(
+        "evaluation",
+        [
+            "all",
+            "count",
+            "exists",
+            "iterator",
+            "subquery",
+            "cte",
+            "explain",
+            "aggregate",
+            "aggregate_scalar",
+            "aggregate_explain",
+        ],
+    )
     async def test_distinct_on_is_postgresql_only_in_nested_queries(self, evaluation, contract_db):
         await seed(4)
         query = ContractRecord.objects.order_by("value", "id").distinct("value")
@@ -73,6 +86,14 @@ class TestDistinctContracts:
             statements.append(statement)
 
         async def evaluate():
+            if evaluation.startswith("aggregate"):
+                expression = query.aggregate(total=func.sum(ContractRecord.value))
+                if evaluation == "aggregate_scalar":
+                    async with ctx_session() as session:
+                        return (await session.execute(select(expression.scalar_subquery()))).scalar_one()
+                if evaluation == "aggregate_explain":
+                    return await expression.explain()
+                return await expression
             if evaluation == "explain":
                 return await query.all().explain()
             if evaluation == "iterator":
@@ -88,11 +109,15 @@ class TestDistinctContracts:
         try:
             if contract_db.engine.dialect.name == "postgresql":
                 result = await evaluate()
-                if evaluation == "count":
+                if evaluation == "aggregate":
+                    assert result == {"total": 1}
+                elif evaluation == "aggregate_scalar":
+                    assert result == 1
+                elif evaluation == "count":
                     assert result == 2
                 elif evaluation == "exists":
                     assert result is True
-                elif evaluation == "explain":
+                elif evaluation in {"explain", "aggregate_explain"}:
                     assert "Unique" in result
                 else:
                     assert isinstance(result, list)

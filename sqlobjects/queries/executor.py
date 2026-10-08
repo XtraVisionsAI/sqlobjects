@@ -193,7 +193,7 @@ class QueryExecutor:
             return select(func.count()).select_from(query.order_by(None).subquery())
         elif query_type == "exists":
             return select(exists(query))
-        if query_type not in {"update", "delete", "values", "values_list", "aggregate"} or kwargs.get("prebuilt"):
+        if query_type not in {"update", "delete", "values", "values_list"} or kwargs.get("prebuilt"):
             return query
 
         froms = query.get_final_froms()
@@ -222,13 +222,6 @@ class QueryExecutor:
                     new_query = new_query.order_by(*query._order_by)  # noqa
                 return new_query
             return query
-        elif query_type == "aggregate":
-            aggregations = kwargs.get("aggregations", [])
-            table = from_table
-            agg_query = select(*aggregations).select_from(table)
-            if query.whereclause is not None:
-                agg_query = agg_query.where(query.whereclause)
-            return agg_query
         else:  # "all"
             return query
 

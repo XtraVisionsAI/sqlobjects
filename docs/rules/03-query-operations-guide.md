@@ -111,6 +111,18 @@ users = await User.objects.annotate(
 ).all()
 ```
 
+`aggregate()` evaluates filtered/joined rows after DISTINCT and LIMIT/OFFSET.
+Hydration hints (`only()`/`defer()`) do not hide aggregate inputs. It shares its
+statement with SQL rendering, scalar subqueries and EXPLAIN. Use
+`.scalar_subquery()` for a single aggregate; single-field expressions also work
+in column comparisons. Empty inputs keep SQL defaults (COUNT zero, SUM/AVG null).
+
+For annotation inputs use `func.sum(sqlalchemy.column("alias"))`. After ordinary
+DISTINCT, joined/scalar inputs must already be projected through `annotate()`;
+adding an unselected input would change deduplication and raises `QueryError`.
+Field-specific DISTINCT remains PostgreSQL-only. GROUP BY, HAVING and row-lock
+clauses cannot be passed to `aggregate()`; use grouped values or explicit SQL.
+
 ### Grouping
 
 Grouped aggregation returns **one row per group**, not model instances — use
@@ -207,7 +219,7 @@ count = await User.objects.skip_default_ordering().count()
 
 ```python
 # Scalar subquery (single value)
-avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).subquery(query_type="scalar")
+avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).scalar_subquery()
 older_users = await User.objects.filter(User.age > avg_age).all()
 
 # EXISTS subquery (boolean condition)
@@ -452,7 +464,7 @@ users = await User.objects.only(
 ).order_by("-created_at").limit(10).offset(20).all()
 
 # Subquery
-avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).subquery(query_type="scalar")
+avg_age = User.objects.aggregate(avg_age=func.avg(User.age)).scalar_subquery()
 older_users = await User.objects.filter(User.age > avg_age).all()
 
 # Performance optimization

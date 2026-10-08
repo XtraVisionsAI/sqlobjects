@@ -462,7 +462,7 @@ class QueryBuilder:
             columns_to_select.extend(related_columns)
 
         # Create the base query
-        query = select(*columns_to_select) if columns_to_select else select(table)
+        query = (select(*columns_to_select) if columns_to_select else select(table)).select_from(table)
 
         # Add CTEs to query
         if cte_objects:
@@ -478,7 +478,6 @@ class QueryBuilder:
 
         # Apply select_related joins (only for select_related, not prefetch_related)
         if select_plan:
-            query = query.select_from(table)
             for target, _, condition in select_plan.values():
                 query = query.outerjoin(target, condition)
 

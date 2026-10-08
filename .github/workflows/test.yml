@@ -72,6 +72,7 @@ jobs:
           tests/integration/test_distinct_contracts.py tests/integration/test_signal_contracts.py
           tests/integration/test_database_events.py
           tests/integration/test_dynamic_relationships.py
+          tests/integration/test_aggregate_contracts.py
       - if: matrix.database == 'postgresql'
         run: >-
           uv run --no-sync pytest --db=postgresql

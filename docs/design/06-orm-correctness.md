@@ -4,8 +4,9 @@ The ORM uses SQLAlchemy Core for SQL and connection management. These contracts
 define the behavior of its model and QuerySet APIs. Regression coverage lives in
 `tests/integration/test_orm_contracts.py`, `test_commit_callbacks.py`,
 `test_query_logging_contracts.py`, `test_distinct_contracts.py`,
-`test_signal_contracts.py`, `test_database_events.py` and
-`test_dynamic_relationships.py`. These run against SQLite, PostgreSQL and MySQL in CI.
+`test_signal_contracts.py`, `test_database_events.py`,
+`test_dynamic_relationships.py` and `test_aggregate_contracts.py`. These run against
+SQLite, PostgreSQL and MySQL in CI.
 
 ## Persisted and partial objects
 
@@ -167,9 +168,25 @@ even with no field arguments. `distinct(*fields)` requires known model columns
 and PostgreSQL's DISTINCT ON. SQLite/MySQL reject it before execution, including
 inside counts, existence checks, streaming, subqueries, CTEs and EXPLAIN. This follows
 [Django's distinction between ordinary DISTINCT and PostgreSQL DISTINCT ON](https://docs.djangoproject.com/en/5.2/ref/models/querysets/#distinct).
-`aggregate()` rejects a distinct QuerySet because its current query reconstruction
-cannot preserve that clause; use an explicit SQL subquery for aggregation after
-deduplication. Ordinary QuerySet `count()` remains supported.
+`aggregate()` uses the same statement for execution, SQL rendering, scalar
+subqueries and EXPLAIN. Filters (including Q objects, keyword filters and bound
+extra WHERE clauses), joins and CTEs survive composition. DISTINCT, annotations
+and slices aggregate through a derived table; ordinary unsliced aggregation uses
+a direct SELECT. Ordering is retained when slicing or DISTINCT ON needs it.
+
+Aggregate inputs are remapped to the derived table, including deferred model
+fields and annotation aliases. Joined/scalar inputs after ordinary DISTINCT must
+already be projected; adding them implicitly would change the deduplication key.
+Scalar inputs keep their local query scope, and correlated aggregate subqueries
+work across the supported backends. Projection of only a scalar expression now
+retains the model's FROM clause. Empty inputs preserve SQL aggregate defaults.
+GROUP BY, HAVING and row-lock queries are rejected by `aggregate()`; use the
+grouped values API or explicit SQL for these shapes.
+
+This follows [Django's filtered aggregation and annotation composition](https://docs.djangoproject.com/en/5.2/topics/db/aggregation/)
+and uses [SQLAlchemy's derived-table and scalar-subquery APIs](https://docs.sqlalchemy.org/en/20/tutorial/data_select.html#subqueries-and-ctes).
+The [query guide](../features/03-querying-data.md#aggregating-composed-queries)
+documents the supported combinations and boundaries.
 
 `iterator()` streams the original query in bounded partitions and yields models,
 preserving ordering, LIMIT, OFFSET and deferred fields. If iteration can stop
@@ -315,9 +332,9 @@ Local verification on 2026-10-08 used Python 3.12, SQLAlchemy 2.0.44 and Alembic
 
 | Database | Scope | Result |
 | --- | --- | --- |
-| SQLite | Unit and integration suite | 692 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
-| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events, dynamic relationships, CRUD, relationships, deferred fields, bulk results, cascades and signals | 329 passed. |
-| MySQL 8.4 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events and dynamic relationships with aiomysql and its RSA authentication extra | 193 passed; one executemany RETURNING test skipped because this backend does not support it. |
+| SQLite | Unit and integration suite | 716 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
+| PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events, dynamic relationships, aggregation, CRUD, relationships, deferred fields, bulk results, cascades and signals | 353 passed. |
+| MySQL 8.4 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events and dynamic relationships and aggregation with aiomysql and its RSA authentication extra | 217 passed; one executemany RETURNING test skipped because this backend does not support it. |
 
 The 10 migration integration tests also pass with Alembic 1.16.5 on SQLite.
 
@@ -326,7 +343,7 @@ unnecessary-ignore warnings. SQLite no longer emits DISTINCT ON dialect warnings
 The workflow definitions were checked locally; hosted CI results will
 be available after the changes are pushed.
 
-Further work from the ORM review includes aggregation over composed queries,
+Further work from the ORM review includes aggregation over grouped queries,
 portable automatic constraint-name lengths, realistic performance benchmarks,
 batched data-migration tooling and broader driver/version coverage. Long composite
 constraint names currently need an explicit shorter name on PostgreSQL/MySQL.

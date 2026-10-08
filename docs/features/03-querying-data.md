@@ -156,6 +156,44 @@ stats = await User.objects.aggregate(
 # Result: {"total_users": 100, "avg_age": 32.5, "max_age": 65, "min_age": 18}
 ```
 
+### Aggregating composed queries
+
+`aggregate()` returns one dictionary after applying filters, joins, DISTINCT and
+LIMIT/OFFSET. For example, this averages the ten oldest active users:
+
+```python
+stats = await User.objects.filter(is_active=True).order_by("-age", "id").limit(10).aggregate(
+    avg_age=func.avg(User.age)
+)
+```
+
+`only()` and `defer()` affect model loading; aggregate expressions can still use
+those fields. An empty input returns the database defaults (`COUNT` is zero;
+`SUM`, `AVG`, `MIN` and `MAX` are null). At least one named expression is required.
+Execution, `get_query()`, `get_sql()`, `scalar_subquery()` and `explain()` share one
+statement. A scalar subquery must contain exactly one aggregate. Single-field
+aggregates also work directly in column comparisons, such as `User.age > avg_age`.
+
+Annotations can be aggregated by alias using SQLAlchemy's `column()`:
+
+```python
+from sqlalchemy import column
+
+stats = await User.objects.annotate(doubled_age=User.age * 2).aggregate(
+    average=func.avg(column("doubled_age"))
+)
+```
+
+Ordinary `distinct()` deduplicates selected model rows, including their primary
+keys. When aggregating a joined column or a scalar subquery after DISTINCT,
+project that input explicitly with `annotate()` first. This makes the input part
+of the deduplication key; silently adding it could change which rows are unique.
+Use an explicit SQL subquery for a different deduplication key. `distinct(*fields)`
+remains PostgreSQL-only and retains its ordering when choosing each row.
+
+`aggregate()` rejects GROUP BY, HAVING and row locking. Use the grouped values
+API below for per-group results, and lock model rows separately in a transaction.
+
 ### Annotations
 
 ```python
@@ -252,7 +290,7 @@ count = await User.objects.skip_default_ordering().count()
 # Subquery creation
 avg_age = User.objects.aggregate(
     avg_age=func.avg(User.age)
-).subquery(query_type="scalar")
+).scalar_subquery()
 
 active_users = User.objects.filter(
     User.is_active == True
@@ -449,15 +487,15 @@ results = await User.objects.raw(
 # Scalar subqueries for single value comparisons
 avg_salary = User.objects.aggregate(
     avg_salary=func.avg(User.salary)
-).subquery(query_type="scalar")
+).scalar_subquery()
 
 high_earners = await User.objects.filter(
     User.salary > avg_salary
 ).all()
 
 # Multiple scalar subqueries
-max_age = User.objects.aggregate(max_age=func.max(User.age)).subquery(query_type="scalar")
-min_age = User.objects.aggregate(min_age=func.min(User.age)).subquery(query_type="scalar")
+max_age = User.objects.aggregate(max_age=func.max(User.age)).scalar_subquery()
+min_age = User.objects.aggregate(min_age=func.min(User.age)).scalar_subquery()
 
 users = await User.objects.filter(
     (User.age == max_age) | (User.age == min_age)
@@ -736,12 +774,10 @@ the distinct fields. Unknown field names raise `QueryError`. On SQLite and MySQL
 field-specific distinct raises `QueryError` before SQL execution, including when
 nested inside a count, subquery or CTE. Use ordinary `distinct()` with a projection
 for portable unique values. Both forms reject QuerySet `update()` and `delete()`.
-They also reject `aggregate()`, whose current implementation cannot preserve
-QuerySet deduplication. Use an explicit SQL subquery when aggregating deduplicated
-rows; to count distinct values of a single column, use an aggregate expression
-such as `func.count(User.department.distinct())` on a QuerySet without `distinct()`.
-QuerySet `count()` supports both forms directly. EXPLAIN enforces the same
-PostgreSQL requirement as query execution.
+`aggregate()` and `count()` support both forms and preserve deduplication before
+applying LIMIT/OFFSET. To count distinct values of a single column, use an aggregate
+expression such as `func.count(User.department.distinct())`. EXPLAIN enforces the
+same PostgreSQL requirement as query execution.
 
 ## Date and Time Queries
 
