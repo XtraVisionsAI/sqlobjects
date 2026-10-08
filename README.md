@@ -323,6 +323,10 @@ uv run pytest tests/performance/   # Performance tests
 uv run pytest --cov=sqlobjects
 ```
 
+Performance tests verify results, query counts and object release while recording
+timing and memory observations. See the [benchmark instructions](tests/performance/README.md)
+for reproducible runs and JUnit measurement reports.
+
 ## 🤝 Contributing
 
 We welcome contributions! Please see our development guidelines:

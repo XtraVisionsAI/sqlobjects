@@ -23,6 +23,14 @@ jobs:
       - run: uv run --no-sync ruff format --check sqlobjects tests examples/migrations
       - run: uv run --no-sync pyright --pythonpath .venv/bin/python
       - run: uv run --no-sync pytest tests/unit tests/integration --db=sqlite
+      - run: >-
+          uv run --no-sync pytest tests/performance --db=sqlite
+          --junitxml=performance-sqlite.xml -o junit_family=legacy
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-sqlite
+          path: performance-sqlite.xml
 
   database-contracts:
     runs-on: ubuntu-latest
@@ -64,6 +72,15 @@ jobs:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --frozen --group test
+      # Run before the wider contract suite so its schemas cannot affect these workloads.
+      - run: >-
+          uv run --no-sync pytest tests/performance --db=${{ matrix.database }}
+          --junitxml=performance-${{ matrix.database }}.xml -o junit_family=legacy
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-${{ matrix.database }}
+          path: performance-${{ matrix.database }}.xml
       - run: >-
           uv run --no-sync pytest --db=${{ matrix.database }}
           tests/integration/test_orm_contracts.py tests/integration/test_commit_callbacks.py

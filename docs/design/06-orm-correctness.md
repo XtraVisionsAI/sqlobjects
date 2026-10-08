@@ -384,19 +384,33 @@ remain the application's responsibility.
 
 ## Verification and remaining work
 
-CI runs the SQLite unit/integration suite, the cross-database contract suite and
-additional PostgreSQL integration tests. Tagged publication depends on these
-checks. Some older tests are not portable: index-only test models include invalid
-PostgreSQL DDL, and performance tests use fixed timing ratios. They are not part
-of the cross-database contract job.
+CI runs the SQLite unit/integration suite, performance workloads on all three
+databases, the cross-database contract suite and additional PostgreSQL integration
+tests. Tagged publication depends on these checks. Some older integration models
+still include invalid PostgreSQL index DDL and are excluded from the cross-database
+contract job. Performance fixtures create only their own required tables.
+
+The [performance suite](../../tests/performance/README.md) records elapsed time,
+client CPU time, RSS deltas and executed statements in JUnit reports. Fixed timing
+ratios and machine-dependent memory/CPU limits have been replaced with result,
+query-count and object-lifetime assertions. Concurrent workers own separate
+sessions and read committed fixtures; task groups finish before teardown. SQLite
+uses separate connections to a temporary file, and the 100 KiB text fixture uses
+LONGTEXT on MySQL. Full/deferred comparisons verify projections and loaded state;
+the large dataset fixture no longer retains a second hydrated copy of every row.
 
 Local verification on 2026-10-08 used Python 3.12, SQLAlchemy 2.0.44 and Alembic 1.20.0:
 
 | Database | Scope | Result |
 | --- | --- | --- |
-| SQLite | Unit and integration suite | 790 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
+| SQLite | Unit, integration and performance suites | 856 passed; one row-lock test skipped because SQLite has no SELECT FOR UPDATE. |
 | PostgreSQL 16 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events, dynamic relationships, aggregation including grouped inputs, schema naming, index definitions, CRUD, relationships, deferred fields, bulk results, cascades and signals | 389 passed. |
 | MySQL 8.4 | Contracts, commit callbacks, query logging, migrations, DISTINCT, signal contracts, database events and dynamic relationships, aggregation including grouped inputs, schema naming and index definitions with aiomysql and its RSA authentication extra | 253 passed; one executemany RETURNING test skipped because this backend does not support it. |
+
+The 66 performance workloads pass on SQLite, PostgreSQL 16 and MySQL 8.4, with
+101 measurements and environment metadata exported for each database. The SQLite
+total above includes these workloads. Before repair, the old SQLite performance
+suite produced six failures and four teardown errors in the local baseline run.
 
 The 10 migration integration tests also pass with Alembic 1.16.5 on SQLite.
 
@@ -405,6 +419,7 @@ unnecessary-ignore warnings. SQLite no longer emits DISTINCT ON dialect warnings
 The workflow definitions were checked locally; hosted CI results will
 be available after the changes are pushed.
 
-Further work from the ORM review includes realistic performance benchmarks,
-batched data-migration tooling and broader driver/version coverage. These are separate from the persistence and query
-corrections described here.
+Further work from the ORM review includes sustained performance baselines with
+production-like workloads, batched data-migration tooling and broader
+driver/version coverage. The current performance measurements provide observations
+for comparison, not universal performance guarantees.
