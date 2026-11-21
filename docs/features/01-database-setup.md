@@ -380,7 +380,8 @@ consume from a custom handler:
 | `db_name`, `dialect` | Configured database alias and SQL dialect. |
 | `executemany` | Whether this driver call uses `executemany()`. |
 | `rowcount` | Driver row count, often `-1` when unknown; `None` on failure. |
-| `success`, `error_type` | Cursor execution outcome and exception class name, without exception messages or tracebacks. |
+| `success`, `error_type` | Cursor execution outcome and exception class name, without exception messages or tracebacks. For database errors `error_type` is the SQLAlchemy exception class (for example `IntegrityError`), stable across drivers and SQLAlchemy versions. |
+| `driver_error_type` | Class name of the exception raised by the driver; `None` on success. Driver- and version-specific, for example `UniqueViolationError` with asyncpg on SQLAlchemy 2.1. |
 
 One record describes one driver call. A batched INSERT with RETURNING can produce
 multiple records; a driver `executemany()` call produces one record for all its

@@ -130,7 +130,7 @@ users = await User.objects.filter(User.is_active == True).all()
 - **帧跳过**（`_find_user_frame` / `_should_skip_frame`）：惰性遍历帧（包括被挂起的父 greenlet，即跨越 SQLAlchemy 的异步 greenlet 桥），跳过来自 `site-packages` 的帧、合成的 `<...>` 文件名、模块名恰好为 `sqlobjects`/`sqlalchemy`/`logging` 或以 `sqlobjects.`/`sqlalchemy.` 为前缀的帧（覆盖可编辑安装）、`sql_logging.py` 文件本身，以及调用者提供的任何 `extra_skip_packages` 前缀。
 - **安装**：模块通过 `_install_object_logger()` 将自身安装为名为 `sqlobjects.sql` 的日志器，该函数（在 logging 锁下）将 `ObjectLogger` 直接写入 `logging.root.manager.loggerDict`，并迁移任何已存在的处理器/级别/propagate。每个 `Database` 安装 engine 监听器，直接记录驱动执行的 SQL 而不重新编译。日志关闭时跳过计时和帧检查。
 - **执行跟踪**：方言事件 `do_execute`、`do_executemany`、`do_execute_no_params` 在执行上下文上捕获每次驱动调用的实际语句、参数和开始时间；`after_cursor_execute` 和 `handle_error` 一次性消费该状态。这正确处理了 RETURNING 分批执行（其完成事件可能携带原始的未分批参数），并避免连接级计时状态在请求之间泄漏。
-- **结构化字段**：`sql`、驱动格式的 `params`、`duration_ms`、`db_name`、`dialect`、`executemany`、`rowcount`、`success` 和 `error_type`。参数隐藏遵循 engine 的 `hide_parameters` 设置。计时在游标执行结束时停止，不包含之后的结果读取、水合或提交。日志处理器的异常不能改变数据库结果。没有驱动调用的连接和编译失败不产生记录。
+- **结构化字段**：`sql`、驱动格式的 `params`、`duration_ms`、`db_name`、`dialect`、`executemany`、`rowcount`、`success`、`error_type` 和 `driver_error_type`。参数隐藏遵循 engine 的 `hide_parameters` 设置。计时在游标执行结束时停止，不包含之后的结果读取、水合或提交。日志处理器的异常不能改变数据库结果。没有驱动调用的连接和编译失败不产生记录。
 - **公开 API**：`ObjectLogger` 与 `get_caller_frame(extra_skip_packages=None, max_frames=1) -> str | list[str]`，后者以 `"path:lineno in func"` 字符串形式返回第一个（或多个）用户代码帧，供自定义场景使用。
 
 ## 模块架构
