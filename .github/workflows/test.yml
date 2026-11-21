@@ -127,7 +127,8 @@ jobs:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --frozen --group test
-      - run: uv pip install "sqlalchemy[asyncio]==${{ matrix.sqlalchemy }}.*"
+      # --upgrade: the locked version already satisfies its own series.
+      - run: uv pip install --upgrade "sqlalchemy[asyncio]==${{ matrix.sqlalchemy }}.*"
       - run: uv run --no-sync python -c "import sqlalchemy; print(sqlalchemy.__version__)"
       - run: uv run --no-sync pytest tests/unit tests/integration --db=sqlite
       - run: uv run --no-sync pytest tests/unit tests/integration --db=postgresql
