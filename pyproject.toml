@@ -149,3 +149,7 @@ addopts = [
     "--strict-markers",
     "-v"
 ]
+# A SQLAlchemy deprecation is the early warning for the next release series.
+filterwarnings = [
+    "error::sqlalchemy.exc.SADeprecationWarning",
+]

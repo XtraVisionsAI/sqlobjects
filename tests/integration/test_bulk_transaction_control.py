@@ -180,6 +180,10 @@ class TestBulkUpdateTransactionControl:
         assert isinstance(result, BulkResult)
         assert result.objects and len(result.objects) == 2
 
+        # BATCH mode runs in its own transactions: the rows must be committed first,
+        # or other connections cannot see them (PostgreSQL) or wait on their locks (MySQL).
+        await session.commit()
+
         # Test BATCH mode
         result = await User.objects.using(session).bulk_update(
             update_mappings, match_fields=["id"], transaction_mode=TransactionMode.BATCH, return_objects=True

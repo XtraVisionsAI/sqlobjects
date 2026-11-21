@@ -106,7 +106,12 @@ async def test_physical_names_match_metadata_and_migrations(naming_db):
                 if item.name is not None:
                     assert len(str(item.name).encode("utf-8")) <= 63
                     assert item.name in reflected
-        context = MigrationContext.configure(connection)
+        # Server databases are shared with other test modules; only compare our own tables.
+        own_tables = set(NamingBase.__registry__.tables)
+        context = MigrationContext.configure(
+            connection,
+            opts={"include_name": lambda name, type_, parent_names: type_ != "table" or name in own_tables},
+        )
         assert compare_metadata(context, NamingBase.__registry__) == []
 
     async with naming_db.engine.connect() as connection:

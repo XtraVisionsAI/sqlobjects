@@ -9,23 +9,6 @@ on:
 permissions:
   contents: read
 
-env:
-  CONTRACT_TESTS: >-
-    tests/integration/test_orm_contracts.py tests/integration/test_commit_callbacks.py
-    tests/integration/test_query_logging_contracts.py
-    tests/integration/test_migrations.py
-    tests/integration/test_distinct_contracts.py tests/integration/test_signal_contracts.py
-    tests/integration/test_database_events.py
-    tests/integration/test_dynamic_relationships.py
-    tests/integration/test_aggregate_contracts.py
-    tests/integration/test_grouped_aggregation.py
-    tests/integration/test_schema_naming.py
-    tests/integration/test_index_contracts.py
-  POSTGRESQL_TESTS: >-
-    tests/integration/test_crud.py tests/integration/test_relationships.py
-    tests/integration/test_deferred_loading.py tests/integration/test_bulk_return_values.py
-    tests/integration/test_cascade_integration.py
-
 jobs:
   sqlite:
     runs-on: ubuntu-latest
@@ -98,13 +81,12 @@ jobs:
         with:
           name: performance-${{ matrix.database }}
           path: performance-${{ matrix.database }}.xml
-      - run: uv run --no-sync pytest --db=${{ matrix.database }} $CONTRACT_TESTS
-      - if: matrix.database == 'postgresql'
-        run: uv run --no-sync pytest --db=postgresql $POSTGRESQL_TESTS
+      - run: uv run --no-sync pytest tests/unit tests/integration --db=${{ matrix.database }}
 
-  # The jobs above run the locked SQLAlchemy version. This one installs the
-  # newest release of every supported series over the locked environment, so a
-  # series is only inside the dependency range in pyproject.toml while it passes here.
+  # The jobs above run the locked SQLAlchemy version, which is the oldest
+  # supported one. This one installs the newest release of every supported
+  # series over the locked environment, so a series is only inside the
+  # dependency range in pyproject.toml while it passes here.
   sqlalchemy-versions:
     runs-on: ubuntu-latest
     strategy:
@@ -148,6 +130,5 @@ jobs:
       - run: uv pip install "sqlalchemy[asyncio]==${{ matrix.sqlalchemy }}.*"
       - run: uv run --no-sync python -c "import sqlalchemy; print(sqlalchemy.__version__)"
       - run: uv run --no-sync pytest tests/unit tests/integration --db=sqlite
-      - run: uv run --no-sync pytest --db=postgresql $CONTRACT_TESTS
-      - run: uv run --no-sync pytest --db=postgresql $POSTGRESQL_TESTS
-      - run: uv run --no-sync pytest --db=mysql $CONTRACT_TESTS
+      - run: uv run --no-sync pytest tests/unit tests/integration --db=postgresql
+      - run: uv run --no-sync pytest tests/unit tests/integration --db=mysql
