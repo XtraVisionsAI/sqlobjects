@@ -59,8 +59,8 @@ class SubqueryExpression(ColumnElement):
     def _infer_type(self) -> str:
         """Automatically infer the appropriate subquery type based on query structure.
 
-        Analyzes query characteristics including column count, aggregate functions,
-        and LIMIT clauses to determine the most suitable subquery type.
+        Analyzes query characteristics including column count and aggregate
+        functions to determine the most suitable subquery type.
 
         Returns:
             Inferred subquery type ('scalar', 'table', or 'exists')
@@ -68,23 +68,15 @@ class SubqueryExpression(ColumnElement):
         try:
             structure = self._analyze_query_structure()
 
-            # Rule 1: Clear scalar query characteristics
-            if (
-                structure["has_single_column"]
-                and structure["has_aggregates"]
-                and (structure["has_limit_one"] or structure["is_count_query"])
-            ):
-                return "scalar"
-
-            # Rule 2: Single column aggregate query (commonly used for comparisons)
+            # Rule 1: Single column aggregate query (commonly used for comparisons)
             if structure["has_single_column"] and structure["has_aggregates"]:
                 return "scalar"
 
-            # Rule 3: Multi-column queries default to table subquery
+            # Rule 2: Multi-column queries default to table subquery
             if structure["column_count"] > 1:
                 return "table"
 
-            # Rule 4: Single column non-aggregate query (e.g., ID lists)
+            # Rule 3: Single column non-aggregate query (e.g., ID lists)
             if structure["has_single_column"] and not structure["has_aggregates"]:
                 return "table"  # For IN conditions
 
@@ -109,10 +101,8 @@ class SubqueryExpression(ColumnElement):
             "select_columns": [],
             "has_aggregates": False,
             "has_single_column": False,
-            "has_limit_one": False,
             "has_annotations": False,
             "column_count": 0,
-            "is_count_query": False,
         }
 
         try:
@@ -126,14 +116,6 @@ class SubqueryExpression(ColumnElement):
             query_str = str(self.query).lower()
             aggregate_keywords = ["count(", "sum(", "avg(", "max(", "min("]
             analysis["has_aggregates"] = any(keyword in query_str for keyword in aggregate_keywords)
-
-            # Analyze LIMIT clause
-            analysis["has_limit_one"] = (
-                hasattr(self.query, "_limit") and self.query._limit is not None and self.query._limit == 1  # noqa
-            )
-
-            # Detect count queries
-            analysis["is_count_query"] = "count(" in query_str
 
         except Exception:  # noqa
             # Return safe defaults when analysis fails

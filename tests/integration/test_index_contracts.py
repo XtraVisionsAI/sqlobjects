@@ -71,7 +71,7 @@ async def index_definitions(connection):
             WHERE table_schema = DATABASE() AND table_name = :table GROUP BY index_name""",
     }
     result = await connection.execute(text(queries[connection.dialect.name]), {"table": IndexRecord.__table__.name})
-    return dict(result.tuples().all())
+    return {row[0]: row[1] for row in result.all()}
 
 
 async def test_index_definitions_survive_real_ddl(index_db):

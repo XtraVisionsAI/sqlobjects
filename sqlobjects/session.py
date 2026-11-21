@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncResult, AsyncTransaction
 from sqlalchemy.sql import ClauseElement, visitors
 
+from ._compat import has_distinct_on
 from .database.manager import get_database, get_default
 from .exceptions import QueryError, TransactionError, convert_sqlalchemy_error
 
@@ -120,7 +121,7 @@ class AsyncSession:
             return
         # Check nested SELECTs too: counts, scalar subqueries and CTEs must not
         # silently lose DISTINCT ON when SQLAlchemy compiles another dialect.
-        if any(getattr(part, "_distinct_on", ()) for part in visitors.iterate(statement)):
+        if any(has_distinct_on(part) for part in visitors.iterate(statement)):
             raise QueryError(
                 "distinct(*fields) requires PostgreSQL; use distinct() with values()/values_list() instead"
             )

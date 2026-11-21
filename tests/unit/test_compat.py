@@ -4,10 +4,24 @@ These run against every supported SQLAlchemy series in CI; a failure here
 means an upgrade changed the internals that ``sqlobjects._compat`` wraps.
 """
 
-from sqlalchemy import Column, ForeignKey, Integer, MetaData, Table
-from sqlalchemy.schema import CreateTable
+import warnings
 
-from sqlobjects._compat import foreign_key_copy_target, foreign_key_target_tokens, retarget_foreign_key
+import pytest
+from sqlalchemy import Column, ForeignKey, Index, Integer, MetaData, Table, func, select
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import SADeprecationWarning
+from sqlalchemy.schema import CreateTable
+from sqlalchemy.sql import visitors
+
+from sqlobjects._compat import (
+    apply_distinct_on,
+    foreign_key_copy_target,
+    foreign_key_target_tokens,
+    has_distinct_on,
+    index_has_ddl_if,
+    retarget_foreign_key,
+    select_has_for_update,
+)
 
 
 def _child(metadata: MetaData, target, *, name: str = "children") -> ForeignKey:
@@ -104,3 +118,79 @@ class TestForeignKeyCopyTarget:
         copy = ForeignKey(foreign_key_copy_target(fk))
 
         assert foreign_key_target_tokens(copy) == (None, "parents", "id")
+
+
+def _items() -> Table:
+    return Table("items", MetaData(), Column("id", Integer, primary_key=True), Column("kind", Integer))
+
+
+def _carries_distinct_on(statement) -> bool:
+    return any(has_distinct_on(part) for part in visitors.iterate(statement))
+
+
+class TestDistinctOn:
+    def test_renders_distinct_on_for_postgresql_without_deprecation(self):
+        items = _items()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", SADeprecationWarning)
+            statement = apply_distinct_on(select(items), [items.c.kind])
+            sql = str(statement.compile(dialect=postgresql.dialect()))
+
+        assert "SELECT DISTINCT ON (items.kind)" in sql
+
+    def test_is_detected_on_the_statement(self):
+        items = _items()
+
+        assert _carries_distinct_on(apply_distinct_on(select(items), [items.c.kind]))
+
+    @pytest.mark.parametrize("nest", ["subquery", "cte", "scalar_subquery"])
+    def test_is_detected_when_nested(self, nest):
+        items = _items()
+        inner = apply_distinct_on(select(items.c.id), [items.c.kind])
+        if nest == "scalar_subquery":
+            statement = select(inner.scalar_subquery())
+        else:
+            statement = select(func.count()).select_from(getattr(inner, nest)())
+
+        assert _carries_distinct_on(statement)
+
+    def test_legacy_spelling_is_detected(self):
+        """Statements written by callers may still use select.distinct(*columns)."""
+        items = _items()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SADeprecationWarning)
+            statement = select(items).distinct(items.c.kind)
+
+        assert _carries_distinct_on(statement)
+
+    def test_plain_distinct_is_not_distinct_on(self):
+        items = _items()
+
+        assert not _carries_distinct_on(select(items).distinct())
+        assert not _carries_distinct_on(select(items))
+
+
+class TestSelectHasForUpdate:
+    def test_detects_for_update_and_for_share(self):
+        items = _items()
+
+        assert select_has_for_update(select(items).with_for_update())
+        assert select_has_for_update(select(items).with_for_update(read=True))
+
+    def test_plain_select_and_non_select(self):
+        items = _items()
+
+        assert not select_has_for_update(select(items))
+        assert not select_has_for_update(items.update())
+
+
+class TestIndexHasDdlIf:
+    def test_detects_conditional_ddl(self):
+        items = _items()
+
+        assert index_has_ddl_if(Index("ix_kind", items.c.kind).ddl_if(dialect="postgresql"))
+
+    def test_plain_index(self):
+        items = _items()
+
+        assert not index_has_ddl_if(Index("ix_kind", items.c.kind))

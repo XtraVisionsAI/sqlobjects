@@ -8,7 +8,7 @@ from sqlalchemy import MetaData as SqlAlchemyMetaData
 from sqlalchemy.exc import CompileError
 from sqlalchemy.sql.elements import conv
 
-from ._compat import foreign_key_target_tokens, retarget_foreign_key
+from ._compat import foreign_key_target_tokens, index_has_ddl_if, retarget_foreign_key
 from .fields import ColumnAttribute
 from .fields.relations import M2MTable, RelationshipDescriptor, RelationshipResolver
 from .fields.utils import get_column_from_field, is_field_definition
@@ -552,14 +552,6 @@ class ModelProcessor(type):
         """
         from sqlalchemy import Table
 
-        # Collect fields with explicit indexes to avoid duplicates
-        indexed_fields = set()
-        for idx in config.indexes:
-            if hasattr(idx, "_columns"):
-                for col in idx._columns:
-                    if isinstance(col, str):
-                        indexed_fields.add(col.split(".")[-1])
-
         # Collect column definitions and relationship fields
         columns = []
         relationships = {}
@@ -577,10 +569,6 @@ class ModelProcessor(type):
                     # Use create_table_column method to get independent Column instance
                     if hasattr(column_attr, "create_table_column"):
                         column = column_attr.create_table_column(name)
-                        # Clear index attributes if field has explicit index
-                        if name in indexed_fields:
-                            column.index = False
-                            column.unique = False
                     else:
                         # Fallback for non-ColumnAttribute fields
                         column = column_attr
@@ -657,7 +645,7 @@ class ModelProcessor(type):
         for idx in list(table.indexes):
             # Conditional DDL can produce different schemas per dialect or
             # callback result. Keep it intact instead of evaluating callbacks.
-            if getattr(idx, "_ddl_if", None) is not None:
+            if index_has_ddl_if(idx):
                 continue
             try:
                 expressions, options = expression_sig(idx), dialect_sig(idx)
