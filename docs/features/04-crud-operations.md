@@ -94,7 +94,10 @@ async with ctx_session():
 
 The same `transaction_mode` parameter applies to `bulk_update()`, `bulk_delete()`
 and `bulk_upsert()`. Bulk signal hooks run once per batch inside that batch's
-transaction or savepoint. UPSERT processes every input row and returns results in
+transaction or savepoint. `INDEPENDENT` and `BATCH` run on their own connection:
+they cannot see rows the caller has not committed (an update or delete of such
+rows reports `success_count=0` without an error) and can wait on locks the
+caller holds, so commit first. UPSERT processes every input row and returns results in
 input order. See
 [Writes and transaction boundaries](../design/06-orm-correctness.md#writes-and-transaction-boundaries).
 
