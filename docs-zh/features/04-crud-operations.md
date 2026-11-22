@@ -219,7 +219,9 @@ affected = await User.objects.bulk_create(
 
 `on_error` 为 `ErrorHandling.COLLECT` 或 `ErrorHandling.IGNORE` 时，每条尝试写入的记录
 都用一个 savepoint 隔离，`COLLECT` 报告的是跨批次的输入索引。独立连接可能被外层事务
-持有的锁阻塞，不要在独立批次中写入外层事务已锁定的行；SQLite 还会在数据库级别限制并发写入。
+持有的锁阻塞，不要在独立批次中写入外层事务已锁定的行；独立连接也看不到外层事务尚未提交的行，
+用 `INDEPENDENT` 或 `BATCH` 更新、删除这些行时匹配不到任何记录，返回 `success_count=0` 且不报错，
+因此请先提交。SQLite 还会在数据库级别限制并发写入。
 
 UPSERT（`on_conflict=ConflictResolution.UPDATE` 等）会处理每一条输入行。当 RETURNING
 能按唯一冲突键匹配时，结果按输入顺序返回，返回对象包含数据库中实际存储的值；

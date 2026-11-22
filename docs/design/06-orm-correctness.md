@@ -68,6 +68,9 @@ savepoint is persisted exactly as individual auto-committed statements are.
 `COLLECT` and `IGNORE` isolate each attempted record with a savepoint. `COLLECT`
 reports input indexes across batches. Independent connections can block on locks
 held by an outer transaction; avoid writing those rows in an independent batch.
+They also cannot see rows the outer transaction has not committed: an
+`INDEPENDENT` or `BATCH` update or delete of such rows matches nothing and
+reports `success_count=0` without an error, so commit first.
 SQLite also limits concurrent writers at database level.
 
 ### Async task ownership and cleanup
