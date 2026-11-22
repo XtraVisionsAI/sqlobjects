@@ -153,8 +153,13 @@ class MySQLDialect(BaseDialect):
         return f"EXPLAIN {sql}"
 
     def parse_explain_result(self, rows: Sequence) -> str:
-        """Parse MySQL EXPLAIN result."""
-        return "\n".join(str(row[0]) for row in rows)
+        """Parse MySQL EXPLAIN result.
+
+        Plain EXPLAIN returns one row per table with the plan spread over
+        several columns (id, select_type, table, type, ...); EXPLAIN ANALYZE
+        returns the whole plan in a single column.
+        """
+        return "\n".join(" | ".join(str(value) for value in row) for row in rows)
 
 
 class SQLiteDialect(BaseDialect):

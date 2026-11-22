@@ -12,7 +12,7 @@ from datetime import datetime
 import pytest
 from sqlalchemy import inspect
 
-from sqlobjects.database import close_db, create_tables, get_database, init_db
+from sqlobjects.database import close_db, get_database, init_db
 from sqlobjects.expressions import func
 from sqlobjects.fields import (
     BooleanColumn,
@@ -122,6 +122,18 @@ def pytest_addoption(parser):
     )
 
 
+# Tables of the models defined at import time. Models declared inside a test
+# body join the same registry afterwards; many of them are not portable
+# (dialect specific indexes, deferrable keys, VARCHAR without a length), so
+# creating them would break the schema setup of every later test.
+_shared_schema: list = []
+
+
+def pytest_collection_finish(session):
+    """Freeze the shared schema once every test module is imported."""
+    _shared_schema[:] = TestModel.__registry__.tables.values()
+
+
 @pytest.fixture(scope="session")
 def db_type(request):
     """Get database type from command line or default to sqlite"""
@@ -147,9 +159,12 @@ async def test_db(db_type):
 
     # 使用统一的池配置
     await init_db(config["url"], **config["pool_config"])
-    await create_tables(TestModel)
 
     try:
+        # Inside the try: a failed CREATE TABLE must still close the engine, or every
+        # following test leaks a connection pool until the server refuses clients.
+        async with get_database().engine.begin() as connection:
+            await connection.run_sync(TestModel.__registry__.create_all, tables=_shared_schema)
         yield db_type
     finally:
         await close_db()

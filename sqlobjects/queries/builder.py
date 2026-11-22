@@ -11,6 +11,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.sql.selectable import Subquery
 
+from .._compat import apply_distinct_on
 from ..exceptions import QueryError
 
 
@@ -517,7 +518,10 @@ class QueryBuilder:
             unknown = [field for field in self.distinct_fields if field not in table.c]
             if unknown:
                 raise QueryError(f"Unknown DISTINCT field(s): {unknown}")
-            query = query.distinct(*(table.c[field] for field in self.distinct_fields))
+            if self.distinct_fields:
+                query = apply_distinct_on(query, [table.c[field] for field in self.distinct_fields])
+            else:
+                query = query.distinct()
 
         # Apply annotations (values mode already selected the requested ones)
         if self.annotations and values_fields is None:

@@ -9,10 +9,24 @@ Supported series: 2.0 (>= 2.0.44) and 2.1.
 
 from typing import Any
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, Index
+from sqlalchemy.dialects.postgresql import ext as _postgresql_ext
 
 
-__all__ = ["foreign_key_copy_target", "foreign_key_target_tokens", "retarget_foreign_key"]
+# Added in 2.1 as the replacement for ``select.distinct(*columns)``; absent on 2.0.
+_distinct_on: Any = getattr(_postgresql_ext, "distinct_on", None)
+_DistinctOnClause: Any = getattr(_postgresql_ext, "DistinctOnClause", None)
+
+
+__all__ = [
+    "apply_distinct_on",
+    "foreign_key_copy_target",
+    "foreign_key_target_tokens",
+    "has_distinct_on",
+    "index_has_ddl_if",
+    "retarget_foreign_key",
+    "select_has_for_update",
+]
 
 # SQLAlchemy 2.1 stores a name-based foreign key target as a
 # ``ForeignKeyTarget(schema, table_name, column_name)`` tuple exposed through
@@ -59,3 +73,36 @@ def retarget_foreign_key(fk: ForeignKey, table_name: str) -> None:
         raw._colspec = f"{prefix}{table_name}.{column_name}"  # noqa: SLF001
         # Memoized on 2.0; drop it so the new target is parsed again.
         raw.__dict__.pop("_column_tokens", None)
+
+
+def apply_distinct_on(query: Any, columns: list[Any]) -> Any:
+    """Apply PostgreSQL ``DISTINCT ON (columns)`` to a SELECT.
+
+    2.1 deprecates ``select.distinct(*columns)`` in favour of the
+    ``postgresql.distinct_on`` extension; 2.0 only has the former.
+    """
+    if _distinct_on is not None:
+        return query.ext(_distinct_on(*columns))
+    return query.distinct(*columns)
+
+
+def has_distinct_on(element: Any) -> bool:
+    """Whether a statement element is, or directly carries, a ``DISTINCT ON`` clause.
+
+    Covers both spellings: ``select.distinct(*columns)`` stores the columns on
+    the SELECT, the 2.1 extension is a separate element inside the statement.
+    Call it for every element of ``visitors.iterate(statement)``.
+    """
+    if _DistinctOnClause is not None and isinstance(element, _DistinctOnClause):
+        return True
+    return bool(getattr(element, "_distinct_on", ()))
+
+
+def select_has_for_update(query: Any) -> bool:
+    """Whether a SELECT was built with ``with_for_update()``; there is no public accessor."""
+    return getattr(query, "_for_update_arg", None) is not None
+
+
+def index_has_ddl_if(index: Index) -> bool:
+    """Whether an index has conditional DDL set through ``Index.ddl_if()``; there is no public accessor."""
+    return getattr(index, "_ddl_if", None) is not None

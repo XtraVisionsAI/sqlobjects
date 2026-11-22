@@ -83,6 +83,21 @@ class TestDialectExplain:
 
         assert "1, SIMPLE, users" in result
 
+    def test_mysql_parse_result_keeps_every_plan_column(self):
+        """Plain EXPLAIN spreads the plan over columns; the first one is only the select id."""
+        dialect = MySQLDialect("mysql")
+        rows = [
+            (1, "SIMPLE", "users", None, "ALL", None, None, None, None, 100, 33.33, "Using where"),
+            (1, "SIMPLE", "posts", None, "ref", "ix_author", "ix_author", "4", "users.id", 3, 100.0, None),
+        ]
+
+        result = dialect.parse_explain_result(rows)
+
+        assert result.splitlines() == [
+            "1 | SIMPLE | users | None | ALL | None | None | None | None | 100 | 33.33 | Using where",
+            "1 | SIMPLE | posts | None | ref | ix_author | ix_author | 4 | users.id | 3 | 100.0 | None",
+        ]
+
     def test_sqlite_explain_basic(self):
         """Test SQLite EXPLAIN query."""
         dialect = SQLiteDialect("sqlite")

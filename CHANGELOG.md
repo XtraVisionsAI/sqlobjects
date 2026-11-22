@@ -1,3 +1,13 @@
+## 2.2.0 (2026-11-22)
+
+### Fix
+
+- **queries**: return the whole MySQL EXPLAIN plan
+
+### Refactor
+
+- stop depending on SQLAlchemy private attributes outside _compat
+
 ## 2.1.1 (2026-11-22)
 
 ### Fix

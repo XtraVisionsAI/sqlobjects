@@ -10,6 +10,8 @@ from sqlalchemy import (
     update,
 )
 
+from .._compat import select_has_for_update
+
 
 _T = TypeVar("_T")
 
@@ -112,7 +114,7 @@ class QueryExecutor:
             raise ValueError("chunk_size must be positive")
         session = self._get_session("all")
         owned = session.readonly or session.auto_commit
-        if owned and getattr(query, "_for_update_arg", None) is not None and session.bind.dialect.name != "sqlite":
+        if owned and select_has_for_update(query) and session.bind.dialect.name != "sqlite":
             from ..exceptions import TransactionError
 
             raise TransactionError("select_for_update/select_for_share requires an explicit transaction")
@@ -195,7 +197,7 @@ class QueryExecutor:
             return select(func.count()).select_from(query.order_by(None).subquery())
         elif query_type == "exists":
             return select(exists(query))
-        if query_type not in {"update", "delete", "values", "values_list"} or kwargs.get("prebuilt"):
+        if query_type not in {"update", "delete"} or kwargs.get("prebuilt"):
             return query
 
         froms = query.get_final_froms()
@@ -212,20 +214,6 @@ class QueryExecutor:
             if query.whereclause is not None:
                 delete_query = delete_query.where(query.whereclause)
             return delete_query
-        elif query_type in ("values", "values_list"):
-            fields = kwargs.get("fields", [])
-            if fields:
-                table = from_table
-                columns = [table.c[field] for field in fields if field in table.c]
-                new_query = select(*columns)
-                if query.whereclause is not None:
-                    new_query = new_query.where(query.whereclause)
-                if hasattr(query, "_order_by") and query._order_by:  # noqa
-                    new_query = new_query.order_by(*query._order_by)  # noqa
-                return new_query
-            return query
-        else:  # "all"
-            return query
 
     async def _execute_query(
         self,
@@ -249,7 +237,7 @@ class QueryExecutor:
             else:  # exists
                 return False
 
-        if getattr(query, "_for_update_arg", None) is not None and session.bind.dialect.name != "sqlite":
+        if select_has_for_update(query) and session.bind.dialect.name != "sqlite":
             if session.readonly or session.auto_commit:
                 from ..exceptions import TransactionError
 

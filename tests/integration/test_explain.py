@@ -17,7 +17,8 @@ class TestExplain:
         assert isinstance(plan, str)
         assert len(plan) > 0
         plan_upper = plan.upper()
-        assert "SCAN" in plan_upper or "SEARCH" in plan_upper or "EXPLAIN" in plan_upper
+        # SQLite: SCAN/SEARCH, PostgreSQL: Seq Scan, MySQL: the select_type column (SIMPLE).
+        assert any(word in plan_upper for word in ("SCAN", "SEARCH", "EXPLAIN", "SIMPLE"))
 
     async def test_explain_filter(self, session, sample_users):
         """Test EXPLAIN on filtered query."""

@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import false, select
 from sqlalchemy.sql import visitors
-from sqlalchemy.sql.elements import BindParameter, ColumnClause, ColumnElement
+from sqlalchemy.sql.elements import BindParameter, ColumnClause, ColumnElement, False_, Null, True_
 from sqlalchemy.sql.selectable import ScalarSelect
 
 from ..exceptions import QueryError
@@ -13,6 +13,9 @@ from .base import QueryExpression
 
 if TYPE_CHECKING:
     from ..queries import QueryBuilder
+
+# NULL, TRUE and FALSE: constants that are not bind parameters.
+_SINGLETON_CONSTANTS = (Null, True_, False_)
 
 
 class AggregateExpression(QueryExpression[dict[str, Any]]):
@@ -64,7 +67,7 @@ class AggregateExpression(QueryExpression[dict[str, Any]]):
                 grouped
                 and isinstance(element, ColumnElement)
                 and not isinstance(element, BindParameter)
-                and not element._is_singleton_constant
+                and not isinstance(element, _SINGLETON_CONSTANTS)
             ):
                 for key, alias in grouping_keys:
                     if element.compare(key):
@@ -147,7 +150,7 @@ class AggregateExpression(QueryExpression[dict[str, Any]]):
             builder.annotations[alias] = expression
             fields.append(alias)
             grouping_keys.append((expression, alias))
-            if isinstance(expression, BindParameter) or expression._is_singleton_constant:
+            if isinstance(expression, (BindParameter, *_SINGLETON_CONSTANTS)):
                 # MySQL interprets GROUP BY 1 as a select-list ordinal. Refer to
                 # the projected constant by alias to preserve one constant group.
                 builder.group_clauses[index] = alias
