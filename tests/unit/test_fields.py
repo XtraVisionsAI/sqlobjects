@@ -128,7 +128,7 @@ class TestAdvancedFields:
         assert len(fk_col.foreign_keys) == 1  # type: ignore[attr-defined]
         fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
         # Check the column specification instead
-        assert fk._colspec == "users.id"  # type: ignore[attr-defined]
+        assert fk.target_fullname == "users.id"
 
     def test_enhanced_foreign_key_fields(self):
         """Test enhanced foreign_key() with additional parameters"""
@@ -486,7 +486,7 @@ class TestForeignKeyClassReference:
         fk_col = get_column_from_field(TestModelFKRef1.ref_id)
         assert fk_col is not None
         fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
-        assert fk._colspec == "users.id"  # type: ignore[reportGeneralTypeIssues]
+        assert fk.target_fullname == "users.id"
         assert fk.info.get("_fk_resolved") is True
 
     def test_class_reference_camel_case(self):
@@ -502,7 +502,7 @@ class TestForeignKeyClassReference:
         fk_col = get_column_from_field(TestModelFKRef2.ref_id)
         assert fk_col is not None
         fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
-        assert fk._colspec == "user_profiles.id"  # type: ignore[reportGeneralTypeIssues]
+        assert fk.target_fullname == "user_profiles.id"
 
     def test_table_reference_backward_compatible(self):
         """Test foreign_key('users.id') works when no class named 'users' exists"""
@@ -514,8 +514,8 @@ class TestForeignKeyClassReference:
         fk_col = get_column_from_field(TestModelFKRef3.ref_id)
         assert fk_col is not None
         fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
-        # No model named "users" in registry, so _colspec stays as-is
-        assert fk._colspec == "users.id"  # type: ignore[reportGeneralTypeIssues]
+        # No model named "users" in registry, so the target stays as-is
+        assert fk.target_fullname == "users.id"
 
     def test_class_reference_with_custom_table_name(self):
         """Test that class ref is corrected when target model has custom table_name"""
@@ -534,7 +534,7 @@ class TestForeignKeyClassReference:
         assert fk_col is not None
         fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
         # Delayed matching found CustomTableTarget → custom_targets
-        assert fk._colspec == "custom_targets.id"  # type: ignore[reportGeneralTypeIssues]
+        assert fk.target_fullname == "custom_targets.id"
 
     def test_class_reference_definition_order_independent(self):
         """Test that referencing model defined AFTER the FK works via delayed matching"""
@@ -543,7 +543,7 @@ class TestForeignKeyClassReference:
         class TestModelFKRef5(Base):
             ref_id: Column[int] = foreign_key("LateDefinedModel.id")
 
-        # At this point, _colspec is still "LateDefinedModel.id" (no model yet)
+        # At this point, the target is still "LateDefinedModel.id" (no model yet)
         fk_col = get_column_from_field(TestModelFKRef5.ref_id)
         assert fk_col is not None
         fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
@@ -556,7 +556,7 @@ class TestForeignKeyClassReference:
                 table_name = "late_custom"
 
         # Delayed matching should have corrected the FK when LateDefinedModel registered
-        assert fk._colspec == "late_custom.id"  # type: ignore[reportGeneralTypeIssues]
+        assert fk.target_fullname == "late_custom.id"
 
     def test_class_reference_with_constraints(self):
         """Test class ref works together with FK constraint options"""
@@ -576,7 +576,7 @@ class TestForeignKeyClassReference:
         assert fk_col is not None
         assert fk_col.nullable is False  # type: ignore[attr-defined]
         fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
-        assert fk._colspec == "constraint_targets.id"  # type: ignore[reportGeneralTypeIssues]
+        assert fk.target_fullname == "constraint_targets.id"
         assert fk.ondelete == "CASCADE"
 
     def test_class_reference_with_schema(self):
@@ -592,10 +592,10 @@ class TestForeignKeyClassReference:
         fk_col = get_column_from_field(TestModelFKRef7.ref_id)
         assert fk_col is not None
         fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
-        assert fk._colspec == "myschema.schema_users.id"  # type: ignore[reportGeneralTypeIssues]
+        assert fk.target_fullname == "myschema.schema_users.id"
 
     def test_class_reference_no_correction_needed(self):
-        """Test that when class name equals table name, _colspec is still correct"""
+        """Test that when class name equals table name, the target is still correct"""
         Base = self._make_base()
 
         class SimpleTarget(Base):
@@ -608,4 +608,4 @@ class TestForeignKeyClassReference:
         assert fk_col is not None
         fk = list(fk_col.foreign_keys)[0]  # type: ignore[attr-defined]
         # Class "SimpleTarget" found → resolved to actual table "simple_targets"
-        assert fk._colspec == "simple_targets.id"  # type: ignore[reportGeneralTypeIssues]
+        assert fk.target_fullname == "simple_targets.id"

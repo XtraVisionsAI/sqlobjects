@@ -244,7 +244,7 @@ def _install_query_logging(engine: Engine, db_name: str) -> None:
     def do_execute_no_params(cursor, statement, context):
         start(context, statement, None, False)
 
-    def emit(context, cursor=None, error=None):
+    def emit(context, cursor=None, error=None, driver_error=None):
         if context is None:
             return
         timing = context.__dict__.pop(timing_key, None)
@@ -265,6 +265,7 @@ def _install_query_logging(engine: Engine, db_name: str) -> None:
                     "rowcount": cursor.rowcount if cursor is not None and error is None else None,
                     "success": error is None,
                     "error_type": type(error).__name__ if error is not None else None,
+                    "driver_error_type": type(driver_error).__name__ if driver_error is not None else None,
                 },
             )
         except Exception:
@@ -275,9 +276,15 @@ def _install_query_logging(engine: Engine, db_name: str) -> None:
         emit(context, cursor)
 
     def handle_error(exception_context):
+        # The driver exception class differs across drivers and SQLAlchemy versions
+        # (asyncpg reports UniqueViolationError on 2.1, IntegrityError on 2.0), so
+        # error_type uses SQLAlchemy's own class when the error was wrapped.
+        # Non-DBAPI errors such as CancelledError are not wrapped.
+        original = exception_context.original_exception
         emit(
             exception_context.execution_context,
-            error=exception_context.original_exception,
+            error=exception_context.sqlalchemy_exception or original,
+            driver_error=original,
         )
 
     # Dialect events receive each batch's actual SQL/params. For insertmanyvalues,

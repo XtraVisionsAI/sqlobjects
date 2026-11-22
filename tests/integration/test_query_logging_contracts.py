@@ -164,6 +164,8 @@ class TestQueryLogging:
             failed = query_records[0]
             assert failed.success is False
             assert failed.error_type == "IntegrityError"
+            # Driver class names vary (asyncpg on SQLAlchemy 2.1: UniqueViolationError).
+            assert failed.driver_error_type in {"IntegrityError", "UniqueViolationError"}
             assert failed.rowcount is None
             assert failed.duration_ms >= 0
             await session.rollback()
@@ -171,6 +173,7 @@ class TestQueryLogging:
         assert len(query_records) == 2
         assert query_records[1].success is True
         assert query_records[1].error_type is None
+        assert query_records[1].driver_error_type is None
 
     async def test_hidden_parameters_stay_hidden_on_success_and_error(self, query_records, contract_db):
         await init_db(

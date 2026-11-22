@@ -8,6 +8,7 @@ from sqlalchemy import MetaData as SqlAlchemyMetaData
 from sqlalchemy.exc import CompileError
 from sqlalchemy.sql.elements import conv
 
+from ._compat import foreign_key_target_tokens, retarget_foreign_key
 from .fields import ColumnAttribute
 from .fields.relations import M2MTable, RelationshipDescriptor, RelationshipResolver
 from .fields.utils import get_column_from_field, is_field_definition
@@ -954,7 +955,7 @@ class ModelProcessor(type):
     def _resolve_class_foreign_keys(mcs, registry):
         """延迟解析外键引用：优先按类名匹配，匹配不到则视为表名。
 
-        foreign_key("User.id") 传入时原样交给 SQLAlchemy（_colspec="User.id"）。
+        foreign_key("User.id") 传入时原样交给 SQLAlchemy（目标为 "User.id"）。
         每次新模型注册后，此方法遍历所有 FK：
         1. 取出 info["_fk_ref"]（即 "." 前的那段，如 "User"）
         2. 尝试在 registry 中按类名查找模型
@@ -975,13 +976,9 @@ class ModelProcessor(type):
                         continue
                     # Found matching model — rewrite _colspec to actual table name
                     actual_table = model.__table__.name
-                    schema, tname, colname = fk._column_tokens
+                    _, tname, _ = foreign_key_target_tokens(fk)
                     if tname != actual_table:
-                        if schema:
-                            fk._colspec = f"{schema}.{actual_table}.{colname}"
-                        else:
-                            fk._colspec = f"{actual_table}.{colname}"
-                        fk.__dict__.pop("_column_tokens", None)
+                        retarget_foreign_key(fk, actual_table)
                     fk_info["_fk_resolved"] = True
 
     @classmethod

@@ -10,6 +10,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from sqlobjects.fields.proxies import RelatedCollection, RelatedObject
 
+from .._compat import foreign_key_copy_target
 from ..cascade import OnDelete
 from ..expressions.mixins import ColumnAttributeFunctionMixin
 from .types import create_type_instance
@@ -514,9 +515,8 @@ class ColumnAttribute(ColumnAttributeFunctionMixin, Generic[T]):
         foreign_keys = []
         if self.__column__.foreign_keys:
             for fk in self.__column__.foreign_keys:
-                # Use original string reference instead of column attribute
                 new_fk = ForeignKey(
-                    fk._colspec,  # noqa # Use original string reference
+                    foreign_key_copy_target(fk),
                     name=fk.name,
                     onupdate=fk.onupdate,
                     ondelete=fk.ondelete,

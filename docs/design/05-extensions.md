@@ -149,7 +149,7 @@ users = await User.objects.filter(User.is_active == True).all()
   and `handle_error` consume that state once. This handles RETURNING batches, whose completion events can
   carry the original unbatched parameters, and avoids connection-level timing state leaking across requests.
 - **Structured fields**: `sql`, driver-format `params`, `duration_ms`, `db_name`, `dialect`, `executemany`,
-  `rowcount`, `success` and `error_type`. Parameter hiding follows the engine's `hide_parameters` setting.
+  `rowcount`, `success`, `error_type` and `driver_error_type`. Parameter hiding follows the engine's `hide_parameters` setting.
   Timing ends at cursor execution, before later fetching, hydration or commit. Logging handler errors cannot
   change the database outcome. Connection and compilation failures without a driver call produce no record.
 - **Public API**: `ObjectLogger` and `get_caller_frame(extra_skip_packages=None, max_frames=1) -> str | list[str]`,

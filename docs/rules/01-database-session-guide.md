@@ -419,10 +419,13 @@ skips timing and frame inspection; enabled logging resolves the user frame
 across the async greenlet bridge.
 
 Each record carries `sql`, driver-format `params`, `duration_ms`, `db_name`,
-`dialect`, `executemany`, `rowcount`, `success`, and `error_type`. Parameters may
+`dialect`, `executemany`, `rowcount`, `success`, `error_type`, and
+`driver_error_type`. Parameters may
 be a dictionary, tuple or a sequence of parameter sets. `hide_parameters=True`
 in `init_db()` makes `params` null, including on failure; raw SQL literals are
-not redacted. Errors include only the exception class, not its message.
+not redacted. Errors include only exception classes, not messages: `error_type` is the
+SQLAlchemy class and is stable across drivers, `driver_error_type` is the
+driver's own class and is not.
 
 Records count driver calls, not ORM methods or returned rows. Timing excludes
 pool checkout, compilation, later fetching, hydration and commit. `rowcount` can

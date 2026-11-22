@@ -9,6 +9,23 @@ on:
 permissions:
   contents: read
 
+env:
+  CONTRACT_TESTS: >-
+    tests/integration/test_orm_contracts.py tests/integration/test_commit_callbacks.py
+    tests/integration/test_query_logging_contracts.py
+    tests/integration/test_migrations.py
+    tests/integration/test_distinct_contracts.py tests/integration/test_signal_contracts.py
+    tests/integration/test_database_events.py
+    tests/integration/test_dynamic_relationships.py
+    tests/integration/test_aggregate_contracts.py
+    tests/integration/test_grouped_aggregation.py
+    tests/integration/test_schema_naming.py
+    tests/integration/test_index_contracts.py
+  POSTGRESQL_TESTS: >-
+    tests/integration/test_crud.py tests/integration/test_relationships.py
+    tests/integration/test_deferred_loading.py tests/integration/test_bulk_return_values.py
+    tests/integration/test_cascade_integration.py
+
 jobs:
   sqlite:
     runs-on: ubuntu-latest
@@ -81,21 +98,57 @@ jobs:
         with:
           name: performance-${{ matrix.database }}
           path: performance-${{ matrix.database }}.xml
-      - run: >-
-          uv run --no-sync pytest --db=${{ matrix.database }}
-          tests/integration/test_orm_contracts.py tests/integration/test_commit_callbacks.py
-          tests/integration/test_query_logging_contracts.py
-          tests/integration/test_migrations.py
-          tests/integration/test_distinct_contracts.py tests/integration/test_signal_contracts.py
-          tests/integration/test_database_events.py
-          tests/integration/test_dynamic_relationships.py
-          tests/integration/test_aggregate_contracts.py
-          tests/integration/test_grouped_aggregation.py
-          tests/integration/test_schema_naming.py
-          tests/integration/test_index_contracts.py
+      - run: uv run --no-sync pytest --db=${{ matrix.database }} $CONTRACT_TESTS
       - if: matrix.database == 'postgresql'
-        run: >-
-          uv run --no-sync pytest --db=postgresql
-          tests/integration/test_crud.py tests/integration/test_relationships.py
-          tests/integration/test_deferred_loading.py tests/integration/test_bulk_return_values.py
-          tests/integration/test_cascade_integration.py
+        run: uv run --no-sync pytest --db=postgresql $POSTGRESQL_TESTS
+
+  # The jobs above run the locked SQLAlchemy version. This one installs the
+  # newest release of every supported series over the locked environment, so a
+  # series is only inside the dependency range in pyproject.toml while it passes here.
+  sqlalchemy-versions:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sqlalchemy: ['2.0', '2.1']
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d tests"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_USER: test
+          MYSQL_PASSWORD: test
+          MYSQL_DATABASE: tests
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      POSTGRESQL_TEST_URL: postgresql+asyncpg://test:test@127.0.0.1:5432/tests
+      MYSQL_TEST_URL: mysql+aiomysql://test:test@127.0.0.1:3306/tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --frozen --group test
+      # --upgrade: the locked version already satisfies its own series.
+      - run: uv pip install --upgrade "sqlalchemy[asyncio]==${{ matrix.sqlalchemy }}.*"
+      - run: uv run --no-sync python -c "import sqlalchemy; print(sqlalchemy.__version__)"
+      - run: uv run --no-sync pytest tests/unit tests/integration --db=sqlite
+      - run: uv run --no-sync pytest --db=postgresql $CONTRACT_TESTS
+      - run: uv run --no-sync pytest --db=postgresql $POSTGRESQL_TESTS
+      - run: uv run --no-sync pytest --db=mysql $CONTRACT_TESTS

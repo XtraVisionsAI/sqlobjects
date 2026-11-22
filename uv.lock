@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 
 [[package]]
@@ -692,7 +692,7 @@ asyncio = [
 
 [[package]]
 name = "sqlobjects"
-version = "2.1.0"
+version = "2.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -723,7 +723,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", marker = "extra == 'migrations'", specifier = ">=1.16.5" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.44" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.44,<2.2" },
 ]
 provides-extras = ["migrations"]
 

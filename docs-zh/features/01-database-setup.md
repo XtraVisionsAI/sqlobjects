@@ -364,7 +364,8 @@ users = await User.objects.filter(User.is_active == True).all()
 | `db_name`、`dialect` | 配置的数据库别名与 SQL 方言。 |
 | `executemany` | 本次驱动调用是否使用 `executemany()`。 |
 | `rowcount` | 驱动返回的行数，未知时通常为 `-1`；失败时为 `None`。 |
-| `success`、`error_type` | 游标执行结果与异常类名，不包含异常消息或堆栈。 |
+| `success`、`error_type` | 游标执行结果与异常类名，不包含异常消息或堆栈。数据库错误的 `error_type` 取 SQLAlchemy 异常类（如 `IntegrityError`），跨驱动、跨 SQLAlchemy 版本稳定。 |
+| `driver_error_type` | 驱动抛出的异常类名，成功时为 `None`。取值随驱动和版本变化，例如 SQLAlchemy 2.1 下 asyncpg 为 `UniqueViolationError`。 |
 
 一条记录对应一次驱动调用。带 RETURNING 的分批 INSERT 可能产生多条记录；一次驱动 `executemany()` 调用则只为其所有参数集产生一条记录。计时不包含连接池获取、SQL 编译、后续结果读取、模型水合以及事务提交。特别地，流式查询执行成功并不代表后续读取成功。连接、编译和提交阶段的错误不在此游标执行日志的范围内。
 
