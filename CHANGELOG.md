@@ -1,3 +1,10 @@
+## 2.1.1 (2026-11-22)
+
+### Fix
+
+- **logging**: keep error_type stable across drivers and SQLAlchemy versions
+- **metadata**: resolve class-name foreign keys on SQLAlchemy 2.1
+
 ## 2.1.0 (2026-10-08)
 
 ### Feat
